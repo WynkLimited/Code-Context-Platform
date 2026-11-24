@@ -5,7 +5,7 @@ Back up PostgreSQL with a consistent base backup plus WAL archiving/PITR. Back u
 Suggested local database dump:
 
 ```sh
-docker compose exec -T postgres pg_dump -U code_context -Fc code_context > code-context.dump
+docker compose exec -T postgres pg_dump -U code_context_app -Fc code_context > code-context.dump
 ```
 
 Restore to an isolated PostgreSQL instance, confirm Flyway state and pgvector extension, then mount matching repository mirrors/Zoekt data and verify a published commit's file contents and semantic query before routing agent traffic. If mirrors or search indexes are unavailable, re-onboard and reindex from the configured remote Git source. Never promote a partial rebuild as a published generation.

@@ -12,7 +12,6 @@ import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -22,7 +21,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.flywaydb.core.Flyway;
 import com.wynk.codecontext.search.ZoektIndexer;
 
@@ -35,15 +34,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.when;
 
-/** Real PostgreSQL acceptance test. Only external search and embedding services are replaced. */
+/** Real PostgreSQL, Zoekt, and Ollama acceptance test. */
 @SpringBootTest(classes = CodeContextApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 class SharedLibraryImpactPostgresIT {
@@ -58,17 +56,22 @@ class SharedLibraryImpactPostgresIT {
     @Autowired PostgresContractIndexStore contractIndexes;
     @Autowired IndexingService indexing;
     @Autowired JsonMapper json;
-    @MockitoBean EmbeddingModel embeddingModel;
-    @MockitoBean ZoektIndexer zoektIndexer;
+    @MockitoSpyBean ZoektIndexer zoektIndexer;
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
+        // Keep durable refresh jobs queued during this scenario so the late-provider assertion
+        // proves relationship binding does not depend on reindexing the consumer generation.
+        registry.add("CONTRACT_REFRESH_POLL_MS", () -> "3600000");
         registry.add("spring.datasource.url", () -> System.getenv().getOrDefault("DATABASE_URL", "jdbc:postgresql://localhost:5432/code_context_test"));
         registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("DATABASE_USER", "code_context"));
         registry.add("spring.datasource.password", () -> System.getenv().getOrDefault("DATABASE_PASSWORD", "integration_test_password"));
         registry.add("code-context.repository-root", () -> ROOT.resolve("mirrors").toString());
         registry.add("code-context.local-git-root", () -> ROOT.resolve("git-sources").toString());
-        registry.add("code-context.zoekt-index-root", () -> ROOT.resolve("zoekt").toString());
+        registry.add("code-context.zoekt-index-root", () -> System.getenv().getOrDefault("ZOEKT_INDEX_ROOT", ROOT.resolve("zoekt").toString()));
+        registry.add("code-context.zoekt.indexer", () -> System.getenv().getOrDefault("ZOEKT_INDEXER", "zoekt-git-index"));
+        registry.add("code-context.zoekt.webserver", () -> System.getenv().getOrDefault("ZOEKT_WEB_SERVER", "http://localhost:6070"));
+        registry.add("spring.ai.ollama.base-url", () -> System.getenv().getOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"));
         registry.add("code-context.api-keys", () -> TEAM + "=" + API_KEY);
         registry.add("code-context.admin-api-keys", () -> "admin=admin-token");
         registry.add("code-context.graphify.enabled", () -> "false");
@@ -100,6 +103,8 @@ class SharedLibraryImpactPostgresIT {
         jdbc.update("DELETE FROM code_nodes");
         jdbc.update("DELETE FROM maven_module_dependencies");
         jdbc.update("DELETE FROM maven_module_classpaths");
+        jdbc.update("DELETE FROM contract_refresh_jobs");
+        jdbc.update("DELETE FROM webhook_deliveries");
         jdbc.update("DELETE FROM index_jobs");
         jdbc.update("DELETE FROM index_generations");
         jdbc.update("DELETE FROM team_repository_access");
@@ -107,13 +112,12 @@ class SharedLibraryImpactPostgresIT {
         if(Files.exists(ROOT))try(var paths=Files.walk(ROOT)){paths.sorted(java.util.Comparator.reverseOrder()).forEach(path->{try{Files.deleteIfExists(path);}catch(Exception e){throw new IllegalStateException(e);}});}
         Files.createDirectories(ROOT.resolve("git-sources"));
         System.setProperty("MAVEN_ALLOWED_REPOSITORIES", "integration=" + ROOT.resolve("maven-repository").toUri());
-        when(embeddingModel.embed(anyString())).thenReturn(new float[1024]);
     }
 
     @Test
-    void indexesGitRepositoriesPersistsV4V5V6AndReturnsExactImpactThroughMcp() throws Exception {
+    void indexesGitRepositoriesPersistsV4V5V6V7V8AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("6", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("8", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -134,21 +138,36 @@ class SharedLibraryImpactPostgresIT {
         createGitRepository(consumerCSource, consumerFiles("2.0", "ConsumerC", "Integer", "money.convert(Integer.valueOf(1))"));
         onboard("consumer-service-c", consumerCSource, "SERVICE");
 
-        indexAndAwait("common-library");
         indexAndAwait("consumer-service-a");
         indexAndAwait("consumer-service-b");
         indexAndAwait("consumer-service-c");
 
+        UUID provider = repositories.id("Fixture", "common-library");
         UUID consumerA = repositories.id("Fixture", "consumer-service-a");
         UUID consumerB = repositories.id("Fixture", "consumer-service-b");
         UUID consumerC = repositories.id("Fixture", "consumer-service-c");
         UUID consumerAGeneration = repositories.currentGeneration(consumerA).orElseThrow();
-        String consumerACommit = repositories.currentCommit(consumerA).orElseThrow();
         UUID consumerBGeneration = repositories.currentGeneration(consumerB).orElseThrow();
-        String consumerBCommit = repositories.currentCommit(consumerB).orElseThrow();
         UUID consumerCGeneration = repositories.currentGeneration(consumerC).orElseThrow();
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM contract_links", Integer.class),
+                "consumer relationships must remain unresolved before the provider is indexed");
+
+        // Publishing the previously missing provider must bind its exports to the already
+        // published consumer imports, without requiring any consumer generation to be rebuilt.
+        indexAndAwait("common-library");
+        assertEquals(consumerAGeneration, repositories.currentGeneration(consumerA).orElseThrow());
+        assertEquals(consumerBGeneration, repositories.currentGeneration(consumerB).orElseThrow());
+        assertEquals(consumerCGeneration, repositories.currentGeneration(consumerC).orElseThrow());
+
+        UUID providerV1Generation = repositories.currentGeneration(provider).orElseThrow();
+        assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
+                "Zoekt must expose the indexed provider v1 generation before replacement");
+
+        String consumerACommit = repositories.currentCommit(consumerA).orElseThrow();
+        String consumerBCommit = repositories.currentCommit(consumerB).orElseThrow();
         String consumerCCommit = repositories.currentCommit(consumerC).orElseThrow();
         assertMavenClasspathPersisted(consumerA, consumerAGeneration, consumerACommit);
+        assertCrossRepositoryRestAndKafkaContracts(provider, consumerA, consumerB);
         assertCallPersisted(consumerA, consumerAGeneration, consumerACommit,
                 "org.acme.Money#convert(java.lang.String)", "src/main/java/app/ConsumerA.java");
         assertUnresolvedCallRemainsUnresolved(consumerA, consumerAGeneration, consumerACommit);
@@ -156,6 +175,7 @@ class SharedLibraryImpactPostgresIT {
                 "org.acme.Money#convert(java.math.BigDecimal)", "src/main/java/app/ConsumerB.java");
         assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
                 "org.acme.Money#convert(java.lang.Integer)", "src/main/java/app/ConsumerC.java");
+        verifyIncrementalAdditionChangeAndDeletion(consumerCSource, consumerC);
         assertEquals("1.0", dependencyVersion(consumerA));
         assertEquals("2.0", dependencyVersion(consumerB));
         assertEquals("2.0", dependencyVersion(consumerC));
@@ -170,10 +190,16 @@ class SharedLibraryImpactPostgresIT {
 
         write(providerSource, "pom.xml", pom("2.0", null).replace("fixture","org.acme"));
         write(providerSource, "src/main/java/org/acme/Money.java", librarySource("public String convert(java.math.BigDecimal value) { return value.toString(); }\n    public String convert(Integer value) { return value.toString(); }"));
+        write(providerSource, "src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\"/orders/v2/{id}\") Object find(String id) { return null; } }\n");
+        write(providerSource, "src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\"order-events-v2\", \"payload\"); } }\n");
         try (Git providerGit = Git.open(providerSource.toFile())) { commit(providerGit, "publish common-library 2.0"); }
         indexAndAwait("common-library");
 
-        UUID provider = repositories.id("Fixture", "common-library");
+        UUID providerV2Generation = repositories.currentGeneration(provider).orElseThrow();
+        assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV2Generation),
+                "Zoekt must expose the indexed provider v2 generation after publication");
+        assertFalse(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
+                "obsolete Zoekt generation must be deleted after replacement publication");
         assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=?", Integer.class, provider));
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=? AND published", Integer.class, provider));
         assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM maven_module_classpaths cp JOIN index_generations g ON g.id=cp.generation_id WHERE cp.repository_id=? AND cp.version='1.0' AND g.published=false",Integer.class,provider));
@@ -185,6 +211,11 @@ class SharedLibraryImpactPostgresIT {
         JsonNode payload = structuredToolPayload(mcpResult);
         assertTrue(payload.has("semanticMethodImpacts"),payload.toString());
         assertFalse(payload.path("blocking").asBoolean(true),payload.toString());
+        int refreshScheduled=payload.path("consumerRefreshScheduled").asInt();
+        assertTrue(refreshScheduled>0,"provider change should durably schedule relevant consumer refreshes: "+payload);
+        UUID providerGeneration=repositories.currentGeneration(provider).orElseThrow();
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM contract_refresh_jobs WHERE origin_generation_id=?",Integer.class,providerGeneration)>=refreshScheduled,
+                "reported refresh work must be present in the durable PostgreSQL queue");
         JsonNode impacts=payload.path("semanticMethodImpacts");
         assertEquals(1,impacts.size(),impacts.toString());
         JsonNode impact=impacts.get(0);
@@ -212,6 +243,11 @@ class SharedLibraryImpactPostgresIT {
         assertTrue(impact.path("consumerCommit").asText().matches("[0-9a-f]{40}"));
         assertFalse(impacts.toString().contains("consumer-service-b"));
         assertFalse(impacts.toString().contains("consumer-service-c"));
+        JsonNode contractCandidates=payload.path("impactCandidates");
+        assertTrue(contractCandidates.toString().contains("rest:GET:/orders/{id}"),"HTTP removal must reach the authenticated MCP impact response: "+contractCandidates);
+        assertTrue(contractCandidates.toString().contains("fixture/consumer-service-a"),"REST consumer evidence must identify Consumer A: "+contractCandidates);
+        assertTrue(contractCandidates.toString().contains("kafka:order-events"),"Kafka topic removal must reach the authenticated MCP impact response: "+contractCandidates);
+        assertTrue(contractCandidates.toString().contains("fixture/consumer-service-b"),"Kafka consumer evidence must identify Consumer B: "+contractCandidates);
 
         String persistedImpact = jdbc.queryForObject("SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1", String.class, TEAM, provider);
         assertNotNull(persistedImpact);
@@ -437,7 +473,13 @@ FROM semantic_call_sites WHERE id=?
     private void indexAndAwait(String name) throws Exception {
         String sha;
         try (Git source = Git.open(ROOT.resolve("git-sources").resolve(name).toFile())) { sha = source.getRepository().resolve("HEAD").name(); }
-        UUID job = indexing.enqueue("Fixture", name, sha, "integration-" + name + "-" + sha);
+        indexAndAwait(name,"integration-"+name+"-"+sha);
+    }
+
+    private void indexAndAwait(String name,String delivery) throws Exception {
+        String sha;
+        try (Git source = Git.open(ROOT.resolve("git-sources").resolve(name).toFile())) { sha = source.getRepository().resolve("HEAD").name(); }
+        UUID job = indexing.enqueue("Fixture", name, sha, delivery);
         indexing.poll();
         long deadline = System.nanoTime() + java.time.Duration.ofMinutes(3).toNanos();
         while (System.nanoTime() < deadline) {
@@ -475,15 +517,94 @@ FROM semantic_call_sites WHERE id=?
     }
 
     private static Map<String,String> libraryFiles(String version, String api) {
-        return Map.of("pom.xml", pom(version, null).replace("fixture","org.acme"), "src/main/java/org/acme/Money.java", librarySource(api));
+        String route=version.equals("1.0")?"/orders/{id}":"/orders/v2/{id}";
+        String topic=version.equals("1.0")?"order-events":"order-events-v2";
+        return Map.of("pom.xml", pom(version, null).replace("fixture","org.acme"),
+                "src/main/java/org/acme/Money.java", librarySource(api),
+                "src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\""+route+"\") Object find(String id) { return null; } }\n",
+                "src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\""+topic+"\", \"payload\"); } }\n");
     }
 
     private static Map<String,String> consumerFiles(String version, String className, String returnType, String invocation) {
         String unresolvedMethod = className.equals("ConsumerA")
                 ? "  public String unresolved(Money money) {\n    return money.missing(\"x\");\n  }\n"
                 : "";
-        return Map.of("pom.xml", pom("1.0", "<dependencies><dependency><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>"+version+"</version></dependency></dependencies>"),
-                "src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n"+unresolvedMethod+"}\n");
+        var files=new java.util.LinkedHashMap<String,String>();
+        files.put("pom.xml", pom("1.0", "<dependencies><dependency><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>"+version+"</version></dependency></dependencies>"));
+        files.put("src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n"+unresolvedMethod+"}\n");
+        if(className.equals("ConsumerA"))files.put("src/main/java/app/OrderClient.java", "package app;\nclass OrderClient { void load() { webClient.get().uri(\"/orders/{id}\"); } }\n");
+        if(className.equals("ConsumerB"))files.put("src/main/java/app/OrderListener.java", "package app;\nclass OrderListener { @KafkaListener(topics = \"order-events\") void listen(String value) {} }\n");
+        return Map.copyOf(files);
+    }
+
+    private void assertCrossRepositoryRestAndKafkaContracts(UUID provider,UUID restConsumer,UUID kafkaConsumer) {
+        String restSql="""
+                SELECT count(*) FROM contract_links l
+                JOIN contracts p ON p.id=l.provider_contract JOIN index_generations pg ON pg.id=p.generation_id
+                JOIN contracts c ON c.id=l.consumer_contract JOIN index_generations cg ON cg.id=c.generation_id
+                WHERE pg.repository_id=? AND cg.repository_id=? AND p.contract_type='REST'
+                  AND p.role='EXPORT' AND c.role='IMPORT' AND p.canonical_key='rest:GET:/orders/{id}'
+                """;
+        assertEquals(1,jdbc.queryForObject(restSql,Integer.class,provider,restConsumer),"REST contract must persist as an exact provider-consumer link");
+        String kafkaSql="""
+                SELECT count(*) FROM contract_links l
+                JOIN contracts p ON p.id=l.provider_contract JOIN index_generations pg ON pg.id=p.generation_id
+                JOIN contracts c ON c.id=l.consumer_contract JOIN index_generations cg ON cg.id=c.generation_id
+                WHERE pg.repository_id=? AND cg.repository_id=? AND p.contract_type='KAFKA'
+                  AND p.role='EXPORT' AND c.role='IMPORT' AND p.canonical_key='kafka:order-events'
+                """;
+        assertEquals(1,jdbc.queryForObject(kafkaSql,Integer.class,provider,kafkaConsumer),"Kafka contract must persist as an exact provider-consumer link");
+        assertTrue(jdbc.queryForObject("SELECT min(confidence)>0 AND count(*)=2 FROM contract_links l JOIN contracts p ON p.id=l.provider_contract JOIN index_generations pg ON pg.id=p.generation_id WHERE pg.repository_id=? AND p.contract_type IN ('REST','KAFKA')",Boolean.class,provider));
+    }
+
+    private void verifyIncrementalAdditionChangeAndDeletion(Path consumerSource,UUID consumer)throws Exception {
+        Path javaFile=consumerSource.resolve("src/main/java/app/ConsumerC.java");
+        Path temporaryFile=consumerSource.resolve("src/main/java/app/Temporary.java");
+        UUID initialGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        Files.writeString(javaFile,Files.readString(javaFile).replace("    return money.convert(Integer.valueOf(1));",
+                "    // changed source must be reprocessed\n    return money.convert(Integer.valueOf(1));"));
+        Files.writeString(temporaryFile,"package app; class Temporary { int value() { return 1; } }\n");
+        try(Git git=Git.open(consumerSource.toFile())){commit(git,"incremental source change and addition");}
+        indexAndAwait("consumer-service-c");
+        UUID changedGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        assertNotEquals(initialGeneration,changedGeneration);
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM generation_files WHERE generation_id=? AND file_path='src/main/java/app/Temporary.java'",Integer.class,changedGeneration));
+        Set<String> changedChunkHashes=new java.util.HashSet<>(jdbc.queryForList("SELECT content_hash FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java'",String.class,changedGeneration));
+        assertTrue(changedChunkHashes.size()>0,"changed Java method must be chunked again");
+
+        Files.delete(temporaryFile);
+        try(Git git=Git.open(consumerSource.toFile())){commit(git,"incremental source deletion");}
+        indexAndAwait("consumer-service-c");
+        UUID deletedGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM generation_files WHERE generation_id=? AND file_path='src/main/java/app/Temporary.java'",Integer.class,deletedGeneration));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path='src/main/java/app/Temporary.java'",Integer.class,deletedGeneration));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/app/Temporary.java'",Integer.class,deletedGeneration));
+        Set<String> afterDeletionHashes=new java.util.HashSet<>(jdbc.queryForList("SELECT content_hash FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java'",String.class,deletedGeneration));
+        assertEquals(changedChunkHashes,afterDeletionHashes,"unchanged Java chunks and vectors must be reused across the deletion-only generation");
+
+        List<String> incrementalSnapshot=indexedGenerationSnapshot(deletedGeneration);
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND embedding IS NOT NULL",Integer.class,deletedGeneration)>0);
+        jdbc.update("UPDATE contract_index_metadata SET generator_version='force-full-rebuild' WHERE generation_id=?",deletedGeneration);
+        jdbc.update("DELETE FROM generation_files WHERE generation_id=?",deletedGeneration);
+        indexAndAwait("consumer-service-c","full-rebuild-equivalence-"+UUID.randomUUID());
+        UUID rebuiltGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        assertNotEquals(deletedGeneration,rebuiltGeneration);
+        assertEquals(incrementalSnapshot,indexedGenerationSnapshot(rebuiltGeneration),
+                "full reprocessing and incremental indexing must produce the same stable records");
+    }
+
+    private List<String> indexedGenerationSnapshot(UUID generation) {
+        var snapshot=new java.util.ArrayList<String>();
+        snapshot.addAll(jdbc.queryForList("SELECT 'file:'||file_path||':'||blob_sha FROM generation_files WHERE generation_id=? ORDER BY file_path",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'node:'||node_type||':'||symbol||':'||coalesce(qualified_name,'')||':'||file_path||':'||start_line||':'||end_line||':'||coalesce(language,'') FROM code_nodes WHERE generation_id=? ORDER BY file_path,start_line,node_type,symbol",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'chunk:'||file_path||':'||symbol||':'||start_line||':'||end_line||':'||content_hash||':'||coalesce(embedding::text,'') FROM code_chunks WHERE generation_id=? ORDER BY file_path,start_line,symbol",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'call:'||file_path||':'||caller_class||':'||caller_method||':'||invocation||':'||resolution_status||':'||coalesce(resolved_signature,'') FROM semantic_call_sites WHERE generation_id=? ORDER BY file_path,start_line,caller_class,caller_method",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'semantic-edge:'||caller.symbol_key||':'||coalesce(target.symbol_key,'')||':'||edge.resolution_status FROM semantic_call_edges edge JOIN semantic_symbols caller ON caller.id=edge.caller_symbol_id LEFT JOIN semantic_symbols target ON target.id=edge.target_symbol_id WHERE edge.generation_id=? ORDER BY caller.symbol_key,target.symbol_key,edge.resolution_status",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'contract:'||contract_type||':'||role||':'||canonical_key||':'||file_path FROM contracts WHERE generation_id=? ORDER BY contract_type,role,canonical_key,file_path",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'classpath:'||module_path||':'||coalesce(group_id,'')||':'||coalesce(artifact_id,'')||':'||coalesce(version,'')||':'||resolution_status||':'||coalesce(classpath_fingerprint,'') FROM maven_module_classpaths WHERE generation_id=? ORDER BY module_path,group_id,artifact_id,version",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'dependency:'||module_path||':'||group_id||':'||artifact_id||':'||version||':'||scope||':'||coalesce(artifact_sha256,'') FROM maven_module_dependencies WHERE generation_id=? ORDER BY module_path,group_id,artifact_id,version,scope",String.class,generation));
+        snapshot.add("contract-index:"+jdbc.queryForObject("SELECT index_hash FROM contract_index_metadata WHERE generation_id=?",String.class,generation));
+        return List.copyOf(snapshot);
     }
 
     private static String pom(String version, String extra) {
@@ -550,7 +671,70 @@ FROM semantic_call_sites WHERE id=?
         listedTools.forEach(tool -> toolNames.add(tool.path("name").asText()));
         assertTrue(toolNames.containsAll(List.of("search_code","read_file","find_symbol","get_neighbors","semantic_search","impact_analysis")),
                 "tools/list is missing expected Code Context tools: " + listedTools);
-        return post(client,endpoint,session,Map.of("jsonrpc","2.0","id",3,"method","tools/call","params",Map.of("name","impact_analysis","arguments",Map.of("contract","common-library","repository",repository))));
+        awaitSearch(client,endpoint,session,3,"Money","exact search");
+        awaitSearch(client,endpoint,session,4,"regex:money\\.convert\\(","regex search");
+        JsonNode file=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",5,"method","tools/call","params",Map.of("name","read_file","arguments",Map.of("repository","Fixture/consumer-service-a","path","src/main/java/app/ConsumerA.java","startLine",1,"endLine",6))));
+        JsonNode fileEvidence=structuredToolPayload(file);
+        assertEquals("Fixture/consumer-service-a",fileEvidence.path("repository").asText());
+        assertEquals(repositories.currentCommit(repositories.id("Fixture","consumer-service-a")).orElseThrow(),fileEvidence.path("commit").asText());
+        assertEquals("src/main/java/app/ConsumerA.java",fileEvidence.path("path").asText());
+        assertTrue(fileEvidence.path("content").asText().contains("ConsumerA"));
+        JsonNode symbolCall=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",6,"method","tools/call","params",Map.of("name","find_symbol","arguments",Map.of("symbol","ConsumerA","repository","Fixture/consumer-service-a"))));
+        assertTrue(structuredToolPayload(symbolCall).toString().contains("ConsumerA.java"),"find_symbol must return indexed definitions and source path");
+        JsonNode neighborCall=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",7,"method","tools/call","params",Map.of("name","get_neighbors","arguments",Map.of("repository","Fixture/consumer-service-a","symbol","ConsumerA"))));
+        JsonNode neighbors=structuredToolPayload(neighborCall);
+        assertTrue(neighbors.toString().contains("SEMANTIC_RESOLVED"),"get_neighbors must expose the persisted resolved call edge: "+neighbors);
+        assertTrue(neighbors.toString().contains(repositories.currentCommit(repositories.id("Fixture","consumer-service-a")).orElseThrow()),"get_neighbors must include commit evidence: "+neighbors);
+        JsonNode semantic=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",8,"method","tools/call","params",Map.of("name","semantic_search","arguments",Map.of("query","a representation that changes character input into textual output","repository","Fixture/common-library","limit",50))));
+        assertFalse(semantic.path("isError").asBoolean(false),"semantic_search MCP call failed: "+semantic);
+        JsonNode semanticResults=structuredToolPayload(semantic);
+        assertTrue(semanticResults.isArray(),"semantic_search should return JSON result rows: "+semanticResults);
+        assertTrue(semanticResults.toString().contains("src/main/java/org/acme/Money.java"),"semantic retrieval missed the matching method: "+semanticResults);
+        assertTrue(semanticResults.toString().contains("convert"),"semantic retrieval omitted symbol evidence: "+semanticResults);
+        assertTrue(semanticResults.toString().contains(repositories.currentCommit(repositories.id("Fixture","common-library")).orElseThrow()),"semantic retrieval omitted commit provenance: "+semanticResults);
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_chunks c JOIN index_generations g ON g.id=c.generation_id AND g.published WHERE g.repository_id=? AND c.embedding IS NOT NULL",Integer.class,repositories.id("Fixture","common-library"))>0,"real Ollama vectors must be persisted in PostgreSQL");
+        return post(client,endpoint,session,Map.of("jsonrpc","2.0","id",9,"method","tools/call","params",Map.of("name","impact_analysis","arguments",Map.of("contract","","repository",repository))));
+    }
+
+    private void awaitSearch(HttpClient client,URI endpoint,String session,int id,String query,String description)throws Exception {
+        AssertionError lastFailure=null;
+        for(int attempt=0;attempt<40;attempt++) {
+            JsonNode response=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",id,"method","tools/call","params",Map.of("name","search_code","arguments",Map.of("query",query))));
+            try { assertSearchResponse(response,description); return; }
+            catch(AssertionError failure) { lastFailure=failure; Thread.sleep(500); }
+        }
+        throw lastFailure==null?new AssertionError(description+" did not return indexed results"):lastFailure;
+    }
+
+    private boolean zoektGenerationHasMatches(String repository,UUID generation)throws Exception {
+        String zoektUrl=System.getenv().getOrDefault("ZOEKT_WEB_SERVER","http://localhost:6070");
+        String query="convert repo:^"+repository.replace(".","\\.")+"@"+generation+"$";
+        String request=json.writeValueAsString(Map.of("Q",query,"Opts",Map.of("MaxDocDisplayCount",10)));
+        HttpRequest httpRequest=HttpRequest.newBuilder(URI.create(zoektUrl+"/api/search"))
+                .header(HttpHeaders.CONTENT_TYPE,MediaType.APPLICATION_JSON_VALUE)
+                .POST(HttpRequest.BodyPublishers.ofString(request)).build();
+        HttpResponse<String> response=HttpClient.newHttpClient().send(httpRequest,HttpResponse.BodyHandlers.ofString());
+        assertEquals(200,response.statusCode(),"Zoekt generation verification failed: "+response.body());
+        return json.readTree(response.body()).path("Files").isArray()&&!json.readTree(response.body()).path("Files").isEmpty();
+    }
+
+    private void assertSearchResponse(JsonNode toolResponse,String description)throws Exception {
+        assertFalse(toolResponse.path("isError").asBoolean(false),description+" MCP call failed: "+toolResponse);
+        JsonNode payload=structuredToolPayload(toolResponse);
+        assertEquals("COMPLETE",payload.path("status").asText(),description+" did not complete: "+payload);
+        assertTrue(payload.path("errors").isEmpty(),description+" returned service errors: "+payload);
+        String results=payload.path("results").toString();
+        String consumerCommit=repositories.currentCommit(repositories.id("Fixture","consumer-service-a")).orElseThrow();
+        assertTrue(results.contains("Fixture/consumer-service-a"),description+" omitted authorized repository results: "+payload);
+        assertTrue(results.contains("ConsumerA.java"),description+" omitted exact file evidence: "+payload);
+        assertTrue(results.contains(consumerCommit),description+" omitted exact generation commit evidence: "+payload);
+        JsonNode files=payload.path("results").get(0).path("matches").path("Files");
+        assertTrue(files.isArray()&&!files.isEmpty(),description+" omitted Zoekt file matches: "+payload);
+        JsonNode consumerFile=null;
+        for(JsonNode file:files)if(file.path("FileName").asText().endsWith("ConsumerA.java")){consumerFile=file;break;}
+        assertNotNull(consumerFile,description+" omitted ConsumerA.java line evidence: "+payload);
+        assertTrue(consumerFile.path("LineMatches").isArray()&&!consumerFile.path("LineMatches").isEmpty(),
+                description+" omitted matching source lines: "+consumerFile);
     }
 
     private HttpResponse<String> lastResponse;

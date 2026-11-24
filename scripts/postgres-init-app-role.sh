@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+: "${CODE_CONTEXT_APP_PASSWORD:?CODE_CONTEXT_APP_PASSWORD is required}"
+
+psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --set=ON_ERROR_STOP=1 --set=app_password="$CODE_CONTEXT_APP_PASSWORD" <<'SQL'
+SELECT format('CREATE ROLE code_context_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION PASSWORD %L', :'app_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'code_context_app')
+\gexec
+
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+GRANT CONNECT ON DATABASE code_context TO code_context_app;
+GRANT USAGE, CREATE ON SCHEMA public TO code_context_app;
+SQL

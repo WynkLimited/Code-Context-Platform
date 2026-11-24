@@ -111,6 +111,13 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
                 if(publishedRows!=1)throw new IllegalStateException("repository disabled before generation publication");
                 contractRefresher.pruneSupersededRelationships();
                 jdbc.update("UPDATE index_jobs SET state='SUCCEEDED',updated_at=now() WHERE id=?",jobId);return null;});
+            List<UUID> obsoleteZoektGenerations=jdbc.query("SELECT id FROM index_generations WHERE repository_id=? AND published=false",(rs,n)->rs.getObject(1,UUID.class),repo.id());
+            for(UUID obsolete:obsoleteZoektGenerations) {
+                try { zoekt.removeGeneration(repo,obsolete); }
+                catch(Exception cleanupFailure) {
+                    LOGGER.warn("Zoekt obsolete generation cleanup failed for repo={} generation={}: {}",repo.key(),obsolete,cleanupFailure.toString());
+                }
+            }
         } catch(Exception e) {
             String sqlDiagnostics = sqlDiagnosticChain(e);
             if (!sqlDiagnostics.isBlank()) LOGGER.error("Database failure while indexing job {}: {}", jobId, sqlDiagnostics);

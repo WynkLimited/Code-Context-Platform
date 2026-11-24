@@ -51,6 +51,7 @@ code-context:
   git-timeout-seconds: ${GIT_TIMEOUT_SECONDS:300}
   zoekt:
     indexer: ${ZOEKT_INDEXER:zoekt-git-index}
+    cleaner: ${ZOEKT_CLEANER:zoekt-local-sync}
     webserver: ${ZOEKT_WEB_SERVER:http://zoekt:6070}
   graphify:
     command: ${GRAPHIFY_COMMAND:graphify}

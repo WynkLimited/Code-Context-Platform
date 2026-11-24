@@ -1,9 +1,11 @@
 package com.wynk.codecontext.config;
 
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.flyway.autoconfigure.FlywayMigrationStrategy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Configuration
 public class ProductionConfigurationCheck {
@@ -21,5 +23,17 @@ public class ProductionConfigurationCheck {
                 if(env.getProperty("spring.datasource.password")==null||env.getProperty("spring.datasource.password").contains("change_me"))throw new IllegalStateException("DATABASE_PASSWORD must be set in production");
             }
         };
+    }
+
+    @Bean FlywayMigrationStrategy databaseRoleGuard(Environment env,JdbcTemplate jdbc) {
+        return flyway -> {
+            if(java.util.Arrays.asList(env.getActiveProfiles()).contains("production"))requireNonSuperuser(jdbc);
+            flyway.migrate();
+        };
+    }
+
+    static void requireNonSuperuser(JdbcTemplate jdbc) {
+        Boolean superuser=jdbc.queryForObject("SELECT rolsuper FROM pg_roles WHERE rolname = current_user",Boolean.class);
+        if(Boolean.TRUE.equals(superuser))throw new IllegalStateException("production DATABASE_USER must not be a PostgreSQL superuser");
     }
 }

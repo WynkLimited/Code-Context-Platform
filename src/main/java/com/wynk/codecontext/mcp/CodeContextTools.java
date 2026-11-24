@@ -43,56 +43,63 @@ public class CodeContextTools {
         String commit=repos.currentCommit(repo.id()).orElseThrow(()->new IllegalStateException("repository has no published generation"));
         String content=git.readFileAtRevision(Path.of(repo.mirrorPath()),commit,path,1_048_576);List<String> lines=content.lines().toList();int start=startLine==null?1:Math.max(1,startLine);int end=endLine==null?lines.size():Math.min(lines.size(),endLine);
         if(start>end||end-start>2000)throw new IllegalArgumentException("invalid line range");
-        StringBuilder out=new StringBuilder();for(int i=start;i<=end;i++)out.append(i).append(": ").append(lines.get(i-1)).append('\n');return out.toString();
+        StringBuilder out=new StringBuilder();for(int i=start;i<=end;i++)out.append(i).append(": ").append(lines.get(i-1)).append('\n');
+        return objectMapper.writeValueAsString(java.util.Map.of("repository",repo.key(),"commit",commit,"path",path,"startLine",start,"endLine",end,"content",out.toString()));
     }
 
     @Tool(description="Find class, method, or symbol definitions with repository and exact line locations.")
     public String find_symbol(String symbol,String repository){
         String sql="""
-SELECT r.owner||'/'||r.name AS repository,n.node_type,n.symbol,n.qualified_name,n.file_path,n.start_line,n.end_line
+SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,n.node_type,n.symbol,n.qualified_name,n.file_path,n.start_line,n.end_line
           FROM code_nodes n JOIN index_generations g ON g.id=n.generation_id AND g.published
           JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=?
           WHERE (n.symbol ILIKE ? OR n.qualified_name ILIKE ?)""";
         Object[] args=new Object[]{team(),"%"+symbol+"%","%"+symbol+"%"};
         String filter=repository==null||repository.isBlank()?"":" AND r.owner||'/'||r.name=?";
         if(!filter.isEmpty()){sql+=filter;args=new Object[]{team(),"%"+symbol+"%","%"+symbol+"%",repository};}
-        return jdbc.queryForList(sql+" ORDER BY repository,n.start_line LIMIT 100",args).toString();
+        return objectMapper.writeValueAsString(jdbc.queryForList(sql+" ORDER BY repository,n.start_line LIMIT 100",args));
     }
 
     @Tool(description="Return direct callers and callees of a symbol, including evidence and confidence.")
     public String get_neighbors(String repository,String symbol){
         RepositoryRecord r=allowed(repository);
-        return jdbc.queryForList("""
-SELECT source.symbol AS from_symbol,target.symbol AS to_symbol,e.edge_type,e.evidence,e.confidence,source.file_path,source.start_line
+        var rows=jdbc.queryForList("""
+SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,source.symbol AS from_symbol,target.symbol AS to_symbol,e.edge_type,e.evidence,e.confidence,source.file_path,source.start_line
           FROM code_edges e JOIN code_nodes source ON source.id=e.source_node LEFT JOIN code_nodes target ON target.id=e.target_node
-          JOIN index_generations g ON g.id=e.generation_id AND g.published WHERE g.repository_id=? AND (source.qualified_name ILIKE ? OR target.qualified_name ILIKE ?)
+          JOIN index_generations g ON g.id=e.generation_id AND g.published JOIN repositories r ON r.id=g.repository_id WHERE g.repository_id=? AND (source.qualified_name ILIKE ? OR target.qualified_name ILIKE ?)
         UNION ALL
-        SELECT caller.symbol_key AS from_symbol,target.symbol_key AS to_symbol,'SEMANTIC_'+edge.resolution_status AS edge_type,
+        SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,caller.symbol_key AS from_symbol,target.symbol_key AS to_symbol,'SEMANTIC_'+edge.resolution_status AS edge_type,
                edge.evidence,edge.confidence,site.file_path,site.start_line
           FROM semantic_call_edges edge
           JOIN semantic_symbols caller ON caller.id=edge.caller_symbol_id
           LEFT JOIN semantic_symbols target ON target.id=edge.target_symbol_id
           JOIN semantic_call_sites site ON site.id=edge.call_site_id
-          JOIN index_generations g ON g.id=edge.generation_id AND g.published
+          JOIN index_generations g ON g.id=edge.generation_id AND g.published JOIN repositories r ON r.id=g.repository_id
          WHERE g.repository_id=? AND (caller.symbol_key ILIKE ? OR target.symbol_key ILIKE ?)
-         LIMIT 200""",r.id(),"%"+symbol+"%","%"+symbol+"%",r.id(),"%"+symbol+"%","%"+symbol+"%").toString();
+        LIMIT 200""",r.id(),"%"+symbol+"%","%"+symbol+"%",r.id(),"%"+symbol+"%","%"+symbol+"%");
+        return objectMapper.writeValueAsString(rows);
     }
 
     @Tool(description="Find code chunks by natural language using the self-hosted embedding model and pgvector cosine distance.")
     public String semantic_search(String query,String repository,Integer limit){
-        float[] v=embeddings.embed(query);if(v.length!=props.embeddingDimensions())throw new IllegalStateException("embedding model dimension mismatch");String vec="["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";
+        if(query==null||query.isBlank())throw new IllegalArgumentException("semantic search query is required");
+        if(query.length()>1024)throw new IllegalArgumentException("semantic search query exceeds 1024 characters");
+        float[] v=embeddings.embed(query);if(v.length!=props.embeddingDimensions())throw new IllegalStateException("embedding model dimension mismatch");
+        for(float value:v)if(!Float.isFinite(value))throw new IllegalStateException("embedding model returned a non-finite vector");
+        String vec="["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";
         String owner=null,name=null;if(repository!=null&&!repository.isBlank()){RepositoryRecord r=allowed(repository);owner=r.owner();name=r.name();}
         int n=limit==null?10:Math.max(1,Math.min(limit,50));
         String sql="""
-SELECT r.owner||'/'||r.name AS repository,c.file_path,c.symbol,c.start_line,c.end_line,c.content,
+SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.symbol,c.start_line,c.end_line,c.content,
             1-(c.embedding <=> ?::vector) AS similarity FROM code_chunks c JOIN index_generations g ON g.id=c.generation_id AND g.published
             JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=?
             WHERE c.embedding IS NOT NULL""";
         if(owner!=null)sql+=" AND r.owner=? AND r.name=?";
         sql+=" ORDER BY c.embedding <=> ?::vector LIMIT "+n;
         List<?> rows=owner==null?jdbc.queryForList(sql,vec,team(),vec):jdbc.queryForList(sql,vec,team(),owner,name,vec);
-        return rows.toString();
+        return objectMapper.writeValueAsString(rows);
     }
+
 
     @Tool(description="Compare published contract generations, classify supported changes, and return fresh, evidence-backed candidate consumers with completeness status. Method-level consumer behavior is not inferred; results never block a review.")
     public java.util.Map<String,Object> impact_analysis(String contract,String repository){
@@ -140,7 +147,7 @@ SELECT r.owner||'/'||r.name AS repository,c.file_path,c.symbol,c.start_line,c.en
         // Capture the immutable published consumer generations for this analysis before scheduling
         // refresh jobs. A newly queued refresh must not make the generation being analyzed appear
         // stale midway through the same request.
-        var refreshRequest=contractRefresher.refreshRelevant(team(),r.id(),routingKeys);
+        var refreshRequest=contractRefresher.refreshRelevant(team(),r.id(),after.generationId(),routingKeys);
         boolean unknown=changes.stream().anyMatch(c->c.compatibility()==com.wynk.codecontext.port.contract.compat.CompatibilityModels.Compatibility.UNKNOWN);
         boolean breakingConsumerCandidate=changes.stream().anyMatch(ContractChange::isBreaking)&&resolution.impacted().stream().anyMatch(i->"DIRECT".equals(i.relationship()));
         var methodEvidence = collectMethodEvidence(resolution.impacted(), changes);

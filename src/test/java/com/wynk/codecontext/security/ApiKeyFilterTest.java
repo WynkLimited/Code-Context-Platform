@@ -17,7 +17,7 @@ class ApiKeyFilterTest {
     private final CodeContextProperties properties = new CodeContextProperties(
             "/tmp/repos", "/tmp/fixtures", "/tmp/zoekt", "orders=team-secret", "platform=admin-secret",
             "webhook-secret", "", "github.com", "http://localhost", 1024, 1024 * 1024,
-            6000, 2, 300, new CodeContextProperties.Zoekt("zoekt-git-index", "http://localhost:6070"),
+            6000, 2, 300, new CodeContextProperties.Zoekt("zoekt-git-index", "zoekt-local-sync", "http://localhost:6070"),
             new CodeContextProperties.Graphify("graphify", false));
 
     @AfterEach void clearContext() { SecurityContextHolder.clearContext(); }

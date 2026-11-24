@@ -65,10 +65,73 @@ jobs:
               output.write(summary)
           print(summary)
           PY
-      - name: PostgreSQL V1-V6 shared-library impact integration
+      - name: Start pinned Zoekt service and indexer
+        run: |
+          set -euo pipefail
+          image=ghcr.io/sourcegraph/zoekt:0.0.0-20261026142308-e8242d26df19
+          mkdir -p "$RUNNER_TEMP/zoekt-index"
+          docker pull "$image"
+          docker create --name zoekt-tools --entrypoint /bin/true "$image"
+          docker cp zoekt-tools:/usr/local/bin/zoekt-git-index "$RUNNER_TEMP/zoekt-git-index"
+          docker cp zoekt-tools:/usr/local/bin/zoekt-local-sync "$RUNNER_TEMP/zoekt-local-sync"
+          docker rm zoekt-tools
+          chmod 0755 "$RUNNER_TEMP/zoekt-git-index"
+          chmod 0755 "$RUNNER_TEMP/zoekt-local-sync"
+          docker run --detach --rm --name code-context-zoekt \
+            -p 6070:6070 -v "$RUNNER_TEMP/zoekt-index:/data/index" "$image" \
+            zoekt-webserver -index /data/index -rpc
+          echo "ZOEKT_INDEXER=$RUNNER_TEMP/zoekt-git-index" >> "$GITHUB_ENV"
+          echo "ZOEKT_CLEANER=$RUNNER_TEMP/zoekt-local-sync" >> "$GITHUB_ENV"
+          echo "ZOEKT_INDEX_ROOT=$RUNNER_TEMP/zoekt-index" >> "$GITHUB_ENV"
+          echo "ZOEKT_WEB_SERVER=http://localhost:6070" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:6070/ >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker logs code-context-zoekt
+          exit 1
+      - name: Start Ollama and verify the configured embedding model
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ollama-model"
+          docker run --detach --rm --name code-context-ollama \
+            -p 11434:11434 -v "$RUNNER_TEMP/ollama-model:/root/.ollama" ollama/ollama:0.13.3
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://localhost:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec code-context-ollama ollama pull qwen3-embedding:0.6b
+          docker exec code-context-ollama ollama pull qwen3:0.6b
+          curl --fail --silent --show-error http://localhost:11434/api/embed \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"qwen3-embedding:0.6b","input":"verify local embedding dimensions"}' \
+            > "$RUNNER_TEMP/ollama-embedding-smoke.json"
+          python3 - "$RUNNER_TEMP/ollama-embedding-smoke.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1]) as source:
+              data = json.load(source)
+          embeddings = data.get("embeddings", [])
+          if len(embeddings) != 1 or len(embeddings[0]) != 1024:
+              raise SystemExit(f"Ollama embedding preflight failed: vectors={len(embeddings)} dimensions={len(embeddings[0]) if embeddings else 0}")
+          print("Ollama qwen3-embedding:0.6b returned one 1,024-dimensional vector.")
+          PY
+          echo "OLLAMA_BASE_URL=http://localhost:11434" >> "$GITHUB_ENV"
+          echo "GRAPHIFY_OLLAMA_MODEL=qwen3:0.6b" >> "$GITHUB_ENV"
+      - name: Install the pinned Graphify CLI
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/graphify"
+          "$RUNNER_TEMP/graphify/bin/pip" install --no-cache-dir 'graphifyy[ollama]==0.9.118'
+          echo "$RUNNER_TEMP/graphify/bin" >> "$GITHUB_PATH"
+          echo "GRAPHIFY_COMMAND=$RUNNER_TEMP/graphify/bin/graphify" >> "$GITHUB_ENV"
+      - name: PostgreSQL V1-V8 shared-library impact integration
         run: |
           set -o pipefail
           mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log
+      - name: Stop Zoekt service
+        if: always()
+        run: docker rm --force code-context-zoekt code-context-ollama zoekt-tools >/dev/null 2>&1 || true
       - name: Verify PostgreSQL acceptance report
         run: |
           python3 - <<'PY'
@@ -97,6 +160,48 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
               output.write(summary)
           print(summary)
+          PY
+      - name: Verify least-privilege PostgreSQL integration report
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = []
+          for report in glob.glob("target/surefire-reports/TEST-*.xml"):
+              root = ET.parse(report).getroot()
+              cases.extend(case for case in root.findall("testcase")
+                           if case.attrib.get("classname", "").endswith("ProductionDatabaseLeastPrivilegeIT"))
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          passed = len(cases) - failures - errors - skipped
+          if len(cases) != 1 or passed != 1 or failures or errors or skipped:
+              print(f"Least-privilege gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
+              sys.exit(1)
+          print("ProductionDatabaseLeastPrivilegeIT: 1 passed, 0 failures, 0 errors, 0 skipped.")
+          PY
+      - name: Verify real Graphify PostgreSQL integration report
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = []
+          for report in glob.glob("target/surefire-reports/TEST-*.xml"):
+              root = ET.parse(report).getroot()
+              cases.extend(case for case in root.findall("testcase")
+                           if case.attrib.get("classname", "").endswith("GraphifyPostgresIT"))
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          passed = len(cases) - failures - errors - skipped
+          if len(cases) != 1 or passed != 1 or failures or errors or skipped:
+              print(f"Graphify gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
+              sys.exit(1)
+          print("GraphifyPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped.")
           PY
       - name: Record CI run metadata
         if: always()

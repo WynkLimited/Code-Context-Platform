@@ -12,6 +12,7 @@ import org.jboss.logging.Logger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
 
 /** Tree-sitter method extraction using {@code java-tree-sitter} (native library bundled in the JAR). */
 final class TreeSitterMethodParser {
@@ -47,7 +48,7 @@ final class TreeSitterMethodParser {
             return List.of();
         }
         try (Tree tree = parser.parse(source)) {
-            return walkMethods(tree.getRootNode(), source);
+            return walkMethods(tree.getRootNode(), source.getBytes(StandardCharsets.UTF_8));
         } catch (ParsingException e) {
             LOG.debugf("contract.source.treesitter.parse_failed file=%s reason=%s",
                     relativePath, e.getMessage());
@@ -62,7 +63,7 @@ final class TreeSitterMethodParser {
         return relativePath.toLowerCase(Locale.ROOT).endsWith(".kt") ? kotlinParser : javaParser;
     }
 
-    private static List<SourceStructureParser.ParsedMethod> walkMethods(Node node, String source) {
+    private static List<SourceStructureParser.ParsedMethod> walkMethods(Node node, byte[] source) {
         var out = new ArrayList<SourceStructureParser.ParsedMethod>();
         if (node == null) {
             return out;
@@ -71,8 +72,8 @@ final class TreeSitterMethodParser {
         if ("method_declaration".equals(type) || "function_declaration".equals(type)) {
             int startByte = node.getStartByte();
             int endByte = node.getEndByte();
-            if (startByte >= 0 && endByte > startByte && endByte <= source.length()) {
-                String snippet = source.substring(startByte, endByte);
+            if (startByte >= 0 && endByte > startByte && endByte <= source.length) {
+                String snippet = new String(source, startByte, endByte - startByte, StandardCharsets.UTF_8);
                 String name = extractName(snippet);
                 int startLine = lineOf(source, startByte);
                 int endLine = lineOf(source, endByte);
@@ -96,10 +97,10 @@ final class TreeSitterMethodParser {
         return matcher.find() ? matcher.group(1) : "unknown";
     }
 
-    private static int lineOf(String text, int byteIndex) {
+    private static int lineOf(byte[] text, int byteIndex) {
         int line = 1;
-        for (int i = 0; i < byteIndex && i < text.length(); i++) {
-            if (text.charAt(i) == '\n') {
+        for (int i = 0; i < byteIndex && i < text.length; i++) {
+            if (text[i] == '\n') {
                 line++;
             }
         }

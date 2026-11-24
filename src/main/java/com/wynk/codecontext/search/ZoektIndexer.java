@@ -29,5 +29,26 @@ public class ZoektIndexer {
         String output=Files.exists(log)?Files.readString(log):"";
         if(process.exitValue()!=0)throw new IOException("Zoekt indexing failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1500,output.length())));
     }
+
+    /** Delete only explicit obsolete generation repositories after database publication succeeds. */
+    public void removeGeneration(RepositoryRecord repository, java.util.UUID generation) throws Exception {
+        Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();
+        if(!Files.isDirectory(index))return;
+        Path log=Files.createTempFile(index,"zoekt-remove-",".log");
+        Process process=null;
+        try {
+            process=new ProcessBuilder(List.of(config.zoekt().cleaner(),"remove","-index",index.toString(),"-f",repository.key()+"@"+generation))
+                    .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+            if(!process.waitFor(Duration.ofSeconds(30).toMillis(),TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                throw new IOException("Zoekt obsolete-generation removal exceeded 30 second limit");
+            }
+            String output=Files.exists(log)?Files.readString(log):"";
+            if(process.exitValue()!=0)throw new IOException("Zoekt obsolete-generation removal failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1000,output.length())));
+        } finally {
+            if(process!=null&&process.isAlive())process.destroyForcibly();
+            Files.deleteIfExists(log);
+        }
+    }
     private record RepoMetadata(String name,String description) {}
 }

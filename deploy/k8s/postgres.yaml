@@ -22,13 +22,20 @@ spec:
           ports: [{containerPort: 5432}]
           env:
             - {name: POSTGRES_DB, value: code_context}
-            - {name: POSTGRES_USER, value: code_context}
+            - {name: POSTGRES_USER, value: code_context_bootstrap}
             - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: code-context-secrets, key: database-bootstrap-password}}
+            - name: CODE_CONTEXT_APP_PASSWORD
               valueFrom: {secretKeyRef: {name: code-context-secrets, key: database-password}}
           resources:
             requests: {cpu: "1", memory: 4Gi}
             limits: {cpu: "4", memory: 12Gi}
-          readinessProbe: {exec: {command: ["sh", "-c", "pg_isready -U code_context -d code_context"]}, initialDelaySeconds: 10, periodSeconds: 5}
-          livenessProbe: {exec: {command: ["sh", "-c", "pg_isready -U code_context -d code_context"]}, initialDelaySeconds: 30, periodSeconds: 10}
-          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
-      volumes: [{name: data, persistentVolumeClaim: {claimName: postgres-data}}]
+          readinessProbe: {exec: {command: ["sh", "-c", "pg_isready -U code_context_app -d code_context"]}, initialDelaySeconds: 10, periodSeconds: 5}
+          livenessProbe: {exec: {command: ["sh", "-c", "pg_isready -U code_context_app -d code_context"]}, initialDelaySeconds: 30, periodSeconds: 10}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+            - {name: init-script, mountPath: /docker-entrypoint-initdb.d/10-app-role.sh, subPath: 10-app-role.sh, readOnly: true}
+      volumes:
+        - {name: data, persistentVolumeClaim: {claimName: postgres-data}}
+        - name: init-script
+          configMap: {name: code-context-postgres-init, defaultMode: 0555}
