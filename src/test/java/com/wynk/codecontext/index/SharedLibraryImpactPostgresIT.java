@@ -188,8 +188,8 @@ class SharedLibraryImpactPostgresIT {
         JsonNode impacts=payload.path("semanticMethodImpacts");
         assertEquals(1,impacts.size(),impacts.toString());
         JsonNode impact=impacts.get(0);
-        assertEquals("Fixture/common-library",impact.path("providerRepository").asText());
-        assertEquals("Fixture/consumer-service-a",impact.path("consumerRepository").asText());
+        assertEquals("fixture/common-library",impact.path("providerRepository").asText());
+        assertEquals("fixture/consumer-service-a",impact.path("consumerRepository").asText());
         assertEquals("app.ConsumerA",impact.path("callerClass").asText());
         assertEquals("call(org.acme.Money)",impact.path("callerMethod").asText());
         assertEquals("src/main/java/app/ConsumerA.java",impact.path("filePath").asText());
