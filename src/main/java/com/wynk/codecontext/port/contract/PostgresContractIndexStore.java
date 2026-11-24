@@ -1,7 +1,7 @@
 package com.wynk.codecontext.port.contract;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.port.contract.ContractModels.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -14,10 +14,10 @@ public final class PostgresContractIndexStore {
     private static final TypeReference<Map<String,Object>> OBJECT_MAP = new TypeReference<>() {};
     private static final TypeReference<Map<String,String>> STRING_MAP = new TypeReference<>() {};
     private final JdbcTemplate jdbc;
-    private final ObjectMapper mapper;
+    private final JsonMapper mapper;
     private final Map<String,String> currentExtractorVersions;
 
-    public PostgresContractIndexStore(JdbcTemplate jdbc, ObjectMapper mapper, ContractIndexBuilder builder) {
+    public PostgresContractIndexStore(JdbcTemplate jdbc, JsonMapper mapper, ContractIndexBuilder builder) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         var versions = new TreeMap<String,String>();

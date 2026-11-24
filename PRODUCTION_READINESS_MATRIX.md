@@ -4,7 +4,7 @@ Status reflects executed evidence in this workspace on 2026-11-24. “Implemente
 
 | Requirement | Existing implementation | Remaining gap / required change | Verification method | Actual status |
 |---|---|---|---|---|
-| Java 21 service and independent build | Spring Boot/Maven application; no dependency on reference checkout | CI/release gates and reproducible image scan | Java 21 Maven full test | Compiled; 120 unit tests passed |
+| Java 21 service and independent build | Spring Boot/Maven application; no dependency on reference checkout | CI/release gates and reproducible image scan | Java 21 Maven full test | Historical run: 124 unit/regression tests passed; this environment's rerun unavailable (JDK 17) |
 | Repository onboarding and exact commit reads | JGit mirror/sync, allowlists, commit-tree reads | Adversarial URL/SSRF and cross-process concurrency tests | Local fixture, malicious URL tests | Narrow unit coverage; security unverified |
 | Structural indexing | JavaParser and Graphify importer; Tree-sitter parser adapters | Bound memory, persisted graph validation, Kotlin grammar/runtime checks | Live indexing and graph DB assertions | Narrow Graphify fixture test; DB path unverified |
 | Exact and regex search | Zoekt indexer/search service | Runtime indexing/search, update/delete/rename and auth tests | Compose Zoekt acceptance | Not run; Docker daemon unavailable |
@@ -33,6 +33,8 @@ Status reflects executed evidence in this workspace on 2026-11-24. “Implemente
 - PostgreSQL client/server and Zoekt local binaries: not found; no live service endpoint was available.
 - Ollama `/api/tags`: reachable and reported the configured Qwen embedding model. No application-to-pgvector query was exercised.
 - No MCP client session, security test campaign, performance benchmark, restore drill, Kubernetes deployment, or CI execution occurred.
+- Runner audit (2026-11-24): Surefire owns `*IT.java` under `postgres-integration`, executed in the `test` phase of CI's profile-enabled `verify`; Failsafe is not configured. CI runs default unit tests separately first. The attempted local `mvn test` failed before tests with `release version 21 not supported`; Docker has no reachable daemon, and `gh auth status` reports invalid credentials. The DB acceptance result remains 0 executed / 1 previously compiled, and no CI run was inspected.
+- Acceptance breakdown for this pass: Java 21 compile **not run**; existing unit/regression suite **not rerun** (124 pass is historical); PostgreSQL integration **0 executed / 1 selected test**; V4/V5/V6 live persistence **not verified**; resolver SQL **not executed**; MCP HTTP protocol **not executed**; PostgreSQL rollback/failure handling **not executed**. Active Git root is `/Users/b0266431/projects/Code-Context-Platform` on `main`; only report files are modified.
 
 ## Release decision
 

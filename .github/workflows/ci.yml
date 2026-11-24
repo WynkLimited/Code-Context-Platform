@@ -38,9 +38,79 @@ jobs:
           java-version: '21'
           cache: maven
       - name: Unit and regression tests
-        run: mvn --batch-mode --no-transfer-progress test
+        run: |
+          mkdir -p target
+          set -o pipefail
+          mvn --batch-mode --no-transfer-progress test 2>&1 | tee target/unit-tests-maven.log
+      - name: Verify unit and regression reports
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          roots = [ET.parse(path).getroot() for path in glob.glob("target/surefire-reports/TEST-*.xml")]
+          cases = [case for root in roots for case in root.findall("testcase")]
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          if not cases or failures or errors:
+              print(f"Unit report gate failed: cases={len(cases)} failures={failures} errors={errors}", file=sys.stderr)
+              sys.exit(1)
+          summary = ("## Unit and regression tests: PASS\n\n"
+                     f"{len(cases) - skipped} passed, {skipped} skipped, {failures} failures, {errors} errors.\n\n"
+                     f"Branch: `{os.environ['GITHUB_REF_NAME']}`  \nCommit: `{os.environ['GITHUB_SHA']}`\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(summary)
+          print(summary)
+          PY
       - name: PostgreSQL V1-V6 shared-library impact integration
-        run: mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify
+        run: |
+          set -o pipefail
+          mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log
+      - name: Verify PostgreSQL acceptance report
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          reports = glob.glob("target/surefire-reports/TEST-*.xml")
+          cases = []
+          for report in reports:
+              root = ET.parse(report).getroot()
+              cases.extend(case for case in root.findall("testcase")
+                           if case.attrib.get("classname", "").endswith("SharedLibraryImpactPostgresIT"))
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          passed = len(cases) - failures - errors - skipped
+          if len(cases) != 1 or passed != 1 or failures != 0 or errors != 0 or skipped != 0:
+              print(f"Acceptance gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
+              sys.exit(1)
+          summary = ("## PostgreSQL acceptance: PASS\n\n"
+                     f"`SharedLibraryImpactPostgresIT`: {passed} passed, {failures} failures, "
+                     f"{errors} errors, {skipped} skipped.\n\n"
+                     f"Branch: `{os.environ['GITHUB_REF_NAME']}`  \nCommit: `{os.environ['GITHUB_SHA']}`\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(summary)
+          print(summary)
+          PY
+      - name: Record CI run metadata
+        if: always()
+        run: |
+          mkdir -p target
+          {
+            echo "Workflow: $GITHUB_WORKFLOW"
+            echo "Run URL: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Branch: $GITHUB_REF_NAME"
+            echo "Commit: $GITHUB_SHA"
+            echo "Java: $(java -version 2>&1 | head -n 1)"
+            echo "Integration command: mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify"
+            echo "PostgreSQL service: pgvector/pgvector:0.8.1-pg17"
+          } > target/acceptance-run-metadata.txt
       - name: Publish test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,4 +119,6 @@ jobs:
           path: |
             target/surefire-reports/**
             target/failsafe-reports/**
+            target/*-maven.log
+            target/acceptance-run-metadata.txt
           if-no-files-found: warn

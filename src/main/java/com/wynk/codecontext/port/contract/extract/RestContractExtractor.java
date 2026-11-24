@@ -1,7 +1,7 @@
 package com.wynk.codecontext.port.contract.extract;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.port.contract.ContractExtractor;
 import com.wynk.codecontext.port.contract.ContractEntryMetadata;
 import com.wynk.codecontext.port.contract.ContractModels.ContractExport;
@@ -23,6 +23,12 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 public class RestContractExtractor implements ContractExtractor {
+
+    private final JsonMapper mapper;
+
+    public RestContractExtractor(JsonMapper mapper) {
+        this.mapper = mapper;
+    }
 
     public static final String VERSION = "1.0.0";
     private static final long MAX_BYTES = 2L * 1024 * 1024;
@@ -210,15 +216,15 @@ public class RestContractExtractor implements ContractExtractor {
         }
     }
 
-    private static void parseOpenApiJson(
+    private void parseOpenApiJson(
             RepositoryContext repository,
             String sourceFile,
             String content,
             Map<String, ContractExport> exports
     ) {
         try {
-            JsonNode paths = new ObjectMapper().readTree(content).path("paths");
-            paths.fields().forEachRemaining(path -> path.getValue().fields().forEachRemaining(operation -> {
+            JsonNode paths = mapper.readTree(content).path("paths");
+            paths.properties().forEach(path -> path.getValue().properties().forEach(operation -> {
                 if (operation.getKey().matches("(?i)get|post|put|patch|delete|head|options")) {
                     add(repository, false, operation.getKey(), path.getKey(), sourceFile, null, -1, "openapi",
                             operation.getValue().toString(), exports, new LinkedHashMap<>());

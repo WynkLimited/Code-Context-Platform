@@ -10,7 +10,7 @@ import com.wynk.codecontext.port.contract.ContractModels;
 import com.wynk.codecontext.port.contract.PostgresContractIndexStore;
 import com.wynk.codecontext.port.contract.RepositoryContext;
 import com.wynk.codecontext.port.contract.graph.GraphSymbolBinder;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.repo.GitRepositoryManager;
 import com.wynk.codecontext.repo.RepositoryStore;
 import com.wynk.codecontext.search.ZoektIndexer;
@@ -43,10 +43,10 @@ public class IndexingService {
     private final JdbcTemplate jdbc; private final RepositoryStore repos; private final GitRepositoryManager git;
     private final CodeContextProperties props; private final EmbeddingModel embeddings; private final ZoektIndexer zoekt;
     private final GraphifyIndexer graphify; private final TransactionTemplate transactions;
-    private final ContractIndexBuilder contractIndexBuilder; private final ObjectMapper objectMapper; private final GraphSymbolBinder graphSymbolBinder; private final ConsumerContractIndexRefresher contractRefresher; private final PostgresContractIndexStore contractIndexes;
+    private final ContractIndexBuilder contractIndexBuilder; private final JsonMapper objectMapper; private final GraphSymbolBinder graphSymbolBinder; private final ConsumerContractIndexRefresher contractRefresher; private final PostgresContractIndexStore contractIndexes;
     private final MavenClasspathResolver mavenClasspathResolver = new MavenClasspathResolver();
     private final java.util.concurrent.ThreadPoolExecutor workers;private final java.util.concurrent.Semaphore slots;private final java.util.concurrent.ConcurrentHashMap<UUID,Object> repositoryLocks=new java.util.concurrent.ConcurrentHashMap<>();
-    public IndexingService(JdbcTemplate j, RepositoryStore r, GitRepositoryManager g, CodeContextProperties p, EmbeddingModel e, ZoektIndexer zoekt,GraphifyIndexer graphify,org.springframework.transaction.PlatformTransactionManager tx, ContractIndexBuilder contractIndexBuilder, ObjectMapper objectMapper, GraphSymbolBinder graphSymbolBinder, ConsumerContractIndexRefresher contractRefresher, PostgresContractIndexStore contractIndexes) { jdbc=j;repos=r;git=g;props=p;embeddings=e;this.zoekt=zoekt;this.graphify=graphify;this.transactions=new TransactionTemplate(tx);this.contractIndexBuilder=contractIndexBuilder;this.objectMapper=objectMapper;this.graphSymbolBinder=graphSymbolBinder;this.contractRefresher=contractRefresher;this.contractIndexes=contractIndexes;int n=Math.max(1,Math.min(16,p.maxIndexConcurrency()));this.slots=new java.util.concurrent.Semaphore(n);this.workers=new java.util.concurrent.ThreadPoolExecutor(n,n,0,java.util.concurrent.TimeUnit.MILLISECONDS,new java.util.concurrent.ArrayBlockingQueue<>(n),workerFactory->{Thread t=new Thread(workerFactory,"code-context-indexer");t.setDaemon(true);return t;}); }
+    public IndexingService(JdbcTemplate j, RepositoryStore r, GitRepositoryManager g, CodeContextProperties p, EmbeddingModel e, ZoektIndexer zoekt,GraphifyIndexer graphify,org.springframework.transaction.PlatformTransactionManager tx, ContractIndexBuilder contractIndexBuilder, JsonMapper objectMapper, GraphSymbolBinder graphSymbolBinder, ConsumerContractIndexRefresher contractRefresher, PostgresContractIndexStore contractIndexes) { jdbc=j;repos=r;git=g;props=p;embeddings=e;this.zoekt=zoekt;this.graphify=graphify;this.transactions=new TransactionTemplate(tx);this.contractIndexBuilder=contractIndexBuilder;this.objectMapper=objectMapper;this.graphSymbolBinder=graphSymbolBinder;this.contractRefresher=contractRefresher;this.contractIndexes=contractIndexes;int n=Math.max(1,Math.min(16,p.maxIndexConcurrency()));this.slots=new java.util.concurrent.Semaphore(n);this.workers=new java.util.concurrent.ThreadPoolExecutor(n,n,0,java.util.concurrent.TimeUnit.MILLISECONDS,new java.util.concurrent.ArrayBlockingQueue<>(n),workerFactory->{Thread t=new Thread(workerFactory,"code-context-indexer");t.setDaemon(true);return t;}); }
 
     @Scheduled(fixedDelayString="${INDEX_POLL_MS:1500}")
     public void poll() {

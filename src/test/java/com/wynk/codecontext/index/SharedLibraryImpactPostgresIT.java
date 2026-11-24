@@ -1,10 +1,12 @@
 package com.wynk.codecontext.index;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.CodeContextApplication;
 import com.wynk.codecontext.model.RepositoryRecord;
 import com.wynk.codecontext.repo.RepositoryStore;
+import com.wynk.codecontext.port.contract.PostgresContractIndexStore;
+import com.wynk.codecontext.port.contract.ContractModels.ContractType;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +20,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.flywaydb.core.Flyway;
 import com.wynk.codecontext.search.ZoektIndexer;
@@ -41,6 +44,7 @@ import static org.mockito.Mockito.when;
 
 /** Real PostgreSQL acceptance test. Only external search and embedding services are replaced. */
 @SpringBootTest(classes = CodeContextApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
 class SharedLibraryImpactPostgresIT {
     private static final Path ROOT = Path.of("target/postgres-shared-library-it").toAbsolutePath().normalize();
     private static final String TEAM = "integration";
@@ -50,8 +54,9 @@ class SharedLibraryImpactPostgresIT {
     @Autowired JdbcTemplate jdbc;
     @Autowired Flyway flyway;
     @Autowired RepositoryStore repositories;
+    @Autowired PostgresContractIndexStore contractIndexes;
     @Autowired IndexingService indexing;
-    @Autowired ObjectMapper json;
+    @Autowired JsonMapper json;
     @MockitoBean EmbeddingModel embeddingModel;
     @MockitoBean ZoektIndexer zoektIndexer;
 
@@ -142,6 +147,13 @@ class SharedLibraryImpactPostgresIT {
         assertEquals("1.0", dependencyVersion(consumerA));
         assertEquals("2.0", dependencyVersion(consumerB));
         assertEquals("2.0", dependencyVersion(consumerC));
+        var reloadedConsumerA = contractIndexes.published(consumerA).orElseThrow().index();
+        var reloadedMavenImport = reloadedConsumerA.imports().stream()
+                .filter(entry -> entry.type() == ContractType.MAVEN)
+                .findFirst().orElseThrow();
+        assertEquals("maven:org.acme:common-library", reloadedMavenImport.canonicalKey());
+        assertEquals("1.0", reloadedMavenImport.dependencyVersion());
+        assertTrue(reloadedMavenImport.metadata().containsKey("evidenceComplete"));
 
         write(providerSource, "pom.xml", pom("2.0", null).replace("fixture","org.acme"));
         write(providerSource, "src/main/java/org/acme/Money.java", librarySource("public String convert(java.math.BigDecimal value) { return value.toString(); }\n    public String convert(Integer value) { return value.toString(); }"));

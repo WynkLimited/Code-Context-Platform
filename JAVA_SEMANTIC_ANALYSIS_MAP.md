@@ -18,3 +18,7 @@ JavaParser Symbol Solver was selected over Eclipse JDT because JavaParser Core i
 ## Remaining correctness work
 
 Run the shared-library fixture through real provider/consumer indexing, V5 persistence, the impact SQL, and the MCP response against PostgreSQL. Expand Maven tests for parent/module inheritance, scopes, exclusions, transitives, repositories, and conflict mediation; validate bounded downloads; and run mixed Java/Kotlin semantic resolution against compiled artifacts. Until the DB-backed path is executed, the successful local fixture proves classpath binding and graph identity consistency, not production impact-analysis delivery.
+
+## Acceptance runner status — 2026-11-24
+
+Maven Surefire selects `SharedLibraryImpactPostgresIT` under `-Ppostgres-integration`; CI's `verify` command executes it in the `test` phase against PostgreSQL 17 + pgvector. Failsafe is not configured. The local rerun was blocked before test execution because only Java 17 is available while the project targets Java 21; Docker is also unavailable. V4/V5/V6 database rows, impact SQL, MCP protocol session, and PostgreSQL failure/rollback remain unverified. Do not mark acceptance passed until a CI Surefire report confirms execution.

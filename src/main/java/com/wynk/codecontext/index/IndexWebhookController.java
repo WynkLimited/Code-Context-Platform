@@ -1,7 +1,7 @@
 package com.wynk.codecontext.index;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.config.CodeContextProperties;
 import com.wynk.codecontext.repo.RepositoryStore;
 import org.springframework.http.HttpStatus;
@@ -19,9 +19,9 @@ import java.util.UUID;
 
 @RestController
 public class IndexWebhookController {
-    private final IndexingService indexing; private final CodeContextProperties config; private final ObjectMapper json;
+    private final IndexingService indexing; private final CodeContextProperties config; private final JsonMapper json;
     private final RepositoryStore repositories; private final JdbcTemplate jdbc;
-    public IndexWebhookController(IndexingService i,CodeContextProperties c,ObjectMapper j,RepositoryStore r,JdbcTemplate db){indexing=i;config=c;json=j;repositories=r;jdbc=db;}
+    public IndexWebhookController(IndexingService i,CodeContextProperties c,JsonMapper j,RepositoryStore r,JdbcTemplate db){indexing=i;config=c;json=j;repositories=r;jdbc=db;}
     @PostMapping("/webhooks/github/{owner}/{name}")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public Map<String,Object> github(@PathVariable String owner,@PathVariable String name,
