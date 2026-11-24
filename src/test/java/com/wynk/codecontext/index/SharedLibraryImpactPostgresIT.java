@@ -246,7 +246,9 @@ JOIN index_generations g ON g.id=site.generation_id AND g.published
 WHERE site.repository_id=? AND site.file_path=? AND site.resolution_status='RESOLVED'
 AND target.symbol_key=? AND edge.resolution_status='RESOLVED'
 """, Integer.class, repository, path, targetKey);
-        assertTrue(rows != null && rows > 0, "missing persisted V4/V5 resolved target " + targetKey + " in " + path);
+        assertTrue(rows != null && rows > 0, () -> "missing persisted V4/V5 resolved target " + targetKey + " in " + path
+                + "; persisted call-sites=" + callSiteDiagnostics(repository, path)
+                + "; Maven classpath=" + mavenClasspathDiagnostics(repository));
         if (targetKey.endsWith("java.lang.String)")) {
             assertEquals(5, jdbc.queryForObject("SELECT start_line FROM semantic_call_sites WHERE repository_id=? AND file_path=? AND declaring_type='org.acme.Money' AND resolved_signature='convert(java.lang.String)' ORDER BY id LIMIT 1", Integer.class, repository, path));
         }
@@ -255,6 +257,33 @@ SELECT count(*) FROM semantic_call_sites site JOIN semantic_symbols caller ON ca
 WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.Consumer%#call(%'
 """, Integer.class, repository, path);
         assertTrue(caller != null && caller > 0, "missing persisted canonical caller method for " + path);
+    }
+
+    private String callSiteDiagnostics(UUID repository, String path) {
+        return jdbc.queryForList("""
+SELECT site.generation_id,site.commit_sha,site.resolution_status,site.invocation,site.start_line,
+       site.declaring_type,site.resolved_signature,site.parameter_types::text AS parameter_types,
+       site.caller_symbol_id,caller.symbol_key AS caller_key,edge.resolution_status AS edge_status,
+       edge.target_symbol_id,target.symbol_key AS target_key,g.published
+FROM semantic_call_sites site
+JOIN index_generations g ON g.id=site.generation_id
+LEFT JOIN semantic_call_edges edge ON edge.call_site_id=site.id
+LEFT JOIN semantic_symbols caller ON caller.id=site.caller_symbol_id
+LEFT JOIN semantic_symbols target ON target.id=edge.target_symbol_id
+WHERE site.repository_id=? AND site.file_path=?
+ORDER BY g.generation DESC,site.start_line,site.id
+""", repository, path).toString();
+    }
+
+    private String mavenClasspathDiagnostics(UUID repository) {
+        return jdbc.queryForList("""
+SELECT cp.generation_id,cp.commit_sha,cp.module_path,cp.resolution_status,cp.reason,cp.classpath_fingerprint,
+       d.group_id,d.artifact_id,d.version,d.scope,d.artifact_path
+FROM maven_module_classpaths cp
+LEFT JOIN maven_module_dependencies d ON d.generation_id=cp.generation_id AND d.module_path=cp.module_path
+WHERE cp.repository_id=?
+ORDER BY cp.generation_id,cp.module_path,d.group_id,d.artifact_id,d.version
+""", repository).toString();
     }
 
     private String dependencyVersion(UUID repository) {
