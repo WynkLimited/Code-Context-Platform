@@ -1,8 +1,10 @@
 package com.wynk.codecontext.index;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.JsonToken;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectReader;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.JsonToken;
 import com.wynk.codecontext.config.CodeContextProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -20,8 +22,8 @@ import java.util.concurrent.TimeUnit;
 
 @Service
 public class GraphifyIndexer {
-    private final CodeContextProperties config; private final ObjectMapper json; private final JdbcTemplate jdbc;
-    public GraphifyIndexer(CodeContextProperties c,ObjectMapper m,JdbcTemplate j){config=c;json=m;jdbc=j;}
+    private final CodeContextProperties config; private final JsonMapper json; private final ObjectReader graphNodeReader; private final JdbcTemplate jdbc;
+    public GraphifyIndexer(CodeContextProperties c,JsonMapper m,JdbcTemplate j){config=c;json=m;graphNodeReader=m.reader().without(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);jdbc=j;}
     public boolean buildAndPersist(Path repo,UUID generation) throws Exception {
         if(!config.graphify().enabled())return false;
         Path graph=repo.resolve("graphify-out/graph.json");List<String> cmd=List.of(config.graphify().command(),"update",repo.toString(),"--no-cluster");
@@ -38,16 +40,16 @@ public class GraphifyIndexer {
     private void importGraph(Path graph,UUID generation)throws Exception {
         Map<String,Long> ids=new HashMap<>();
         boolean nodeArray=false,linkArray=false;
-        try(var parser=json.getFactory().createParser(graph.toFile())){
-            while(parser.nextToken()!=null){if(parser.currentToken()!=JsonToken.FIELD_NAME)continue;String field=parser.currentName();
+        try(var parser=json.tokenStreamFactory().createParser(graph.toFile())){
+            while(parser.nextToken()!=null){if(parser.currentToken()!=JsonToken.PROPERTY_NAME)continue;String field=parser.currentName();
                 if(field.equals("nodes")){nodeArray=parser.nextToken()==JsonToken.START_ARRAY;if(!nodeArray)continue;
-                    while(parser.nextToken()!=JsonToken.END_ARRAY){JsonNode node=json.readTree(parser);String id=node.path("id").asText("");String file=node.path("source_file").asText("");if(id.isBlank()||file.isBlank())continue;
+                    while(parser.nextToken()!=JsonToken.END_ARRAY){JsonNode node=graphNodeReader.readTree(parser);String id=node.path("id").asText("");String file=node.path("source_file").asText("");if(id.isBlank()||file.isBlank())continue;
                         String name=first(node,"name","label","symbol","id");String kind=first(node,"type","kind","node_type","file_type");
                         int[] location=sourceLocation(node);int start=node.path("start_line").asInt(location[0]),end=node.path("end_line").asInt(location[1]);
                         long dbId=jdbc.queryForObject("INSERT INTO code_nodes(generation_id,node_type,symbol,qualified_name,file_path,start_line,end_line,language,metadata) VALUES(?,?,?,?,?,?,?,?,?::jsonb) RETURNING id",Long.class,generation,kind,name,name,file,Math.max(1,start),Math.max(start,end),node.path("language").asText(null),json.writeValueAsString(node));ids.put(id,dbId);
                     }
                 } else if(field.equals("links")){linkArray=parser.nextToken()==JsonToken.START_ARRAY;if(!linkArray)continue;
-                    while(parser.nextToken()!=JsonToken.END_ARRAY){JsonNode link=json.readTree(parser);Long from=ids.get(link.path("source").asText()),to=ids.get(link.path("target").asText());if(from==null||to==null)continue;
+                    while(parser.nextToken()!=JsonToken.END_ARRAY){JsonNode link=graphNodeReader.readTree(parser);Long from=ids.get(link.path("source").asText()),to=ids.get(link.path("target").asText());if(from==null||to==null)continue;
                         String relation=link.path("relation").asText("references");double confidence=Math.max(0,Math.min(1,link.path("confidence").asDouble(0.8)));
                         jdbc.update("INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,confidence) VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING",generation,from,to,relation,json.writeValueAsString(link),confidence);
                     }

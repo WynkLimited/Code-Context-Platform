@@ -3,6 +3,7 @@ package com.wynk.codecontext.port.contract.extract;
 import com.wynk.codecontext.port.contract.ContractEntryMetadata;
 import com.wynk.codecontext.port.contract.RepositoryContext;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
@@ -32,7 +33,7 @@ class RestContractExtractorTest {
                   @Path("/{id}") @GET Campaign get(String id);
                 }
                 """);
-        var extractor = new RestContractExtractor();
+        var extractor = extractor();
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
 
         assertEquals("rest:GET:/campaigns/{id}", extractor.extractExports(repo).get(0).canonicalKey());
@@ -53,7 +54,7 @@ class RestContractExtractorTest {
                             responses:
                                 "200": { description: ok }
                 """);
-        var extractor = new RestContractExtractor();
+        var extractor = extractor();
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
 
         var export = extractor.extractExports(repo).get(0);
@@ -68,7 +69,7 @@ class RestContractExtractorTest {
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
 
         assertEquals(java.util.Set.of("rest:GET:/items/42", "rest:POST:/orders"),
-                new RestContractExtractor().extractImports(repo).stream()
+                extractor().extractImports(repo).stream()
                         .map(i -> i.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
     }
 
@@ -90,10 +91,10 @@ class RestContractExtractorTest {
                 """);
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
 
-        assertEquals(java.util.Set.of("rest:GET:/campaigns/{id}"), new RestContractExtractor().extractExports(repo)
+        assertEquals(java.util.Set.of("rest:GET:/campaigns/{id}"), extractor().extractExports(repo)
                 .stream().map(e -> e.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
         assertEquals(java.util.Set.of("rest:GET:/campaigns/{id}", "rest:DELETE:/campaigns/{id}"),
-                new RestContractExtractor().extractImports(repo).stream()
+                extractor().extractImports(repo).stream()
                         .map(i -> i.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
     }
 
@@ -117,9 +118,9 @@ class RestContractExtractorTest {
                 """);
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
 
-        assertEquals(java.util.Set.of("rest:GET:/campaigns/{id}"), new RestContractExtractor().extractExports(repo)
+        assertEquals(java.util.Set.of("rest:GET:/campaigns/{id}"), extractor().extractExports(repo)
                 .stream().map(e -> e.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
-        assertTrue(new RestContractExtractor().extractImports(repo).isEmpty());
+        assertTrue(extractor().extractImports(repo).isEmpty());
     }
 
     @Test
@@ -134,7 +135,7 @@ class RestContractExtractorTest {
                 """);
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
         assertEquals("rest:GET:/campaign/{id}",
-                new RestContractExtractor().extractExports(repo).get(0).canonicalKey());
+                extractor().extractExports(repo).get(0).canonicalKey());
     }
 
     @Test
@@ -144,7 +145,7 @@ class RestContractExtractorTest {
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
 
         assertEquals(java.util.Set.of("rest:DELETE:/items", "rest:POST:/orders"),
-                new RestContractExtractor().extractImports(repo).stream()
+                extractor().extractImports(repo).stream()
                         .map(i -> i.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
     }
 
@@ -153,7 +154,11 @@ class RestContractExtractorTest {
         Files.writeString(root.resolve("client.rs"), "client.patch(\"https://catalog.internal/items/7\").send().await;");
         var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
 
-        assertEquals(java.util.Set.of("rest:PATCH:/items/7"), new RestContractExtractor().extractImports(repo)
+        assertEquals(java.util.Set.of("rest:PATCH:/items/7"), extractor().extractImports(repo)
                 .stream().map(i -> i.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
+    }
+
+    private static RestContractExtractor extractor() {
+        return new RestContractExtractor(JsonMapper.builder().build());
     }
 }

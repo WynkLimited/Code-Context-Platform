@@ -1,6 +1,6 @@
 package com.wynk.codecontext.index;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.config.CodeContextProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -38,7 +38,7 @@ class GraphifyIndexerTest {
                 new CodeContextProperties.Zoekt("zoekt-git-index", "http://localhost:6070"),
                 new CodeContextProperties.Graphify(command.toString(), true));
         CapturingJdbcTemplate jdbc = new CapturingJdbcTemplate();
-        var indexer = new GraphifyIndexer(properties, new ObjectMapper(), jdbc);
+        var indexer = new GraphifyIndexer(properties, JsonMapper.builder().build(), jdbc);
 
         assertTrue(indexer.buildAndPersist(temp, UUID.randomUUID()));
 

@@ -1,10 +1,13 @@
 package com.wynk.codecontext.index;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.CodeContextApplication;
 import com.wynk.codecontext.model.RepositoryRecord;
 import com.wynk.codecontext.repo.RepositoryStore;
+import com.wynk.codecontext.port.contract.PostgresContractIndexStore;
+import com.wynk.codecontext.port.contract.ContractModels.ContractType;
+import com.wynk.codecontext.port.contract.source.JavaSemanticCallSiteAnalyzer.CallSite;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +21,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.flywaydb.core.Flyway;
 import com.wynk.codecontext.search.ZoektIndexer;
@@ -41,6 +45,7 @@ import static org.mockito.Mockito.when;
 
 /** Real PostgreSQL acceptance test. Only external search and embedding services are replaced. */
 @SpringBootTest(classes = CodeContextApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("test")
 class SharedLibraryImpactPostgresIT {
     private static final Path ROOT = Path.of("target/postgres-shared-library-it").toAbsolutePath().normalize();
     private static final String TEAM = "integration";
@@ -50,8 +55,9 @@ class SharedLibraryImpactPostgresIT {
     @Autowired JdbcTemplate jdbc;
     @Autowired Flyway flyway;
     @Autowired RepositoryStore repositories;
+    @Autowired PostgresContractIndexStore contractIndexes;
     @Autowired IndexingService indexing;
-    @Autowired ObjectMapper json;
+    @Autowired JsonMapper json;
     @MockitoBean EmbeddingModel embeddingModel;
     @MockitoBean ZoektIndexer zoektIndexer;
 
@@ -136,12 +142,31 @@ class SharedLibraryImpactPostgresIT {
         UUID consumerA = repositories.id("Fixture", "consumer-service-a");
         UUID consumerB = repositories.id("Fixture", "consumer-service-b");
         UUID consumerC = repositories.id("Fixture", "consumer-service-c");
-        assertCallPersisted(consumerA, "org.acme.Money#convert(java.lang.String)", "src/main/java/app/ConsumerA.java");
-        assertCallPersisted(consumerB, "org.acme.Money#convert(java.math.BigDecimal)", "src/main/java/app/ConsumerB.java");
-        assertCallPersisted(consumerC, "org.acme.Money#convert(java.lang.Integer)", "src/main/java/app/ConsumerC.java");
+        UUID consumerAGeneration = repositories.currentGeneration(consumerA).orElseThrow();
+        String consumerACommit = repositories.currentCommit(consumerA).orElseThrow();
+        UUID consumerBGeneration = repositories.currentGeneration(consumerB).orElseThrow();
+        String consumerBCommit = repositories.currentCommit(consumerB).orElseThrow();
+        UUID consumerCGeneration = repositories.currentGeneration(consumerC).orElseThrow();
+        String consumerCCommit = repositories.currentCommit(consumerC).orElseThrow();
+        assertMavenClasspathPersisted(consumerA, consumerAGeneration, consumerACommit);
+        assertCallPersisted(consumerA, consumerAGeneration, consumerACommit,
+                "org.acme.Money#convert(java.lang.String)", "src/main/java/app/ConsumerA.java");
+        assertUnresolvedCallRemainsUnresolved(consumerA, consumerAGeneration, consumerACommit);
+        assertCallPersisted(consumerB, consumerBGeneration, consumerBCommit,
+                "org.acme.Money#convert(java.math.BigDecimal)", "src/main/java/app/ConsumerB.java");
+        assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
+                "org.acme.Money#convert(java.lang.Integer)", "src/main/java/app/ConsumerC.java");
         assertEquals("1.0", dependencyVersion(consumerA));
         assertEquals("2.0", dependencyVersion(consumerB));
         assertEquals("2.0", dependencyVersion(consumerC));
+        assertSemanticCallSitePersistenceRoundTrip(consumerA, consumerAGeneration);
+        var reloadedConsumerA = contractIndexes.published(consumerA).orElseThrow().index();
+        var reloadedMavenImport = reloadedConsumerA.imports().stream()
+                .filter(entry -> entry.type() == ContractType.MAVEN)
+                .findFirst().orElseThrow();
+        assertEquals("maven:org.acme:common-library", reloadedMavenImport.canonicalKey());
+        assertEquals("1.0", reloadedMavenImport.dependencyVersion());
+        assertTrue(reloadedMavenImport.metadata().containsKey("evidenceComplete"));
 
         write(providerSource, "pom.xml", pom("2.0", null).replace("fixture","org.acme"));
         write(providerSource, "src/main/java/org/acme/Money.java", librarySource("public String convert(java.math.BigDecimal value) { return value.toString(); }\n    public String convert(Integer value) { return value.toString(); }"));
@@ -163,8 +188,8 @@ class SharedLibraryImpactPostgresIT {
         JsonNode impacts=payload.path("semanticMethodImpacts");
         assertEquals(1,impacts.size(),impacts.toString());
         JsonNode impact=impacts.get(0);
-        assertEquals("Fixture/common-library",impact.path("providerRepository").asText());
-        assertEquals("Fixture/consumer-service-a",impact.path("consumerRepository").asText());
+        assertEquals("fixture/common-library",impact.path("providerRepository").asText());
+        assertEquals("fixture/consumer-service-a",impact.path("consumerRepository").asText());
         assertEquals("app.ConsumerA",impact.path("callerClass").asText());
         assertEquals("call(org.acme.Money)",impact.path("callerMethod").asText());
         assertEquals("src/main/java/app/ConsumerA.java",impact.path("filePath").asText());
@@ -190,9 +215,13 @@ class SharedLibraryImpactPostgresIT {
 
         String persistedImpact = jdbc.queryForObject("SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1", String.class, TEAM, provider);
         assertNotNull(persistedImpact);
-        assertTrue(persistedImpact.contains("Fixture/consumer-service-a"), persistedImpact);
-        assertTrue(persistedImpact.contains("ConsumerA"), persistedImpact);
-        assertTrue(persistedImpact.contains("consumer-service-a/src/main/java/app/ConsumerA.java"), persistedImpact);
+        JsonNode persistedImpactJson = json.readTree(persistedImpact);
+        JsonNode persistedSemanticImpacts = persistedImpactJson.path("semanticMethodImpacts");
+        assertEquals(1, persistedSemanticImpacts.size(), persistedImpact);
+        JsonNode persistedSemanticImpact = persistedSemanticImpacts.get(0);
+        assertEquals("fixture/consumer-service-a", persistedSemanticImpact.path("consumerRepository").asText());
+        assertEquals("app.ConsumerA", persistedSemanticImpact.path("callerClass").asText());
+        assertEquals("src/main/java/app/ConsumerA.java", persistedSemanticImpact.path("filePath").asText());
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM semantic_call_edges e JOIN semantic_call_sites s ON s.id=e.call_site_id JOIN index_generations g ON g.id=e.generation_id AND g.published WHERE e.repository_id=? AND s.resolution_status='RESOLVED')", Boolean.class, consumerA)));
         assertTrue(jdbc.queryForObject("""
 SELECT count(*) FROM maven_module_dependencies d JOIN maven_module_classpaths cp
@@ -223,28 +252,176 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
 """,Boolean.class,consumerA,dependencyCommit(consumerA))));
     }
 
-    private void assertCallPersisted(UUID repository, String targetKey, String path) {
+    private void assertCallPersisted(UUID repository, UUID generation, String commit, String targetKey, String path) {
         Integer rows = jdbc.queryForObject("""
 SELECT count(*) FROM semantic_call_sites site
 JOIN semantic_call_edges edge ON edge.call_site_id=site.id
+ AND edge.repository_id=site.repository_id AND edge.generation_id=site.generation_id
 JOIN semantic_symbols target ON target.id=edge.target_symbol_id
+ AND target.repository_id=site.repository_id AND target.generation_id=site.generation_id
+ AND target.commit_sha=site.commit_sha
 JOIN index_generations g ON g.id=site.generation_id AND g.published
-WHERE site.repository_id=? AND site.file_path=? AND site.resolution_status='RESOLVED'
+WHERE site.repository_id=? AND site.generation_id=? AND site.commit_sha=?
+AND site.file_path=? AND site.resolution_status='RESOLVED'
 AND target.symbol_key=? AND edge.resolution_status='RESOLVED'
-""", Integer.class, repository, path, targetKey);
-        assertTrue(rows != null && rows > 0, "missing persisted V4/V5 resolved target " + targetKey + " in " + path);
+""", Integer.class, repository, generation, commit, path, targetKey);
+        assertTrue(rows != null && rows > 0, () -> "missing persisted V4/V5 resolved target " + targetKey + " in " + path
+                + "; persisted call-sites=" + callSiteDiagnostics(repository, path)
+                + "; Maven classpath=" + mavenClasspathDiagnostics(repository));
         if (targetKey.endsWith("java.lang.String)")) {
             assertEquals(5, jdbc.queryForObject("SELECT start_line FROM semantic_call_sites WHERE repository_id=? AND file_path=? AND declaring_type='org.acme.Money' AND resolved_signature='convert(java.lang.String)' ORDER BY id LIMIT 1", Integer.class, repository, path));
         }
         Integer caller = jdbc.queryForObject("""
 SELECT count(*) FROM semantic_call_sites site JOIN semantic_symbols caller ON caller.id=site.caller_symbol_id
-WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.Consumer%#call(%'
-""", Integer.class, repository, path);
+ AND caller.repository_id=site.repository_id AND caller.generation_id=site.generation_id
+ AND caller.commit_sha=site.commit_sha
+WHERE site.repository_id=? AND site.generation_id=? AND site.commit_sha=?
+AND site.file_path=? AND caller.symbol_key LIKE 'app.Consumer%#call(%'
+""", Integer.class, repository, generation, commit, path);
         assertTrue(caller != null && caller > 0, "missing persisted canonical caller method for " + path);
+    }
+
+    private String callSiteDiagnostics(UUID repository, String path) {
+        return jdbc.queryForList("""
+SELECT site.generation_id,site.commit_sha,site.resolution_status,site.invocation,site.start_line,
+       site.declaring_type,site.resolved_signature,site.parameter_types::text AS parameter_types,
+       site.caller_symbol_id,caller.symbol_key AS caller_key,edge.resolution_status AS edge_status,
+       edge.target_symbol_id,target.symbol_key AS target_key,g.published
+FROM semantic_call_sites site
+JOIN index_generations g ON g.id=site.generation_id
+LEFT JOIN semantic_call_edges edge ON edge.call_site_id=site.id
+LEFT JOIN semantic_symbols caller ON caller.id=site.caller_symbol_id
+LEFT JOIN semantic_symbols target ON target.id=edge.target_symbol_id
+WHERE site.repository_id=? AND site.file_path=?
+ORDER BY g.generation DESC,site.start_line,site.id
+""", repository, path).toString();
+    }
+
+    private String mavenClasspathDiagnostics(UUID repository) {
+        return jdbc.queryForList("""
+SELECT cp.generation_id,cp.commit_sha,cp.module_path,cp.resolution_status,cp.reason,cp.classpath_fingerprint,
+       d.group_id,d.artifact_id,d.version,d.scope,d.artifact_path
+FROM maven_module_classpaths cp
+LEFT JOIN maven_module_dependencies d ON d.generation_id=cp.generation_id AND d.module_path=cp.module_path
+WHERE cp.repository_id=?
+ORDER BY cp.generation_id,cp.module_path,d.group_id,d.artifact_id,d.version
+""", repository).toString();
+    }
+
+    private void assertMavenClasspathPersisted(UUID repository, UUID generation, String commit) {
+        Integer modules = jdbc.queryForObject("""
+SELECT count(*) FROM maven_module_classpaths
+WHERE repository_id=? AND generation_id=? AND commit_sha=? AND module_path=''
+  AND group_id='fixture' AND artifact_id='consumer' AND version='1.0'
+  AND resolution_status='RESOLVED' AND classpath_fingerprint IS NOT NULL
+""", Integer.class, repository, generation, commit);
+        assertEquals(1, modules, "consumer POM classpath was not persisted for its published generation");
+        Integer dependencies = jdbc.queryForObject("""
+SELECT count(*) FROM maven_module_dependencies
+WHERE generation_id=? AND module_path='' AND group_id='org.acme'
+  AND artifact_id='common-library' AND version='1.0' AND scope='compile'
+  AND artifact_path IS NOT NULL AND length(artifact_sha256)=64
+""", Integer.class, generation);
+        assertEquals(1, dependencies, "common-library dependency was not persisted with its resolved artifact");
+    }
+
+    private void assertUnresolvedCallRemainsUnresolved(UUID repository, UUID generation, String commit) {
+        Boolean unresolved = jdbc.queryForObject("""
+SELECT EXISTS(
+ SELECT 1 FROM semantic_call_sites site
+ JOIN semantic_call_edges edge ON edge.call_site_id=site.id
+ WHERE site.repository_id=? AND site.generation_id=? AND site.commit_sha=?
+   AND site.file_path='src/main/java/app/ConsumerA.java'
+   AND site.invocation='money.missing(\"x\")'
+   AND site.resolution_status='UNRESOLVED' AND site.target_symbol_id IS NULL
+   AND edge.resolution_status='UNRESOLVED' AND edge.target_symbol_id IS NULL
+)
+""", Boolean.class, repository, generation, commit);
+        assertTrue(Boolean.TRUE.equals(unresolved), "a nonexistent Money method must remain unresolved without a target symbol");
     }
 
     private String dependencyVersion(UUID repository) {
         return jdbc.queryForObject("SELECT dependency_version FROM semantic_call_sites WHERE repository_id=? AND resolution_status='RESOLVED' AND dependency_version IS NOT NULL ORDER BY id LIMIT 1", String.class, repository);
+    }
+
+    private void assertSemanticCallSitePersistenceRoundTrip(UUID repository, UUID generation) throws Exception {
+        Map<String,Object> existing = jdbc.queryForMap("""
+SELECT caller_symbol_id,target_symbol_id,commit_sha FROM semantic_call_sites
+WHERE repository_id=? AND generation_id=? AND file_path='src/main/java/app/ConsumerA.java'
+ AND resolution_status='RESOLVED' AND caller_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL
+ORDER BY id LIMIT 1
+""", repository, generation);
+        Long callerId = ((Number) existing.get("caller_symbol_id")).longValue();
+        Long targetId = ((Number) existing.get("target_symbol_id")).longValue();
+        String commit = (String) existing.get("commit_sha");
+        var resolved = new CallSite("money.convert(\"round-trip\")", 7, 7, "app.ConsumerA",
+                "call(org.acme.Money)", "RESOLVED", "org.acme.Money", "convert(java.lang.String)",
+                List.of("java.lang.String"), "java.lang.String", "JAVAPARSER_SYMBOL_SOLVER");
+        Long resolvedId = indexing.persistSemanticCallSite(repository, generation, commit,
+                "src/main/java/app/ConsumerA.java", resolved, "round-trip evidence", callerId, targetId,
+                "org.acme:common-library:1.0", "1.0");
+        try {
+            Map<String,Object> persisted = jdbc.queryForMap("""
+SELECT repository_id,generation_id,commit_sha,file_path,caller_class,caller_method,start_line,end_line,
+ invocation,declaring_type,resolved_signature,parameter_types::text AS parameter_types,return_type,
+ resolution_status,evidence,confidence,extractor_version,caller_symbol_id,target_symbol_id,
+ dependency_artifact,dependency_version
+FROM semantic_call_sites WHERE id=?
+""", resolvedId);
+            assertEquals(repository, persisted.get("repository_id"));
+            assertEquals(generation, persisted.get("generation_id"));
+            assertEquals(commit, persisted.get("commit_sha"));
+            assertEquals("src/main/java/app/ConsumerA.java", persisted.get("file_path"));
+            assertEquals("app.ConsumerA", persisted.get("caller_class"));
+            assertEquals("call(org.acme.Money)", persisted.get("caller_method"));
+            assertEquals(7, ((Number) persisted.get("start_line")).intValue());
+            assertEquals(7, ((Number) persisted.get("end_line")).intValue());
+            assertEquals(resolved.expression(), persisted.get("invocation"));
+            assertEquals("org.acme.Money", persisted.get("declaring_type"));
+            assertEquals("convert(java.lang.String)", persisted.get("resolved_signature"));
+            assertEquals(List.of("java.lang.String"), json.readValue((String) persisted.get("parameter_types"),
+                    new tools.jackson.core.type.TypeReference<List<String>>() {}));
+            assertEquals("java.lang.String", persisted.get("return_type"));
+            assertEquals("RESOLVED", persisted.get("resolution_status"));
+            assertEquals("round-trip evidence", persisted.get("evidence"));
+            assertEquals(0.85, ((Number) persisted.get("confidence")).doubleValue(), 0.00001);
+            assertEquals("javaparser-symbol-solver-3.27.1", persisted.get("extractor_version"));
+            assertEquals(callerId, ((Number) persisted.get("caller_symbol_id")).longValue());
+            assertEquals(targetId, ((Number) persisted.get("target_symbol_id")).longValue());
+            assertEquals("org.acme:common-library:1.0", persisted.get("dependency_artifact"));
+            assertEquals("1.0", persisted.get("dependency_version"));
+            assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM semantic_call_edges WHERE call_site_id=?", Integer.class, resolvedId));
+        } finally {
+            jdbc.update("DELETE FROM semantic_call_sites WHERE id=?", resolvedId);
+        }
+
+        var unresolved = new CallSite("money.convert(unknown)", 9, 9, null, null, "UNRESOLVED",
+                null, null, List.of(), null, "NO_TYPE_RESOLUTION");
+        Long unresolvedId = indexing.persistSemanticCallSite(repository, generation, commit,
+                "src/main/java/app/ConsumerA.java", unresolved, "nullable round-trip evidence", null, null, null, null);
+        try {
+            Map<String,Object> persisted = jdbc.queryForMap("""
+SELECT caller_class,caller_method,declaring_type,resolved_signature,parameter_types::text AS parameter_types,
+ return_type,resolution_status,confidence,caller_symbol_id,target_symbol_id,dependency_artifact,dependency_version
+FROM semantic_call_sites WHERE id=?
+""", unresolvedId);
+            assertNull(persisted.get("caller_class"));
+            assertNull(persisted.get("caller_method"));
+            assertNull(persisted.get("declaring_type"));
+            assertNull(persisted.get("resolved_signature"));
+            assertEquals(List.of(), json.readValue((String) persisted.get("parameter_types"),
+                    new tools.jackson.core.type.TypeReference<List<String>>() {}));
+            assertNull(persisted.get("return_type"));
+            assertEquals("UNRESOLVED", persisted.get("resolution_status"));
+            assertEquals(0.0, ((Number) persisted.get("confidence")).doubleValue(), 0.00001);
+            assertNull(persisted.get("caller_symbol_id"));
+            assertNull(persisted.get("target_symbol_id"));
+            assertNull(persisted.get("dependency_artifact"));
+            assertNull(persisted.get("dependency_version"));
+            assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM semantic_call_edges WHERE call_site_id=?", Integer.class, unresolvedId));
+        } finally {
+            jdbc.update("DELETE FROM semantic_call_sites WHERE id=?", unresolvedId);
+        }
     }
 
     private String dependencyCommit(UUID repository) {
@@ -302,8 +479,11 @@ WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.
     }
 
     private static Map<String,String> consumerFiles(String version, String className, String returnType, String invocation) {
+        String unresolvedMethod = className.equals("ConsumerA")
+                ? "  public String unresolved(Money money) {\n    return money.missing(\"x\");\n  }\n"
+                : "";
         return Map.of("pom.xml", pom("1.0", "<dependencies><dependency><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>"+version+"</version></dependency></dependencies>"),
-                "src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n}\n");
+                "src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n"+unresolvedMethod+"}\n");
     }
 
     private static String pom(String version, String extra) {
@@ -323,14 +503,27 @@ WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.
         Files.createDirectories(source.getParent()); Files.createDirectories(classes);
         Files.writeString(source, librarySource(api));
         assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null,null,null,"-d",classes.toString(),source.toString()));
-        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(artifactDir.resolve("common-library-"+version+".jar")));
+        Path jarFile = artifactDir.resolve("common-library-"+version+".jar");
+        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(jarFile));
              var paths = Files.walk(classes)) {
             for (Path file : paths.filter(Files::isRegularFile).toList()) {
                 jar.putNextEntry(new java.util.jar.JarEntry(classes.relativize(file).toString().replace('\\','/')));
                 Files.copy(file,jar); jar.closeEntry();
             }
         }
-        Files.writeString(artifactDir.resolve("common-library-"+version+".pom"),pom(version,null).replace("fixture","org.acme"));
+        Path pomFile = artifactDir.resolve("common-library-"+version+".pom");
+        Files.writeString(pomFile,pom(version,null).replace("fixture","org.acme"));
+        writeChecksumSidecars(jarFile);
+        writeChecksumSidecars(pomFile);
+    }
+
+    private static void writeChecksumSidecars(Path artifact) throws Exception {
+        byte[] content = Files.readAllBytes(artifact);
+        for (String algorithm : List.of("SHA-1", "MD5")) {
+            String extension = algorithm.equals("SHA-1") ? "sha1" : "md5";
+            String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance(algorithm).digest(content));
+            Files.writeString(Path.of(artifact + "." + extension), digest + "\n");
+        }
     }
 
     private JsonNode mcpImpactCall(String repository) throws Exception {
@@ -338,7 +531,11 @@ WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.
         URI endpoint = URI.create("http://localhost:"+port+"/mcp");
         Object initialize=Map.of("jsonrpc","2.0","id",1,"method","initialize","params",Map.of("protocolVersion","2025-03-26","capabilities",Map.of(),"clientInfo",Map.of("name","postgres-impact-it","version","1.0")));
         HttpResponse<String> unauthenticated=exchange(client,endpoint,null,initialize,null);
-        assertEquals(401,unauthenticated.statusCode(),"MCP must reject an unauthenticated client");
+        assertEquals(401,unauthenticated.statusCode(),"MCP must reject an unauthenticated client; headers="
+                +unauthenticated.headers().map()+" body="+unauthenticated.body());
+        HttpResponse<String> invalidCredentials=exchange(client,endpoint,null,initialize,"invalid-integration-token");
+        assertEquals(401,invalidCredentials.statusCode(),"MCP must reject an invalid API key; headers="
+                +invalidCredentials.headers().map()+" body="+invalidCredentials.body());
         JsonNode initialized = post(client,endpoint,null,initialize);
         assertTrue(initialized.path("result").has("serverInfo"), initialized.toString());
         HttpResponse<String> initResponse = lastResponse;
@@ -346,8 +543,13 @@ WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.
         assertNotNull(session,"Streamable HTTP initialize must return a session identifier");
         post(client,endpoint,session,Map.of("jsonrpc","2.0","method","notifications/initialized"));
         JsonNode tools = post(client,endpoint,session,Map.of("jsonrpc","2.0","id",2,"method","tools/list","params",Map.of()));
-        for(String name:List.of("search_code","read_file","find_symbol","get_neighbors","semantic_search","impact_analysis"))
-            assertTrue(tools.toString().contains(name),tools.toString());
+        JsonNode listedTools = tools.path("result").path("tools");
+        assertTrue(listedTools.isArray(), "tools/list must return a tools array: " + tools);
+        assertFalse(listedTools.isEmpty(), "tools/list must register at least one MCP tool: " + tools);
+        java.util.Set<String> toolNames = new java.util.HashSet<>();
+        listedTools.forEach(tool -> toolNames.add(tool.path("name").asText()));
+        assertTrue(toolNames.containsAll(List.of("search_code","read_file","find_symbol","get_neighbors","semantic_search","impact_analysis")),
+                "tools/list is missing expected Code Context tools: " + listedTools);
         return post(client,endpoint,session,Map.of("jsonrpc","2.0","id",3,"method","tools/call","params",Map.of("name","impact_analysis","arguments",Map.of("contract","common-library","repository",repository))));
     }
 

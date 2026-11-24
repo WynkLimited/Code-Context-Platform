@@ -43,3 +43,5 @@ This is an explicit source-to-target plan, not a claim that full behavior preser
 ## Current validation status
 
 The target compiled on Java 21 and 124 Maven unit/regression tests passed on the latest completed run. The controlled Maven fixture confirms external method and canonical V5 identities. `SharedLibraryImpactPostgresIT` compiles and is wired to CI's PostgreSQL 17 + pgvector service; it asserts v1 consumer A's exact method is the sole semantic upgrade hit while v2 consumer B and the stable overload consumer C are excluded. The test also exercises persisted impact output through MCP and a failed-publication boundary. It has not run; live database and MCP behavior remain unverified. Repository A remains read-only.
+
+Execution audit on 2026-11-24: Surefire, not Failsafe, owns `*IT.java` in the `postgres-integration` profile; CI runs it with `mvn -Ppostgres-integration verify` after its separate default unit-test command. Local execution stopped before tests because the available JDK is 17 (release 21 required); Docker has no reachable daemon and GitHub CLI credentials are invalid. No PostgreSQL-backed acceptance or CI run is claimed.

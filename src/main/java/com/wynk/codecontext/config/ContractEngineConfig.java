@@ -8,7 +8,7 @@ import com.wynk.codecontext.port.contract.extract.*;
 import com.wynk.codecontext.port.contract.graph.GraphSymbolBinder;
 import com.wynk.codecontext.port.contract.graph.CrossRepoImpactResolver;
 import com.wynk.codecontext.port.contract.compat.ContractCompatibilityEngine;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,10 +22,10 @@ public class ContractEngineConfig {
     ContractCompatibilityEngine contractCompatibilityEngine() { return new ContractCompatibilityEngine(); }
 
     @Bean
-    GraphSymbolBinder graphSymbolBinder(JdbcTemplate jdbc, ObjectMapper mapper) { return new GraphSymbolBinder(jdbc, mapper); }
+    GraphSymbolBinder graphSymbolBinder(JdbcTemplate jdbc, JsonMapper mapper) { return new GraphSymbolBinder(jdbc, mapper); }
 
     @Bean
-    PostgresContractIndexStore postgresContractIndexStore(JdbcTemplate jdbc, ObjectMapper mapper, ContractIndexBuilder builder) {
+    PostgresContractIndexStore postgresContractIndexStore(JdbcTemplate jdbc, JsonMapper mapper, ContractIndexBuilder builder) {
         return new PostgresContractIndexStore(jdbc, mapper, builder);
     }
 
@@ -38,13 +38,13 @@ public class ContractEngineConfig {
     ProtoDescriptorLoader protoDescriptorLoader() { return new ProtoDescriptorLoader(); }
 
     @Bean
-    ContractIndexBuilder contractIndexBuilder(ProtoDescriptorLoader proto) {
+    ContractIndexBuilder contractIndexBuilder(ProtoDescriptorLoader proto, JsonMapper mapper) {
         List<ContractExtractor> extractors = List.of(
                 new CacheContractExtractor(), new ConfigContractExtractor(),
                 new DatabaseContractExtractor(), new EnumContractExtractor(),
                 new GrpcContractExtractor(proto), new KafkaContractExtractor(),
                 new MavenContractExtractor(), new ProtoContractExtractor(proto),
-                new RestContractExtractor(), new StringFormatContractExtractor());
+                new RestContractExtractor(mapper), new StringFormatContractExtractor());
         return new ContractIndexBuilder(extractors, new ContractIndexEnricher());
     }
 }

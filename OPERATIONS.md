@@ -31,4 +31,26 @@ Do not delete a previous published generation until the new generation has passe
 
 `impact_analysis` is informational and always reports `blocking=false`. Java method call-site rows are deterministic syntax matches in the consumer source at the indexed commit. They identify candidate class/method and source lines; they do not prove overload resolution, signature incompatibility, or behavioral breakage. Treat `INCOMPLETE`, `STALE`, ambiguous bindings, and parser failures as missing evidence, never as an empty-consumer conclusion. Kotlin method-level analysis and behavioral evaluation are not currently implemented.
 
-The local verification run passed 120 unit/regression tests on Java 21. Docker was unavailable, so PostgreSQL/pgvector, Zoekt, live MCP, full restart/recovery, performance, and security acceptance checks remain open.
+## PostgreSQL shared-library acceptance gate
+
+The GitHub Actions workflow is named **CI** and is defined in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It supports manual dispatch and runs two distinct gates: the default unit/regression suite, followed by `mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify`, which selects `SharedLibraryImpactPostgresIT` through Surefire. A green unit-test step alone does not close the PostgreSQL acceptance gate.
+
+### Run from GitHub Actions
+
+1. Ensure the desired commit, including the workflow and integration test, is pushed to the repository. Manual dispatch only runs content present on the selected branch; local uncommitted changes are not included.
+2. Open the repository's **Actions** tab, select **CI**, choose **Run workflow**, select the branch containing the desired commit, and start the run.
+3. Confirm the **Unit and regression tests** and **PostgreSQL V1-V6 shared-library impact integration** steps both pass. The latter starts `pgvector/pgvector:0.8.1-pg17` as a PostgreSQL service, waits for `pg_isready`, and uses database `code_context_test` with the test-only credentials configured in the workflow.
+4. In the run summary, confirm separate unit/regression and PostgreSQL acceptance summaries. The acceptance report gate requires exactly one testcase whose class is `SharedLibraryImpactPostgresIT`, and it requires `1 passed, 0 failures, 0 errors, 0 skipped`. Confirm the summary shows the intended branch and commit SHA. A missing or malformed XML report fails the workflow.
+5. Download **`java-and-postgres-test-reports`**. Inspect `target/surefire-reports/TEST-com.wynk.codecontext.index.SharedLibraryImpactPostgresIT.xml` and its matching `.txt` file, plus `target/postgres-integration-maven.log`, `target/unit-tests-maven.log`, and `target/acceptance-run-metadata.txt`. GitHub Actions logs are also retained with the run.
+
+The acceptance test must show the Flyway schema history ending at V6 and the `vector` extension present. It indexes provider v1/v2 plus three real local Git consumer fixtures, checks persisted V4 call sites, V5 semantic edges and V6 Maven dependencies/classpaths, calls `impact_analysis` through MCP Streamable HTTP, expects only consumer A's v1 `Money.convert(String)` as a candidate, and checks that an injected pre-publication failure retains the prior successful generation. A passing result has exactly one executed test with no skip, failure, or error; the test assertions verify the persisted method identity and returned impact details.
+
+### Diagnose a failed run
+
+- **PostgreSQL readiness:** inspect the service container startup and `pg_isready` health status in the job log. The integration cannot be skipped when the database is unavailable.
+- **Flyway/schema:** inspect application startup and `postgres-integration-maven.log` for the first migration exception. The test asserts V6 is the latest successful migration and pgvector is installed.
+- **Maven/build:** inspect the corresponding Maven log and the failing workflow step. Java setup is Temurin 21; dependency/build failures fail the job.
+- **Test assertion:** read the Surefire `.txt` and XML report for assertion/exception details. The workflow also fails if the named acceptance test report is missing, skipped, or has anything other than one test case.
+- **Run identity:** use the workflow summary and `acceptance-run-metadata.txt` for branch, commit SHA, workflow URL, Java version, database image and exact Maven command.
+
+The latest local environment has Java 17 only, no reachable Docker daemon, and invalid GitHub CLI authentication. No Java 21 build or PostgreSQL-backed acceptance execution is claimed locally; see [IMPLEMENTATION_REPORT.md](IMPLEMENTATION_REPORT.md) and [PRODUCTION_READINESS_MATRIX.md](PRODUCTION_READINESS_MATRIX.md) for the current evidence state.

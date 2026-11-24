@@ -1,6 +1,6 @@
 package com.wynk.codecontext.search;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.config.CodeContextProperties;
 import com.wynk.codecontext.model.RepositoryRecord;
 import org.springframework.stereotype.Service;
@@ -14,8 +14,8 @@ import java.util.concurrent.TimeUnit;
 
 @Service
 public class ZoektIndexer {
-    private final CodeContextProperties config; private final ObjectMapper json;
-    public ZoektIndexer(CodeContextProperties c,ObjectMapper m){config=c;json=m;}
+    private final CodeContextProperties config; private final JsonMapper json;
+    public ZoektIndexer(CodeContextProperties c,JsonMapper m){config=c;json=m;}
     public void index(RepositoryRecord repository,Path checkout,java.util.UUID generation) throws Exception {
         Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();Files.createDirectories(index);
         Path metadata=index.resolve("meta-"+repository.id()+".json");

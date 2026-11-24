@@ -14,7 +14,7 @@ import com.wynk.codecontext.port.contract.graph.CrossRepoImpactResolver.Analysis
 import com.wynk.codecontext.port.contract.graph.MavenConsumerBridge;
 import com.wynk.codecontext.port.contract.source.JavaCallSiteAnalyzer;
 import com.wynk.codecontext.index.ConsumerContractIndexRefresher;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,8 +29,8 @@ import java.util.UUID;
 @Service
 public class CodeContextTools {
     private final ZoektSearchService search; private final RepositoryStore repos; private final JdbcTemplate jdbc; private final EmbeddingModel embeddings; private final GitRepositoryManager git; private final CodeContextProperties props;
-    private final PostgresContractIndexStore contractIndexes; private final ContractCompatibilityEngine compatibility; private final CrossRepoImpactResolver impactResolver; private final ObjectMapper objectMapper; private final ConsumerContractIndexRefresher contractRefresher;
-    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,ObjectMapper objectMapper,ConsumerContractIndexRefresher contractRefresher){search=s;repos=r;jdbc=j;embeddings=e;git=g;props=p;this.contractIndexes=contractIndexes;this.compatibility=compatibility;this.impactResolver=impactResolver;this.objectMapper=objectMapper;this.contractRefresher=contractRefresher;}
+    private final PostgresContractIndexStore contractIndexes; private final ContractCompatibilityEngine compatibility; private final CrossRepoImpactResolver impactResolver; private final JsonMapper objectMapper; private final ConsumerContractIndexRefresher contractRefresher;
+    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,JsonMapper objectMapper,ConsumerContractIndexRefresher contractRefresher){search=s;repos=r;jdbc=j;embeddings=e;git=g;props=p;this.contractIndexes=contractIndexes;this.compatibility=compatibility;this.impactResolver=impactResolver;this.objectMapper=objectMapper;this.contractRefresher=contractRefresher;}
     private String team(){return String.valueOf(SecurityContextHolder.getContext().getAuthentication().getPrincipal());}
     private RepositoryRecord allowed(String key){String[] p=key.split("/",2);if(p.length!=2)throw new IllegalArgumentException("repository must be owner/name");return repos.find(p[0],p[1]).filter(r->repos.findAccessible(team()).stream().anyMatch(x->x.id().equals(r.id()))).orElseThrow(()->new SecurityException("repository not found or access denied"));}
 
