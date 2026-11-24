@@ -499,14 +499,27 @@ FROM semantic_call_sites WHERE id=?
         Files.createDirectories(source.getParent()); Files.createDirectories(classes);
         Files.writeString(source, librarySource(api));
         assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null,null,null,"-d",classes.toString(),source.toString()));
-        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(artifactDir.resolve("common-library-"+version+".jar")));
+        Path jarFile = artifactDir.resolve("common-library-"+version+".jar");
+        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(jarFile));
              var paths = Files.walk(classes)) {
             for (Path file : paths.filter(Files::isRegularFile).toList()) {
                 jar.putNextEntry(new java.util.jar.JarEntry(classes.relativize(file).toString().replace('\\','/')));
                 Files.copy(file,jar); jar.closeEntry();
             }
         }
-        Files.writeString(artifactDir.resolve("common-library-"+version+".pom"),pom(version,null).replace("fixture","org.acme"));
+        Path pomFile = artifactDir.resolve("common-library-"+version+".pom");
+        Files.writeString(pomFile,pom(version,null).replace("fixture","org.acme"));
+        writeChecksumSidecars(jarFile);
+        writeChecksumSidecars(pomFile);
+    }
+
+    private static void writeChecksumSidecars(Path artifact) throws Exception {
+        byte[] content = Files.readAllBytes(artifact);
+        for (String algorithm : List.of("SHA-1", "MD5")) {
+            String extension = algorithm.equals("SHA-1") ? "sha1" : "md5";
+            String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance(algorithm).digest(content));
+            Files.writeString(Path.of(artifact + "." + extension), digest + "\n");
+        }
     }
 
     private JsonNode mcpImpactCall(String repository) throws Exception {
@@ -514,7 +527,11 @@ FROM semantic_call_sites WHERE id=?
         URI endpoint = URI.create("http://localhost:"+port+"/mcp");
         Object initialize=Map.of("jsonrpc","2.0","id",1,"method","initialize","params",Map.of("protocolVersion","2025-03-26","capabilities",Map.of(),"clientInfo",Map.of("name","postgres-impact-it","version","1.0")));
         HttpResponse<String> unauthenticated=exchange(client,endpoint,null,initialize,null);
-        assertEquals(401,unauthenticated.statusCode(),"MCP must reject an unauthenticated client");
+        assertEquals(401,unauthenticated.statusCode(),"MCP must reject an unauthenticated client; headers="
+                +unauthenticated.headers().map()+" body="+unauthenticated.body());
+        HttpResponse<String> invalidCredentials=exchange(client,endpoint,null,initialize,"invalid-integration-token");
+        assertEquals(401,invalidCredentials.statusCode(),"MCP must reject an invalid API key; headers="
+                +invalidCredentials.headers().map()+" body="+invalidCredentials.body());
         JsonNode initialized = post(client,endpoint,null,initialize);
         assertTrue(initialized.path("result").has("serverInfo"), initialized.toString());
         HttpResponse<String> initResponse = lastResponse;
