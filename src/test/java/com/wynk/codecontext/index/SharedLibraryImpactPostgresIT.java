@@ -142,13 +142,24 @@ class SharedLibraryImpactPostgresIT {
         UUID consumerA = repositories.id("Fixture", "consumer-service-a");
         UUID consumerB = repositories.id("Fixture", "consumer-service-b");
         UUID consumerC = repositories.id("Fixture", "consumer-service-c");
-        assertCallPersisted(consumerA, "org.acme.Money#convert(java.lang.String)", "src/main/java/app/ConsumerA.java");
-        assertCallPersisted(consumerB, "org.acme.Money#convert(java.math.BigDecimal)", "src/main/java/app/ConsumerB.java");
-        assertCallPersisted(consumerC, "org.acme.Money#convert(java.lang.Integer)", "src/main/java/app/ConsumerC.java");
+        UUID consumerAGeneration = repositories.currentGeneration(consumerA).orElseThrow();
+        String consumerACommit = repositories.currentCommit(consumerA).orElseThrow();
+        UUID consumerBGeneration = repositories.currentGeneration(consumerB).orElseThrow();
+        String consumerBCommit = repositories.currentCommit(consumerB).orElseThrow();
+        UUID consumerCGeneration = repositories.currentGeneration(consumerC).orElseThrow();
+        String consumerCCommit = repositories.currentCommit(consumerC).orElseThrow();
+        assertMavenClasspathPersisted(consumerA, consumerAGeneration, consumerACommit);
+        assertCallPersisted(consumerA, consumerAGeneration, consumerACommit,
+                "org.acme.Money#convert(java.lang.String)", "src/main/java/app/ConsumerA.java");
+        assertUnresolvedCallRemainsUnresolved(consumerA, consumerAGeneration, consumerACommit);
+        assertCallPersisted(consumerB, consumerBGeneration, consumerBCommit,
+                "org.acme.Money#convert(java.math.BigDecimal)", "src/main/java/app/ConsumerB.java");
+        assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
+                "org.acme.Money#convert(java.lang.Integer)", "src/main/java/app/ConsumerC.java");
         assertEquals("1.0", dependencyVersion(consumerA));
         assertEquals("2.0", dependencyVersion(consumerB));
         assertEquals("2.0", dependencyVersion(consumerC));
-        assertSemanticCallSitePersistenceRoundTrip(consumerA, repositories.currentGeneration(consumerA).orElseThrow());
+        assertSemanticCallSitePersistenceRoundTrip(consumerA, consumerAGeneration);
         var reloadedConsumerA = contractIndexes.published(consumerA).orElseThrow().index();
         var reloadedMavenImport = reloadedConsumerA.imports().stream()
                 .filter(entry -> entry.type() == ContractType.MAVEN)
@@ -237,15 +248,19 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
 """,Boolean.class,consumerA,dependencyCommit(consumerA))));
     }
 
-    private void assertCallPersisted(UUID repository, String targetKey, String path) {
+    private void assertCallPersisted(UUID repository, UUID generation, String commit, String targetKey, String path) {
         Integer rows = jdbc.queryForObject("""
 SELECT count(*) FROM semantic_call_sites site
 JOIN semantic_call_edges edge ON edge.call_site_id=site.id
+ AND edge.repository_id=site.repository_id AND edge.generation_id=site.generation_id
 JOIN semantic_symbols target ON target.id=edge.target_symbol_id
+ AND target.repository_id=site.repository_id AND target.generation_id=site.generation_id
+ AND target.commit_sha=site.commit_sha
 JOIN index_generations g ON g.id=site.generation_id AND g.published
-WHERE site.repository_id=? AND site.file_path=? AND site.resolution_status='RESOLVED'
+WHERE site.repository_id=? AND site.generation_id=? AND site.commit_sha=?
+AND site.file_path=? AND site.resolution_status='RESOLVED'
 AND target.symbol_key=? AND edge.resolution_status='RESOLVED'
-""", Integer.class, repository, path, targetKey);
+""", Integer.class, repository, generation, commit, path, targetKey);
         assertTrue(rows != null && rows > 0, () -> "missing persisted V4/V5 resolved target " + targetKey + " in " + path
                 + "; persisted call-sites=" + callSiteDiagnostics(repository, path)
                 + "; Maven classpath=" + mavenClasspathDiagnostics(repository));
@@ -254,8 +269,11 @@ AND target.symbol_key=? AND edge.resolution_status='RESOLVED'
         }
         Integer caller = jdbc.queryForObject("""
 SELECT count(*) FROM semantic_call_sites site JOIN semantic_symbols caller ON caller.id=site.caller_symbol_id
-WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.Consumer%#call(%'
-""", Integer.class, repository, path);
+ AND caller.repository_id=site.repository_id AND caller.generation_id=site.generation_id
+ AND caller.commit_sha=site.commit_sha
+WHERE site.repository_id=? AND site.generation_id=? AND site.commit_sha=?
+AND site.file_path=? AND caller.symbol_key LIKE 'app.Consumer%#call(%'
+""", Integer.class, repository, generation, commit, path);
         assertTrue(caller != null && caller > 0, "missing persisted canonical caller method for " + path);
     }
 
@@ -284,6 +302,38 @@ LEFT JOIN maven_module_dependencies d ON d.generation_id=cp.generation_id AND d.
 WHERE cp.repository_id=?
 ORDER BY cp.generation_id,cp.module_path,d.group_id,d.artifact_id,d.version
 """, repository).toString();
+    }
+
+    private void assertMavenClasspathPersisted(UUID repository, UUID generation, String commit) {
+        Integer modules = jdbc.queryForObject("""
+SELECT count(*) FROM maven_module_classpaths
+WHERE repository_id=? AND generation_id=? AND commit_sha=? AND module_path=''
+  AND group_id='fixture' AND artifact_id='consumer' AND version='1.0'
+  AND resolution_status='RESOLVED' AND classpath_fingerprint IS NOT NULL
+""", Integer.class, repository, generation, commit);
+        assertEquals(1, modules, "consumer POM classpath was not persisted for its published generation");
+        Integer dependencies = jdbc.queryForObject("""
+SELECT count(*) FROM maven_module_dependencies
+WHERE generation_id=? AND module_path='' AND group_id='org.acme'
+  AND artifact_id='common-library' AND version='1.0' AND scope='compile'
+  AND artifact_path IS NOT NULL AND length(artifact_sha256)=64
+""", Integer.class, generation);
+        assertEquals(1, dependencies, "common-library dependency was not persisted with its resolved artifact");
+    }
+
+    private void assertUnresolvedCallRemainsUnresolved(UUID repository, UUID generation, String commit) {
+        Boolean unresolved = jdbc.queryForObject("""
+SELECT EXISTS(
+ SELECT 1 FROM semantic_call_sites site
+ JOIN semantic_call_edges edge ON edge.call_site_id=site.id
+ WHERE site.repository_id=? AND site.generation_id=? AND site.commit_sha=?
+   AND site.file_path='src/main/java/app/ConsumerA.java'
+   AND site.invocation='money.missing(\"x\")'
+   AND site.resolution_status='UNRESOLVED' AND site.target_symbol_id IS NULL
+   AND edge.resolution_status='UNRESOLVED' AND edge.target_symbol_id IS NULL
+)
+""", Boolean.class, repository, generation, commit);
+        assertTrue(Boolean.TRUE.equals(unresolved), "a nonexistent Money method must remain unresolved without a target symbol");
     }
 
     private String dependencyVersion(UUID repository) {
@@ -425,8 +475,11 @@ FROM semantic_call_sites WHERE id=?
     }
 
     private static Map<String,String> consumerFiles(String version, String className, String returnType, String invocation) {
+        String unresolvedMethod = className.equals("ConsumerA")
+                ? "  public String unresolved(Money money) {\n    return money.missing(\"x\");\n  }\n"
+                : "";
         return Map.of("pom.xml", pom("1.0", "<dependencies><dependency><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>"+version+"</version></dependency></dependencies>"),
-                "src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n}\n");
+                "src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n"+unresolvedMethod+"}\n");
     }
 
     private static String pom(String version, String extra) {

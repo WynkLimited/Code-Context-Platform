@@ -159,14 +159,18 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
         }
     }
 
-    /** Resolve against only source roots materialized from this immutable Git commit. External
-     * artifacts are deliberately absent until the repository's Maven classpath is resolved. */
+    /** Resolve against source roots and Maven descriptors materialized from this immutable Git
+     * commit. External artifacts are deliberately absent until the repository's Maven classpath
+     * is resolved. */
     private void buildAndPersistSemanticCallSites(RepositoryRecord repo, UUID generation,
                                                    List<GitRepositoryManager.SourceFile> files, String commit) throws Exception {
         Path snapshot=Files.createTempDirectory("code-context-semantic-");
         try {
             List<GitRepositoryManager.SourceFile> javaFiles=files.stream().filter(f->f.path().endsWith(".java")).toList();
-            for(var file:javaFiles){Path out=snapshot.resolve(file.path()).normalize();if(!out.startsWith(snapshot)||file.path().startsWith("/"))throw new IllegalArgumentException("unsafe repository path");Files.createDirectories(out.getParent());Files.writeString(out,file.content());}
+            for(var file:files){
+                if(!file.path().endsWith(".java")&&!file.path().equals("pom.xml")&&!file.path().endsWith("/pom.xml"))continue;
+                Path out=snapshot.resolve(file.path()).normalize();if(!out.startsWith(snapshot)||file.path().startsWith("/"))throw new IllegalArgumentException("unsafe repository path");Files.createDirectories(out.getParent());Files.writeString(out,file.content());
+            }
             var roots=new LinkedHashSet<Path>();
             for(var f:javaFiles){
                 int marker=f.path().indexOf("src/main/java/"); if(marker<0)marker=f.path().indexOf("src/test/java/");
