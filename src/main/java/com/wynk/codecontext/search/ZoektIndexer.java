@@ -1,0 +1,33 @@
+package com.wynk.codecontext.search;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wynk.codecontext.config.CodeContextProperties;
+import com.wynk.codecontext.model.RepositoryRecord;
+import org.springframework.stereotype.Service;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+@Service
+public class ZoektIndexer {
+    private final CodeContextProperties config; private final ObjectMapper json;
+    public ZoektIndexer(CodeContextProperties c,ObjectMapper m){config=c;json=m;}
+    public void index(RepositoryRecord repository,Path checkout,java.util.UUID generation) throws Exception {
+        Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();Files.createDirectories(index);
+        Path metadata=index.resolve("meta-"+repository.id()+".json");
+        String generationName=repository.key()+"@"+generation;
+        json.writeValue(metadata.toFile(),new RepoMetadata(generationName,"Code Context indexed generation"));
+        Path log=index.resolve("index-"+repository.id()+".log");
+        Process process=new ProcessBuilder(List.of(config.zoekt().indexer(),"-index",index.toString(),"-branches","HEAD","-incremental","-meta",metadata.toString(),checkout.toString()))
+                .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+        boolean done=process.waitFor(Duration.ofMinutes(20).toMillis(),TimeUnit.MILLISECONDS);
+        if(!done){process.destroyForcibly();throw new IOException("Zoekt indexing exceeded 20 minute limit");}
+        String output=Files.exists(log)?Files.readString(log):"";
+        if(process.exitValue()!=0)throw new IOException("Zoekt indexing failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1500,output.length())));
+    }
+    private record RepoMetadata(String name,String description) {}
+}

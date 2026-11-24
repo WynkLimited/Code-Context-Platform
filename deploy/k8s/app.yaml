@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Service
+metadata: {name: code-context, namespace: code-context}
+spec:
+  selector: {app: code-context}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: code-context, namespace: code-context}
+spec:
+  # Keep one worker until distributed per-repository leases and retention are implemented.
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: code-context}}
+  template:
+    metadata: {labels: {app: code-context}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 10001, runAsGroup: 10001, fsGroup: 10001}
+      initContainers:
+        - name: permissions
+          image: busybox:1.37.0
+          command: ["sh", "-c", "chown 10001:10001 /repos /zoekt"]
+          securityContext: {runAsUser: 0, runAsNonRoot: false}
+          volumeMounts:
+            - {name: repos, mountPath: /repos}
+            - {name: zoekt, mountPath: /zoekt}
+      containers:
+        - name: app
+          image: code-context-platform:release
+          ports: [{containerPort: 8080}]
+          envFrom: [{configMapRef: {name: code-context-config}}]
+          env:
+            - {name: DATABASE_PASSWORD, valueFrom: {secretKeyRef: {name: code-context-secrets, key: database-password}}}
+            - {name: TEAM_API_KEYS, valueFrom: {secretKeyRef: {name: code-context-secrets, key: team-api-keys}}}
+            - {name: ADMIN_API_KEYS, valueFrom: {secretKeyRef: {name: code-context-secrets, key: admin-api-keys}}}
+            - {name: WEBHOOK_SECRET, valueFrom: {secretKeyRef: {name: code-context-secrets, key: webhook-secret}}}
+            - {name: GIT_ACCESS_TOKEN, valueFrom: {secretKeyRef: {name: code-context-secrets, key: git-access-token}}}
+          resources:
+            requests: {cpu: "2", memory: 6Gi}
+            limits: {cpu: "6", memory: 16Gi}
+          startupProbe: {httpGet: {path: /actuator/health/readiness, port: 8080}, failureThreshold: 60, periodSeconds: 10}
+          readinessProbe: {httpGet: {path: /actuator/health/readiness, port: 8080}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /actuator/health/liveness, port: 8080}, periodSeconds: 20}
+          volumeMounts:
+            - {name: repos, mountPath: /var/lib/code-context/repos}
+            - {name: zoekt, mountPath: /data}
+      volumes:
+        - {name: repos, persistentVolumeClaim: {claimName: repositories}}
+        - {name: zoekt, persistentVolumeClaim: {claimName: zoekt-data}}

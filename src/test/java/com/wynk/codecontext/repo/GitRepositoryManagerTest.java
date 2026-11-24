@@ -1,0 +1,32 @@
+package com.wynk.codecontext.repo;
+
+import com.wynk.codecontext.config.CodeContextProperties;
+import com.wynk.codecontext.model.RepositoryRecord;
+import org.eclipse.jgit.api.Git;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class GitRepositoryManagerTest {
+    @TempDir Path temp;
+
+    @Test void clonesOnlyLocalRootsAndReadsTheIndexedCommit() throws Exception {
+        Path sources=Files.createDirectory(temp.resolve("sources"));Path source=Files.createDirectory(sources.resolve("sample"));
+        try(Git git=Git.init().setDirectory(source.toFile()).setInitialBranch("main").call()) {
+            Files.createDirectories(source.resolve("src"));Files.writeString(source.resolve("src/Hello.java"),"class Hello { int run(){ return 1; } }\n");
+            git.add().addFilepattern(".").call();git.commit().setMessage("fixture").setAuthor("test","test@example.com").setCommitter("test","test@example.com").call();
+        }
+        var props=new CodeContextProperties(temp.resolve("repos").toString(),sources.toString(),temp.resolve("zoekt").toString(),"team=secret","team=admin-secret","local-hook","","github.com","http://localhost,http://127.0.0.1",1024,1024*1024,6000,2,300,new CodeContextProperties.Zoekt("zoekt-git-index","http://localhost:6070"),new CodeContextProperties.Graphify("graphify",false));
+        var manager=new GitRepositoryManager(props);var record=new RepositoryRecord(UUID.randomUUID(),"team","sample",source.toUri().toString(),"team","main","SERVICE",temp.resolve("repos/team/sample").toString());
+        Path clone=manager.sync(record);String commit=manager.head(clone);
+        var java=manager.filesAt(clone,commit).stream().filter(f->f.path().equals("src/Hello.java")).findFirst().orElseThrow();
+        assertTrue(java.content().contains("return 1"));assertFalse(java.blobSha().isBlank());
+        assertTrue(manager.readFileAtRevision(clone,commit,"src/Hello.java",1000).contains("return 1"));
+        assertThrows(IllegalArgumentException.class,()->manager.readFileAtRevision(clone,commit,"../../etc/passwd",1000));
+    }
+}

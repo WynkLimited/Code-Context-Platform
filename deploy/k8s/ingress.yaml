@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: code-context
+  namespace: code-context
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  ingressClassName: internal
+  tls:
+    - hosts: [code-context.internal.example]
+      secretName: code-context-tls
+  rules:
+    - host: code-context.internal.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: {service: {name: code-context, port: {number: 8080}}}

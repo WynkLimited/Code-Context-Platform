@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: repositories, namespace: code-context}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 250Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: zoekt-data, namespace: code-context}
+spec:
+  accessModes: [ReadWriteMany]
+  resources: {requests: {storage: 150Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: ollama-data, namespace: code-context}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 80Gi}}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: postgres-data, namespace: code-context}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: {requests: {storage: 100Gi}}

@@ -1,0 +1,8 @@
+target/
+.idea/
+.env
+.DS_Store
+data/
+logs/
+
+graphify-out/

@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg17
+    environment:
+      POSTGRES_DB: code_context
+      POSTGRES_USER: code_context
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-local_only_change_me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U code_context -d code_context"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    ports: ["127.0.0.1:5432:5432"]
+
+  ollama:
+    image: ollama/ollama:0.13.3
+    volumes: ["ollama-data:/root/.ollama"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    ports: ["127.0.0.1:11434:11434"]
+
+  ollama-model-init:
+    image: ollama/ollama:0.13.3
+    depends_on:
+      ollama: {condition: service_healthy}
+    environment: {OLLAMA_HOST: http://ollama:11434}
+    entrypoint: ["/bin/sh", "-c", "ollama pull qwen3-embedding:0.6b"]
+    restart: "no"
+
+  zoekt:
+    image: ghcr.io/sourcegraph/zoekt:0.0.0-20261026142308-e8242d26df19
+    command: ["zoekt-webserver", "-index", "/data/index", "-rpc"]
+    volumes: ["zoekt-data:/data"]
+    user: "0:0"
+    ports: ["127.0.0.1:6070:6070"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:6070/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  fixture-init:
+    image: alpine/git:2.47.2
+    entrypoint: ["/bin/sh", "/scripts/init-fixtures.sh"]
+    volumes:
+      - ./fixtures:/src:ro
+      - ./scripts:/scripts:ro
+      - fixture-data:/fixtures
+    restart: "no"
+
+  app:
+    build: .
+    user: "0:0"
+    depends_on:
+      postgres: {condition: service_healthy}
+      zoekt: {condition: service_healthy}
+      ollama-model-init: {condition: service_completed_successfully}
+      fixture-init: {condition: service_completed_successfully}
+    environment:
+      APP_PROFILE: local
+      DATABASE_URL: jdbc:postgresql://postgres:5432/code_context
+      DATABASE_USER: code_context
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-local_only_change_me}
+      OLLAMA_BASE_URL: http://ollama:11434
+      ZOEKT_WEB_SERVER: http://zoekt:6070
+      ZOEKT_INDEXER: zoekt-git-index
+      REPOSITORY_ROOT: /var/lib/code-context/repos
+      LOCAL_GIT_ROOT: /fixtures
+      ZOEKT_INDEX_ROOT: /data/index
+      TEAM_API_KEYS: ${TEAM_API_KEYS:-local-dev=local-dev-token}
+      ADMIN_API_KEYS: ${ADMIN_API_KEYS:-local-dev=local-dev-token}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-local-webhook-secret-change-me}
+      GIT_ACCESS_TOKEN: ${GIT_ACCESS_TOKEN:-}
+      GRAPHIFY_ENABLED: "true"
+    volumes:
+      - repositories:/var/lib/code-context/repos
+      - zoekt-data:/data
+      - fixture-data:/fixtures:ro
+    ports: ["127.0.0.1:8080:8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+
+volumes:
+  postgres-data:
+  ollama-data:
+  zoekt-data:
+  repositories:
+  fixture-data:
