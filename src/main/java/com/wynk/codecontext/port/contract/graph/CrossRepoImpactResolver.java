@@ -174,15 +174,28 @@ WHERE edge.repository_id=? AND edge.generation_id=? AND site.generation_id=? AND
   AND EXISTS(SELECT 1 FROM index_generations published WHERE published.id=edge.generation_id AND published.published=true)
 """,(rs,n)->new SemanticMethodImpact(after.repoKey(),after.commit(),consumer.ref().key(),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getInt(8),rs.getInt(9),rs.getString(10),rs.getString(11),rs.getString(12),null,null,rs.getString(13),rs.getString(14),rs.getDouble(15),rs.getString(16),"POTENTIAL_UPGRADE_IMPACT","CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN","DIRECT","RESOLVED",freshness.get(consumer.id).name(),"PUBLISHED_V5_EDGE","JAVAPARSER_SYMBOL_SOLVER; MAVEN_RESOLVER; V5_SEMANTIC_CALL_EDGE",false),after.repoKey(),after.commit(),consumer.id,maybe.get().generationId(),maybe.get().generationId(),consumerIndex.commit(),key,artifact+":%",team);
                     for(var match:matches) {
-                        String current=Objects.equals(match.dependencyVersion(),change.identity().version())
-                                ?"DEPENDENCY_VERSION_MATCHES_PROVIDER_HEAD"
-                                :match.dependencyVersion()==null?"DEPENDENCY_VERSION_UNKNOWN":"DEPENDENCY_REMAINS_PINNED_TO_OLDER_OR_DIFFERENT_RELEASE";
+                        String baselineVersion=mavenVersion(before,change);
+                        String current=currentCompatibility(match.dependencyVersion(),baselineVersion,change.identity().version());
                         impacts.add(new SemanticMethodImpact(match.providerRepository(),match.providerCommit(),match.consumerRepository(),match.consumerCommit(),match.filePath(),match.callerClass(),match.callerMethod(),match.startLine(),match.endLine(),match.invocation(),match.providerClass(),match.oldSignature(),change.beforeSignature(),change.afterSignature(),match.dependencyArtifact(),match.dependencyVersion(),match.confidence(),match.evidence(),match.classification(),current,match.relationship(),match.resolutionState(),match.freshness(),match.analysisCompleteness(),match.provenance(),match.blocking()));
                     }
                 }
             }
         }
         return List.copyOf(impacts);
+    }
+
+    private static String mavenVersion(ContractIndex index,ContractChange change) {
+        List<String> versions=index.exportsOf(ContractType.MAVEN).stream()
+                .filter(export->export.canonicalKey().equals(change.contractKey()))
+                .map(export->export.contract().version()).filter(Objects::nonNull).distinct().toList();
+        return versions.size()==1?versions.get(0):null;
+    }
+
+    static String currentCompatibility(String dependencyVersion,String baselineVersion,String providerHeadVersion) {
+        if(dependencyVersion==null)return "DEPENDENCY_VERSION_UNKNOWN";
+        if(Objects.equals(dependencyVersion,providerHeadVersion))return "DEPENDENCY_VERSION_MATCHES_PROVIDER_HEAD";
+        if(baselineVersion!=null&&Objects.equals(dependencyVersion,baselineVersion))return "CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN";
+        return "DEPENDENCY_REMAINS_PINNED_TO_OLDER_OR_DIFFERENT_RELEASE";
     }
 
     /** An artifact is attributed to a provider only when its published exact generation declares
