@@ -215,9 +215,13 @@ class SharedLibraryImpactPostgresIT {
 
         String persistedImpact = jdbc.queryForObject("SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1", String.class, TEAM, provider);
         assertNotNull(persistedImpact);
-        assertTrue(persistedImpact.contains("Fixture/consumer-service-a"), persistedImpact);
-        assertTrue(persistedImpact.contains("ConsumerA"), persistedImpact);
-        assertTrue(persistedImpact.contains("consumer-service-a/src/main/java/app/ConsumerA.java"), persistedImpact);
+        JsonNode persistedImpactJson = json.readTree(persistedImpact);
+        JsonNode persistedSemanticImpacts = persistedImpactJson.path("semanticMethodImpacts");
+        assertEquals(1, persistedSemanticImpacts.size(), persistedImpact);
+        JsonNode persistedSemanticImpact = persistedSemanticImpacts.get(0);
+        assertEquals("fixture/consumer-service-a", persistedSemanticImpact.path("consumerRepository").asText());
+        assertEquals("app.ConsumerA", persistedSemanticImpact.path("callerClass").asText());
+        assertEquals("src/main/java/app/ConsumerA.java", persistedSemanticImpact.path("filePath").asText());
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM semantic_call_edges e JOIN semantic_call_sites s ON s.id=e.call_site_id JOIN index_generations g ON g.id=e.generation_id AND g.published WHERE e.repository_id=? AND s.resolution_status='RESOLVED')", Boolean.class, consumerA)));
         assertTrue(jdbc.queryForObject("""
 SELECT count(*) FROM maven_module_dependencies d JOIN maven_module_classpaths cp
