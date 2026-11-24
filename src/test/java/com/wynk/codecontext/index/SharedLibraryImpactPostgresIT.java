@@ -539,8 +539,13 @@ FROM semantic_call_sites WHERE id=?
         assertNotNull(session,"Streamable HTTP initialize must return a session identifier");
         post(client,endpoint,session,Map.of("jsonrpc","2.0","method","notifications/initialized"));
         JsonNode tools = post(client,endpoint,session,Map.of("jsonrpc","2.0","id",2,"method","tools/list","params",Map.of()));
-        for(String name:List.of("search_code","read_file","find_symbol","get_neighbors","semantic_search","impact_analysis"))
-            assertTrue(tools.toString().contains(name),tools.toString());
+        JsonNode listedTools = tools.path("result").path("tools");
+        assertTrue(listedTools.isArray(), "tools/list must return a tools array: " + tools);
+        assertFalse(listedTools.isEmpty(), "tools/list must register at least one MCP tool: " + tools);
+        java.util.Set<String> toolNames = new java.util.HashSet<>();
+        listedTools.forEach(tool -> toolNames.add(tool.path("name").asText()));
+        assertTrue(toolNames.containsAll(List.of("search_code","read_file","find_symbol","get_neighbors","semantic_search","impact_analysis")),
+                "tools/list is missing expected Code Context tools: " + listedTools);
         return post(client,endpoint,session,Map.of("jsonrpc","2.0","id",3,"method","tools/call","params",Map.of("name","impact_analysis","arguments",Map.of("contract","common-library","repository",repository))));
     }
 

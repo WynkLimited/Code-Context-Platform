@@ -22,7 +22,10 @@ class MavenClasspathResolverTest {
         try(var out=new JarOutputStream(Files.newOutputStream(artifact));var stream=Files.walk(classes)){
             for(Path c:stream.filter(Files::isRegularFile).toList()){out.putNextEntry(new JarEntry(classes.relativize(c).toString().replace('\\','/')));Files.copy(c,out);out.closeEntry();}
         }
-        Files.writeString(repo.resolve("org/acme/common-library/1.0/common-library-1.0.pom"),"<project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>1.0</version></project>");
+        Path pom=repo.resolve("org/acme/common-library/1.0/common-library-1.0.pom");
+        Files.writeString(pom,"<project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>1.0</version></project>");
+        writeChecksumSidecars(artifact);
+        writeChecksumSidecars(pom);
         Path root=temp.resolve("snapshot");Path module=root;Files.createDirectories(module.resolve("src/main/java/app"));
         Files.writeString(module.resolve("pom.xml"),"""
                 <project><modelVersion>4.0.0</modelVersion><groupId>app</groupId><artifactId>consumer</artifactId><version>1</version>
@@ -48,5 +51,14 @@ class MavenClasspathResolverTest {
         // and caller_symbol_id, tying the real Maven classpath binding to the graph identity.
         assertEquals("org.acme.Money#convert(java.lang.String)",convert.declaringType()+"#"+convert.signature());
         assertEquals("app.ConsumerA#call(org.acme.Money)",convert.callerClass()+"#"+convert.callerMethod());
+    }
+
+    private static void writeChecksumSidecars(Path artifact) throws Exception {
+        byte[] content=Files.readAllBytes(artifact);
+        for(String algorithm:List.of("SHA-1","MD5")) {
+            String extension=algorithm.equals("SHA-1")?"sha1":"md5";
+            String digest=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance(algorithm).digest(content));
+            Files.writeString(Path.of(artifact+"."+extension),digest+"\n");
+        }
     }
 }
