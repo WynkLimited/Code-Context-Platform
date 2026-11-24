@@ -9,7 +9,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: code-context, namespace: code-context}
 spec:
-  # Keep one worker until distributed per-repository leases and retention are implemented.
+  # Keep one replica until generation retention has multi-instance tests.
   replicas: 1
   strategy: {type: Recreate}
   selector: {matchLabels: {app: code-context}}

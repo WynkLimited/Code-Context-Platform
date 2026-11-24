@@ -105,7 +105,7 @@ class IndexWebhookControllerTest {
         private WebhookIndexing(RepositoryStore repositories, CodeContextProperties properties,
                                 PlatformTransactionManager transactionManager) {
             super(null, repositories, null, properties, null, null, null, transactionManager,
-                    null, null, null, null, null);
+                    null, null, null, null, null, null);
         }
         @Override public UUID enqueue(String owner, String name, String sha, String delivery) {
             enqueueCount++;

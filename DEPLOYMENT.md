@@ -26,7 +26,7 @@ kubectl apply -f deploy/k8s/ingress.yaml
 kubectl apply -f deploy/k8s/network-policy.yaml
 ```
 
-Secrets are intentionally not included as a manifest. Create the namespace secret before the dependent pods start. `app.yaml` stays at one replica until cross-process per-repository lease locks and generation garbage collection receive multi-instance tests. The sample PostgreSQL StatefulSet is also single instance; replace it with an HA operator/service for production.
+Secrets are intentionally not included as a manifest. Create the namespace secret before the dependent pods start. Per-repository indexing now uses renewable PostgreSQL leases and the acceptance suite verifies mutual exclusion and release. Keep `app.yaml` at one replica until generation garbage collection receives multi-instance tests. The sample PostgreSQL StatefulSet is also single instance; replace it with an HA operator/service for production.
 
 The PostgreSQL init script runs only when the data directory is empty. For a previously initialized volume, do not delete data to force initialization: have a DBA provision the non-superuser role, extensions, schema privileges, and any required object ownership/grants, then deploy the app using that role. The script is available at `scripts/postgres-init-app-role.sh` for a reviewed, controlled bootstrap operation. Existing superuser-owned tables may need a DBA-led ownership migration before the runtime role can use them.
 

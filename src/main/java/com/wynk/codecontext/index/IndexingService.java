@@ -49,12 +49,13 @@ public class IndexingService {
     private final GraphifyIndexer graphify; private final TransactionTemplate transactions;
     private final ContractIndexBuilder contractIndexBuilder; private final JsonMapper objectMapper; private final GraphSymbolBinder graphSymbolBinder; private final ConsumerContractIndexRefresher contractRefresher; private final PostgresContractIndexStore contractIndexes;
     private final MavenClasspathResolver mavenClasspathResolver = new MavenClasspathResolver();
-    private final java.util.concurrent.ThreadPoolExecutor workers;private final java.util.concurrent.Semaphore slots;private final java.util.concurrent.ConcurrentHashMap<UUID,Object> repositoryLocks=new java.util.concurrent.ConcurrentHashMap<>();
-    public IndexingService(JdbcTemplate j, RepositoryStore r, GitRepositoryManager g, CodeContextProperties p, EmbeddingModel e, ZoektIndexer zoekt,GraphifyIndexer graphify,org.springframework.transaction.PlatformTransactionManager tx, ContractIndexBuilder contractIndexBuilder, JsonMapper objectMapper, GraphSymbolBinder graphSymbolBinder, ConsumerContractIndexRefresher contractRefresher, PostgresContractIndexStore contractIndexes) { jdbc=j;repos=r;git=g;props=p;embeddings=e;this.zoekt=zoekt;this.graphify=graphify;this.transactions=new TransactionTemplate(tx);this.contractIndexBuilder=contractIndexBuilder;this.objectMapper=objectMapper;this.graphSymbolBinder=graphSymbolBinder;this.contractRefresher=contractRefresher;this.contractIndexes=contractIndexes;int n=Math.max(1,Math.min(16,p.maxIndexConcurrency()));this.slots=new java.util.concurrent.Semaphore(n);this.workers=new java.util.concurrent.ThreadPoolExecutor(n,n,0,java.util.concurrent.TimeUnit.MILLISECONDS,new java.util.concurrent.ArrayBlockingQueue<>(n),workerFactory->{Thread t=new Thread(workerFactory,"code-context-indexer");t.setDaemon(true);return t;}); }
+    private final RepositoryIndexLeaseManager repositoryLeases;
+    private final java.util.concurrent.ThreadPoolExecutor workers;private final java.util.concurrent.Semaphore slots;
+    public IndexingService(JdbcTemplate j, RepositoryStore r, GitRepositoryManager g, CodeContextProperties p, EmbeddingModel e, ZoektIndexer zoekt,GraphifyIndexer graphify,org.springframework.transaction.PlatformTransactionManager tx, ContractIndexBuilder contractIndexBuilder, JsonMapper objectMapper, GraphSymbolBinder graphSymbolBinder, ConsumerContractIndexRefresher contractRefresher, PostgresContractIndexStore contractIndexes, RepositoryIndexLeaseManager repositoryLeases) { jdbc=j;repos=r;git=g;props=p;embeddings=e;this.zoekt=zoekt;this.graphify=graphify;this.transactions=new TransactionTemplate(tx);this.contractIndexBuilder=contractIndexBuilder;this.objectMapper=objectMapper;this.graphSymbolBinder=graphSymbolBinder;this.contractRefresher=contractRefresher;this.contractIndexes=contractIndexes;this.repositoryLeases=repositoryLeases;int n=Math.max(1,Math.min(16,p.maxIndexConcurrency()));this.slots=new java.util.concurrent.Semaphore(n);this.workers=new java.util.concurrent.ThreadPoolExecutor(n,n,0,java.util.concurrent.TimeUnit.MILLISECONDS,new java.util.concurrent.ArrayBlockingQueue<>(n),workerFactory->{Thread t=new Thread(workerFactory,"code-context-indexer");t.setDaemon(true);return t;}); }
 
     @Scheduled(fixedDelayString="${INDEX_POLL_MS:1500}")
     public void poll() {
-        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error='worker lease expired',updated_at=now() WHERE state='RUNNING' AND updated_at < now() - interval '1 hour'");
+        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error='worker lease expired',updated_at=now() WHERE state='RUNNING' AND updated_at < now() - interval '10 minutes'");
         while(slots.tryAcquire()) {
             List<UUID> ids=jdbc.query("""
 WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_at<=now() ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
@@ -70,9 +71,26 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     }
     private void process(UUID jobId) {
         Job job=jdbc.queryForObject("SELECT repository_id,commit_sha,attempt FROM index_jobs WHERE id=?",(rs,n)->new Job(rs.getObject(1,UUID.class),rs.getString(2),rs.getInt(3)),jobId);
-        synchronized(repositoryLocks.computeIfAbsent(job.repositoryId,k->new Object())){processLocked(jobId,job);}
+        RepositoryIndexLeaseManager.Lease lease;
+        try {
+            var claimed=repositoryLeases.tryAcquire(job.repositoryId,jobId);
+            if(claimed.isEmpty()) {
+                jdbc.update("UPDATE index_jobs SET state='QUEUED',attempt=greatest(0,attempt-1),error='repository is already being indexed',available_at=now()+interval '2 seconds',updated_at=now() WHERE id=?",jobId);
+                return;
+            }
+            lease=claimed.get();
+        } catch(RuntimeException failure) {
+            retryJob(jobId,job,failure);
+            return;
+        }
+        try {
+            processLocked(jobId,job,lease);
+        } finally {
+            try { lease.close(); }
+            catch(RuntimeException releaseFailure) { LOGGER.warn("repository.index.lease.release.failed repo={} job={} reason={}",job.repositoryId,jobId,releaseFailure.toString()); }
+        }
     }
-    private void processLocked(UUID jobId,Job job) {
+    private void processLocked(UUID jobId,Job job,RepositoryIndexLeaseManager.Lease lease) {
         try {
             Boolean enabled=jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,job.repositoryId);
             if(!Boolean.TRUE.equals(enabled)){jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository disabled',updated_at=now() WHERE id=?",jobId);return;}
@@ -106,7 +124,9 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             buildAndPersistContractIndex(repo,gen,files,sha);
             zoekt.index(repo,root,gen);
             // Atomic visibility: previous generation stays published until every stage above succeeds.
-            transactions.execute(status->{jdbc.update("UPDATE index_generations SET published=false WHERE repository_id=?",repo.id());
+            lease.assertOwned();
+            transactions.execute(status->{lease.fenceTransaction();
+                jdbc.update("UPDATE index_generations SET published=false WHERE repository_id=?",repo.id());
                 int publishedRows=jdbc.update("UPDATE index_generations SET published=true WHERE id=? AND EXISTS(SELECT 1 FROM repositories r WHERE r.id=index_generations.repository_id AND r.enabled=true)",gen);
                 if(publishedRows!=1)throw new IllegalStateException("repository disabled before generation publication");
                 contractRefresher.pruneSupersededRelationships();
@@ -121,9 +141,12 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
         } catch(Exception e) {
             String sqlDiagnostics = sqlDiagnosticChain(e);
             if (!sqlDiagnostics.isBlank()) LOGGER.error("Database failure while indexing job {}: {}", jobId, sqlDiagnostics);
-            int retryDelay=Math.min(300,5*(1<<Math.max(0,job.attempt-1)));
-            jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=?",truncate(e.getMessage()),retryDelay,jobId);
+            retryJob(jobId,job,e);
         }
+    }
+    private void retryJob(UUID jobId,Job job,Exception failure) {
+        int retryDelay=Math.min(300,5*(1<<Math.max(0,job.attempt-1)));
+        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=?",truncate(failure.getMessage()),retryDelay,jobId);
     }
     @PreDestroy public void stopWorkers(){workers.shutdownNow();}
     private void copyUnchangedFiles(UUID previous,UUID next) {
@@ -175,7 +198,7 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
         try {
             List<GitRepositoryManager.SourceFile> javaFiles=files.stream().filter(f->f.path().endsWith(".java")).toList();
             for(var file:files){
-                if(!file.path().endsWith(".java")&&!file.path().equals("pom.xml")&&!file.path().endsWith("/pom.xml"))continue;
+                if(!file.path().endsWith(".java")&&!file.path().endsWith(".kt")&&!file.path().equals("pom.xml")&&!file.path().endsWith("/pom.xml"))continue;
                 Path out=snapshot.resolve(file.path()).normalize();if(!out.startsWith(snapshot)||file.path().startsWith("/"))throw new IllegalArgumentException("unsafe repository path");Files.createDirectories(out.getParent());Files.writeString(out,file.content());
             }
             var roots=new LinkedHashSet<Path>();
@@ -187,11 +210,40 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
             Path mavenCache=Path.of(props.repositoryRoot()).toAbsolutePath().normalize().resolve(".maven-cache");
             var mavenResult=mavenClasspathResolver.resolve(snapshot,commit,mavenCache,MavenClasspathResolver.configuredRepositories());
             persistMavenResolution(repo,generation,commit,mavenResult);
+            var kotlinJars=new HashMap<String,Path>();
+            var kotlinModules=files.stream().filter(f->f.path().endsWith(".kt"))
+                    .map(f->moduleFor(snapshot,f.path(),mavenResult.modules())).distinct().toList();
+            for(String module:kotlinModules) {
+                var cp=mavenResult.modules().stream().filter(m->m.modulePath().equals(module)).findFirst().orElse(null);
+                var sources=files.stream().filter(f->f.path().endsWith(".java")||f.path().endsWith(".kt"))
+                        .filter(f->moduleFor(snapshot,f.path(),mavenResult.modules()).equals(module))
+                        .map(f->snapshot.resolve(f.path())).toList();
+                var result=new com.wynk.codecontext.port.contract.source.KotlinJvmSemanticAnalyzer()
+                        .analyze(snapshot,sources,cp==null?List.of():cp.jars(),Files.createTempDirectory(snapshot,"kotlin-output-"));
+                for(var source:sources)if(source.toString().endsWith(".kt"))
+                    jdbc.update("INSERT INTO semantic_call_sites(repository_id,generation_id,commit_sha,file_path,start_line,end_line,invocation,resolution_status,evidence,confidence,extractor_version) VALUES(?,?,?,?,1,1,?,'INCOMPLETE',?,0,'kotlin-compiler-jvm')",
+                            repo.id(),generation,commit,snapshot.relativize(source).toString(),"<kotlin-analysis-completeness>",result.diagnostic());
+                if(!result.complete())continue;
+                kotlinJars.put(module,result.jar());
+                for(var declaration:result.declarations()) {
+                    var symbol=declaration.symbol();
+                    ensureSemanticSymbol(repo,generation,commit,symbol.declaringType()+"#"+symbol.signature(),symbol.declaringType(),symbol.signature(),symbol.kind(),"RESOLVED");
+                }
+                for(var invocation:result.calls()) {
+                    var call=invocation.call();
+                    Long caller=ensureSemanticSymbol(repo,generation,commit,call.callerClass()+"#"+call.callerMethod(),call.callerClass(),call.callerMethod(),"METHOD","RESOLVED");
+                    Long target=ensureSemanticSymbol(repo,generation,commit,call.declaringType()+"#"+call.signature(),call.declaringType(),call.signature(),"METHOD","RESOLVED");
+                    String artifact=artifactFor(call.declaringType(),cp);
+                    persistSemanticCallSite(repo.id(),generation,commit,invocation.file(),call,call.evidence(),caller,target,artifact,
+                            artifact==null?null:artifact.substring(artifact.lastIndexOf(':')+1));
+                }
+            }
             for(var file:javaFiles){
                 Path source=snapshot.resolve(file.path()).normalize();
                 String module=moduleFor(snapshot,file.path(),mavenResult.modules());
                 var moduleCp=mavenResult.modules().stream().filter(m->m.modulePath().equals(module)).findFirst().orElse(null);
-                List<Path> jars=moduleCp==null?List.of():moduleCp.jars();
+                List<Path> jars=new ArrayList<>(moduleCp==null?List.of():moduleCp.jars());
+                if(kotlinJars.containsKey(module))jars.add(kotlinJars.get(module));
                 List<Path> moduleRoots=roots.stream().filter(p->{String relative=snapshot.relativize(p).toString().replace(File.separatorChar,'/');return module.isBlank()||relative.equals(module)||relative.startsWith(module+"/");}).toList();
                 if(moduleRoots.isEmpty())moduleRoots=List.of(snapshot);
                 for(var declaration:com.wynk.codecontext.port.contract.source.JavaSemanticCallSiteAnalyzer.declaredMethods(source,moduleRoots,jars))
@@ -224,12 +276,12 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
 INSERT INTO semantic_call_sites(repository_id,generation_id,commit_sha,file_path,caller_class,caller_method,
  start_line,end_line,invocation,declaring_type,resolved_signature,parameter_types,return_type,
  resolution_status,evidence,confidence,extractor_version,caller_symbol_id,target_symbol_id,dependency_artifact,dependency_version)
-VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,'javaparser-symbol-solver-3.27.1',?,?,?,?) RETURNING id
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
 """, Long.class,
                 repositoryId,generationId,commitSha,filePath,call.callerClass(),call.callerMethod(),
                 Math.max(1,call.startLine()),Math.max(1,call.endLine()),call.expression(),call.declaringType(),
                 call.signature(),objectMapper.writeValueAsString(call.parameterTypes()),call.returnType(),
-                call.resolutionStatus(),evidence,confidence,callerSymbolId,targetSymbolId,dependencyArtifact,dependencyVersion);
+                call.resolutionStatus(),evidence,confidence,call.evidence().startsWith("KOTLIN_COMPILER")?"kotlin-compiler-jvm":"javaparser-symbol-solver-3.27.1",callerSymbolId,targetSymbolId,dependencyArtifact,dependencyVersion);
         jdbc.update("INSERT INTO semantic_call_edges(repository_id,generation_id,call_site_id,caller_symbol_id,target_symbol_id,resolution_status,evidence,confidence) VALUES(?,?,?,?,?,?,?,?)",
                 repositoryId,generationId,callId,callerSymbolId,targetSymbolId,call.resolutionStatus(),evidence,confidence);
         return callId;

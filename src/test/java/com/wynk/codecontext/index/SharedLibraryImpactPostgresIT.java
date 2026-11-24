@@ -55,6 +55,7 @@ class SharedLibraryImpactPostgresIT {
     @Autowired RepositoryStore repositories;
     @Autowired PostgresContractIndexStore contractIndexes;
     @Autowired IndexingService indexing;
+    @Autowired RepositoryIndexLeaseManager repositoryIndexLeases;
     @Autowired JsonMapper json;
     @MockitoSpyBean ZoektIndexer zoektIndexer;
 
@@ -107,6 +108,7 @@ class SharedLibraryImpactPostgresIT {
         jdbc.update("DELETE FROM webhook_deliveries");
         jdbc.update("DELETE FROM index_jobs");
         jdbc.update("DELETE FROM index_generations");
+        jdbc.update("DELETE FROM repository_index_leases");
         jdbc.update("DELETE FROM team_repository_access");
         jdbc.update("DELETE FROM repositories");
         if(Files.exists(ROOT))try(var paths=Files.walk(ROOT)){paths.sorted(java.util.Comparator.reverseOrder()).forEach(path->{try{Files.deleteIfExists(path);}catch(Exception e){throw new IllegalStateException(e);}});}
@@ -115,9 +117,9 @@ class SharedLibraryImpactPostgresIT {
     }
 
     @Test
-    void indexesGitRepositoriesPersistsV4V5V6V7V8AndReturnsExactImpactThroughMcp() throws Exception {
+    void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("8", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("10", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -149,6 +151,15 @@ class SharedLibraryImpactPostgresIT {
         UUID consumerAGeneration = repositories.currentGeneration(consumerA).orElseThrow();
         UUID consumerBGeneration = repositories.currentGeneration(consumerB).orElseThrow();
         UUID consumerCGeneration = repositories.currentGeneration(consumerC).orElseThrow();
+        var firstLease = repositoryIndexLeases.tryAcquire(provider, UUID.randomUUID()).orElseThrow();
+        try (firstLease) {
+            assertTrue(repositoryIndexLeases.tryAcquire(provider, UUID.randomUUID()).isEmpty(),
+                    "a second worker must not acquire a repository lease held by another replica");
+        }
+        try (var replacementLease = repositoryIndexLeases.tryAcquire(provider, UUID.randomUUID()).orElseThrow()) {
+            assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM repository_index_leases WHERE repository_id=?", Integer.class, provider),
+                    "closing a lease must allow the next worker to claim the repository");
+        }
         assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM contract_links", Integer.class),
                 "consumer relationships must remain unresolved before the provider is indexed");
 
@@ -175,6 +186,11 @@ class SharedLibraryImpactPostgresIT {
                 "org.acme.Money#convert(java.math.BigDecimal)", "src/main/java/app/ConsumerB.java");
         assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
                 "org.acme.Money#convert(java.lang.Integer)", "src/main/java/app/ConsumerC.java");
+        assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
+                "org.acme.Money#convert(java.lang.Integer)", "src/main/kotlin/app/ConsumerKotlinPeer.kt");
+        assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
+                "app.ConsumerKotlinPeer#label()", "src/main/java/app/ConsumerJavaPeer.java");
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM semantic_call_sites WHERE generation_id=? AND file_path='src/main/kotlin/app/ConsumerKotlinPeer.kt' AND declaring_type='org.acme.Money' AND extractor_version='kotlin-compiler-jvm' AND resolution_status='RESOLVED'",Integer.class,consumerCGeneration));
         verifyIncrementalAdditionChangeAndDeletion(consumerCSource, consumerC);
         assertEquals("1.0", dependencyVersion(consumerA));
         assertEquals("2.0", dependencyVersion(consumerB));
@@ -534,6 +550,10 @@ FROM semantic_call_sites WHERE id=?
         files.put("src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n"+unresolvedMethod+"}\n");
         if(className.equals("ConsumerA"))files.put("src/main/java/app/OrderClient.java", "package app;\nclass OrderClient { void load() { webClient.get().uri(\"/orders/{id}\"); } }\n");
         if(className.equals("ConsumerB"))files.put("src/main/java/app/OrderListener.java", "package app;\nclass OrderListener { @KafkaListener(topics = \"order-events\") void listen(String value) {} }\n");
+        if(className.equals("ConsumerC")) {
+            files.put("src/main/kotlin/app/ConsumerKotlinPeer.kt", "package app\nclass ConsumerKotlinPeer { fun label()=\"witness\"; fun call(money: org.acme.Money)=money.convert(1) }\n");
+            files.put("src/main/java/app/ConsumerJavaPeer.java", "package app; class ConsumerJavaPeer { String call() { return new ConsumerKotlinPeer().label(); } }\n");
+        }
         return Map.copyOf(files);
     }
 
@@ -598,7 +618,7 @@ FROM semantic_call_sites WHERE id=?
         snapshot.addAll(jdbc.queryForList("SELECT 'file:'||file_path||':'||blob_sha FROM generation_files WHERE generation_id=? ORDER BY file_path",String.class,generation));
         snapshot.addAll(jdbc.queryForList("SELECT 'node:'||node_type||':'||symbol||':'||coalesce(qualified_name,'')||':'||file_path||':'||start_line||':'||end_line||':'||coalesce(language,'') FROM code_nodes WHERE generation_id=? ORDER BY file_path,start_line,node_type,symbol",String.class,generation));
         snapshot.addAll(jdbc.queryForList("SELECT 'chunk:'||file_path||':'||symbol||':'||start_line||':'||end_line||':'||content_hash||':'||coalesce(embedding::text,'') FROM code_chunks WHERE generation_id=? ORDER BY file_path,start_line,symbol",String.class,generation));
-        snapshot.addAll(jdbc.queryForList("SELECT 'call:'||file_path||':'||caller_class||':'||caller_method||':'||invocation||':'||resolution_status||':'||coalesce(resolved_signature,'') FROM semantic_call_sites WHERE generation_id=? ORDER BY file_path,start_line,caller_class,caller_method",String.class,generation));
+        snapshot.addAll(jdbc.queryForList("SELECT 'call:'||file_path||':'||coalesce(caller_class,'<unknown>')||':'||coalesce(caller_method,'<unknown>')||':'||invocation||':'||resolution_status||':'||coalesce(resolved_signature,'') FROM semantic_call_sites WHERE generation_id=? ORDER BY file_path,start_line,caller_class,caller_method",String.class,generation));
         snapshot.addAll(jdbc.queryForList("SELECT 'semantic-edge:'||caller.symbol_key||':'||coalesce(target.symbol_key,'')||':'||edge.resolution_status FROM semantic_call_edges edge JOIN semantic_symbols caller ON caller.id=edge.caller_symbol_id LEFT JOIN semantic_symbols target ON target.id=edge.target_symbol_id WHERE edge.generation_id=? ORDER BY caller.symbol_key,target.symbol_key,edge.resolution_status",String.class,generation));
         snapshot.addAll(jdbc.queryForList("SELECT 'contract:'||contract_type||':'||role||':'||canonical_key||':'||file_path FROM contracts WHERE generation_id=? ORDER BY contract_type,role,canonical_key,file_path",String.class,generation));
         snapshot.addAll(jdbc.queryForList("SELECT 'classpath:'||module_path||':'||coalesce(group_id,'')||':'||coalesce(artifact_id,'')||':'||coalesce(version,'')||':'||resolution_status||':'||coalesce(classpath_fingerprint,'') FROM maven_module_classpaths WHERE generation_id=? ORDER BY module_path,group_id,artifact_id,version",String.class,generation));

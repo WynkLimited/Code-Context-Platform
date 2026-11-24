@@ -37,6 +37,13 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Install pinned Kotlin compiler
+        run: |
+          mkdir -p target
+          curl -fL --retry 3 https://github.com/JetBrains/kotlin/releases/download/v2.2.21/kotlin-compiler-2.2.21.zip -o target/kotlin-compiler.zip
+          echo "a623871f1cd9c938946948b70ef9170879f0758043885bbd30c32f024e511714  target/kotlin-compiler.zip" | sha256sum -c -
+          unzip -q target/kotlin-compiler.zip -d target
+          echo "KOTLIN_COMPILER=$GITHUB_WORKSPACE/target/kotlinc/bin/kotlinc" >> "$GITHUB_ENV"
       - name: Unit and regression tests
         run: |
           mkdir -p target
@@ -125,7 +132,7 @@ jobs:
           "$RUNNER_TEMP/graphify/bin/pip" install --no-cache-dir 'graphifyy[ollama]==0.9.118'
           echo "$RUNNER_TEMP/graphify/bin" >> "$GITHUB_PATH"
           echo "GRAPHIFY_COMMAND=$RUNNER_TEMP/graphify/bin/graphify" >> "$GITHUB_ENV"
-      - name: PostgreSQL V1-V8 shared-library impact integration
+      - name: PostgreSQL V1-V10 shared-library impact integration
         run: |
           set -o pipefail
           mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log
@@ -203,6 +210,18 @@ jobs:
               sys.exit(1)
           print("GraphifyPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped.")
           PY
+      - name: Verify generation retention and fencing report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("GenerationRetentionPostgresIT")]
+          if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Generation retention gate requires exactly one successful, unskipped test")
+          print("GenerationRetentionPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
       - name: Record CI run metadata
         if: always()
         run: |

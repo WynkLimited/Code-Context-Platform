@@ -24,7 +24,7 @@ public final class ContractModels {
     public static final String INDEX_SCHEMA_VERSION = "1.2.0";
 
     /** Bumped whenever index construction changes in a way that alters output for identical input. */
-    public static final String GENERATOR_VERSION = "1.2.0";
+    public static final String GENERATOR_VERSION = "1.3.0";
 
     /**
      * Bumped whenever {@code ContractCompatibilityEngine} changes a verdict for unchanged input.

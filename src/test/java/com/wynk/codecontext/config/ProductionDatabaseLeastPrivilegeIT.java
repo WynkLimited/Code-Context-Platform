@@ -46,7 +46,7 @@ class ProductionDatabaseLeastPrivilegeIT {
                     .placeholders(Map.of("vectorDimensions", "1024"))
                     .load();
             var result = flyway.migrate();
-            assertEquals(8, result.migrationsExecuted, "runtime role must execute V1-V8");
+            assertEquals(10, result.migrationsExecuted, "runtime role must execute V1-V10");
 
             try (var runtimeConnection = DriverManager.getConnection(url, role, password);
                  var runtimeStatement = runtimeConnection.createStatement()) {
@@ -58,7 +58,7 @@ class ProductionDatabaseLeastPrivilegeIT {
                 }
                 try (var history = runtimeStatement.executeQuery("SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success")) {
                     assertTrue(history.next());
-                    assertEquals(8, history.getInt(1));
+                    assertEquals(10, history.getInt(1));
                 }
             }
         } finally {

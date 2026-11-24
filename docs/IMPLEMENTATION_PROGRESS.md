@@ -1,0 +1,72 @@
+# Implementation progress
+
+Updated 2026-11-24. Overall decision: **NO-GO**. This is a resumable implementation checkpoint, not a production certification.
+
+Baseline: branch `fix/jackson3-postgres-acceptance`, HEAD `b36f0a57eef1782b1248fda06658b0027abb6ea3`. Preserve all uncommitted work. No commit/push authorized. Reference repository is read-only.
+
+## Current slice
+
+V9 renewable leases and V10 generation retention are uncommitted. Publication now locks the ownership row inside its transaction (`Lease.fenceTransaction`); lease takeover cannot complete until that transaction ends. A pre-publication ownership check alone was insufficient and has been corrected.
+
+`GenerationRetentionService` defaults to 30 days, batches of 10, polling every 60 seconds. It preserves published generations, the two newest successful generations, all generations referenced by saved impact analyses, refresh jobs, or contract links, and all generations of repositories with queued/running indexing jobs. Deletion and insertion into the external cleanup outbox commit together; derived PostgreSQL rows cascade. Zoekt cleanup retries exact generation UUIDs, with row locks, five-minute backoff and terminal FAILED after 10 attempts. Completed outbox history is retained. Soft-disabled repositories retain active/baseline evidence and retain their identity on re-onboarding. Hard deletion/purge is not implemented.
+
+Tests: `GenerationRetentionPostgresIT` covers active/baseline protection, active jobs, impact references, graph/contract/semantic/nodes/chunks cascade and link protection, repeated collection, cleanup failure/restart retry, stale lease rejection, and transactional fencing under contention. It uses real PostgreSQL and a fault-injecting Zoekt adapter; actual Zoekt search/deletion remains in `SharedLibraryImpactPostgresIT`. These integration tests have **not executed locally**. Compilation is not integration evidence.
+
+## Requirement ledger
+
+Every row lists current evidence and the exact next action; rows remain incomplete until required service evidence exists. Source paths below are repository-relative.
+
+| ID | Requirement | Status | Implementation / tests | Executed evidence and remaining action |
+|---|---|---|---|---|
+| DB-1 | PostgreSQL bootstrap/runtime separation, migrations | PARTIALLY IMPLEMENTED | `scripts/postgres-init-app-role.sh`, production check, `ProductionDatabaseLeastPrivilegeIT` | Unit guard tested; run PostgreSQL17 migration V1–V10 and existing-volume ownership/rotation drill. |
+| GC-1 | Configurable durable bounded retention | PARTIALLY IMPLEMENTED | `GenerationRetentionService`, V10, `GenerationRetentionPostgresIT` | Compiles; run PG test, execute graph/contract/semantic cascade and link protection assertions; add refresh-reference case. |
+| GC-2 | Active, last-good and impact baseline protection | PARTIALLY IMPLEMENTED | Retention eligibility SQL + PostgreSQL test | Run PG test; prove simultaneous query/index/cleanup behavior with separate app instances. |
+| GC-3 | External cleanup retry/recovery | PARTIALLY IMPLEMENTED | Cleanup outbox; fault-injection PG test | Run PG test and actual repeated Zoekt removal; verify absent shard removal is idempotent. |
+| GC-4 | Disable/re-onboard/delete lifecycle | PARTIALLY IMPLEMENTED | `RepositoryStore`, retention protection | Soft disable tested only in added PG fixture; implement explicit authorized hard-purge lifecycle and cross-team re-onboarding tests. |
+| IDX-1 | Distributed lease acquisition/renewal/fencing | PARTIALLY IMPLEMENTED | V9, `RepositoryIndexLeaseManager`, publication transaction; PG contention test | Run PG tests, then crash/heartbeat failure and two-process publication tests. |
+| IDX-2 | Durable jobs, retries, duplicate delivery | PARTIALLY IMPLEMENTED | `IndexingService`, V7/V8 refresh/webhook queues | Unit webhook suite passed; test stale worker job-state fencing and permanent-failure operations. |
+| IDX-3 | Incremental/full rebuild equivalence | PARTIALLY IMPLEMENTED | `SharedLibraryImpactPostgresIT` addition/change/deletion/equivalence | Compiled only; run CI then add rename/dependency/graph equivalence cases. |
+| SEARCH-1 | Zoekt exact/regex, evidence, update/deletion | PARTIALLY IMPLEMENTED | `ZoektSearchService`, `ZoektIndexer`, unit tests and shared IT | Four search unit tests passed; run real Zoekt acceptance and adversarial query filters. |
+| SEARCH-2 | Source→Ollama→pgvector→MCP | PARTIALLY IMPLEMENTED | Indexing chunks, `CodeContextTools`, shared IT | Real integration unexecuted; test oversized input, model errors, changed-model reuse and team isolation. |
+| CONTRACT-1 | REST extraction/schema compatibility | PARTIALLY IMPLEMENTED | REST extractors/compatibility unit tests, shared IT | Unit tests passed; extend persisted request/response schema changes and config-derived routes. |
+| CONTRACT-2 | Kafka/Protobuf schemas | PARTIALLY IMPLEMENTED | Kafka/Proto extractors and compatibility tests | Unit tests passed; add persisted schema evolution and consumer impact protocol fixtures. |
+| CONTRACT-3 | Configuration-derived relationships | PARTIALLY IMPLEMENTED | `ContractValueResolver` tests | Unit tests passed; add multi-repo persisted config-backed acceptance. |
+| CONTRACT-4 | Unresolved/ambiguous relationship refresh | PARTIALLY IMPLEMENTED | Durable refresher, late-provider shared IT | Compiled; run late-provider case; implement/test ambiguity re-evaluation and bounded queue under contention. |
+| JVM-1 | Java method resolution, Maven transitive ownership | PARTIALLY IMPLEMENTED | Java semantic analyzer, Maven resolver and unit tests | Unit tests passed; add transitive overlapping-class artifact-ownership fixture. |
+| JVM-2 | Kotlin compiler method semantics, Java interop | PARTIALLY IMPLEMENTED | `KotlinJvmSemanticAnalyzer`, compiler fixtures, mixed shared-library IT | Three real-compiler regression tests passed on Java21. JVM calls/declarations now persist; Java consumes compiled Kotlin jar. Run PG mixed fixture. Next implement Kotlin exported ABI contracts and cross-repo baseline impact, source-level inline/suspend/generic mapping and module dependency topology. |
+| GRAPH-1 | Graphify graph and semantic symbol binding | PARTIALLY IMPLEMENTED | Graphify importer, binder, `GraphifyPostgresIT` | Unit importer/binder tests passed; run real CLI/PG test and mixed-symbol binding assertions. |
+| MCP-1 | Six authenticated protocol tools | PARTIALLY IMPLEMENTED | Shared IT individually calls all six tools | Prior accepted baseline covered impact; expanded service suite unexecuted. Run full Java21 CI. |
+| SEC-1 | Team/repository isolation and adversarial cases | PARTIALLY IMPLEMENTED | API filter, scoped stores/search unit tests | Add cross-team protocol tests for every tool and re-onboarding ACLs. |
+| SEC-2 | Git/Maven SSRF, filesystem/subprocess protection | PARTIALLY IMPLEMENTED | Host allowlists, path guards, time/output limits | Add redirect/DNS/private-address and symlink adversarial tests; assess existing mirror origin validation. |
+| SEC-3 | Credential rotation, rate limits, audit | PARTIALLY IMPLEMENTED | Config API keys and webhook audit events | Implement rotation/key administration and rate limits; validate secret injection/rotation without logging secrets. |
+| SEC-4 | Webhook replay protection | IMPLEMENTED AND UNIT TESTED ONLY | V8 and controller/filter tests | Unit tests passed; run durable PG replay/concurrency test. |
+| OPS-1 | K8s security/resources/probes/egress | PARTIALLY IMPLEMENTED | `deploy/k8s`, Compose | YAML/Compose parsing passed; cluster smoke and egress enforcement require deployment environment. |
+| OPS-2 | Shutdown/recovery/reconciliation | PARTIALLY IMPLEMENTED | Worker shutdown, lease expiry, cleanup queue | Add in-flight shutdown and generation reconciliation tests, including external index drift. |
+| OPS-3 | Metrics, correlations, alerts | PARTIALLY IMPLEMENTED | Actuator/Prometheus/log events | Add indexing/search/MCP/queue metrics and actionable alert rules. |
+| OPS-4 | Backup/restore/disaster recovery | PARTIALLY IMPLEMENTED | `BACKUP_AND_RECOVERY.md` | Execute restore/PITR drill and post-restore MCP smoke in isolated PostgreSQL environment. |
+| OPS-5 | Preflight/smoke/performance | PARTIALLY IMPLEMENTED | CI service preflights and deployment docs | Add runnable deployment smoke/preflight and measure representative capacity. |
+| VALID-1 | Java21/service acceptance | BLOCKED BY EXTERNAL DEPENDENCY | CI profile plus strict XML gates incl. retention | Java21 downloaded to ignored target directory; service suite blocked by missing Docker daemon/Desktop. Commit/push requires user authorization; do not do automatically. |
+
+## Validation and next execution
+
+- `mvn -Dmaven.compiler.release=17 test`: 145 passed, zero failures/errors/skips (supplemental only).
+- Java 21 downloaded from Adoptium into ignored `target/jdk21/Contents/Home`. Java21.0.13.1 suite: 145 passed, zero failures/errors/skips; compilation log confirms release 21.
+- `docker info`: cannot connect to daemon. `open -a Docker`: application not installed. No PostgreSQL CLI available. Do not claim service acceptance passed.
+- Integration command: `JAVA_HOME="$PWD/target/jdk21/Contents/Home" PATH="$PWD/target/jdk21/Contents/Home/bin:$PATH" mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify` with the PostgreSQL17+pgvector, Zoekt, Graphify and Ollama services/environment from `.github/workflows/ci.yml`.
+- CI requires exactly one passed/unskipped result each for shared-library, least-privilege, Graphify and generation-retention IT classes.
+- Next: run retention/fencing PostgreSQL tests in available service environment; fix defects before marking verified. Continue independent Kotlin semantic support, security and operational requirements without marking partial implementations complete.
+
+Final local validation for this slice: fresh production and test compilation under Temurin 21.0.13.1 (release 21), then 145 unit tests passed with 0 failures/errors/skips. Latest expanded PostgreSQL test compiles under Java21; it remains unexecuted. JGit logged a sandbox-denied user config write; no test failed. CI YAML parses and `git diff --check` passes.
+
+
+## Kotlin compiler checkpoint (2026-11-24)
+
+Kotlin 2.2.21 compiler archive checksum verified against the upstream release: `a623871f1cd9c938946948b70ef9170879f0758043885bbd30c32f024e511714`. CI and Docker install this pinned compiler. The runtime image uses Java21 JDK for compilation. `KOTLIN_COMPILER` selects its executable. Local tests default to `target/kotlinc/bin/kotlinc`.
+
+Immutable module snapshots now include tracked `.kt` sources. Kotlin compiler runs in a separate JVM (512MiB heap, 120-second deadline, bounded captured diagnostics), with explicit source/classpath arguments and no repository build/plugin execution. ASM reads emitted JVM declarations/invocations. JavaParser receives the emitted Kotlin jar for Java-to-Kotlin resolution. Persisted Kotlin evidence is tagged `kotlin-compiler-jvm`. Each Kotlin file also stores an INCOMPLETE marker: source-only types, inlined calls, generated/default/suspend constructs and exact source-to-JVM mapping are not fully reconstructed. Failed compilation persists diagnostics without invented resolved edges. The global generator version is bumped to 1.3.0 so older indexed snapshots are stale and need reindexing.
+
+Executed: full Java21 suite with 148 tests passed (145 existing + 3 real compiler tests), zero failures/errors/skips. Compiler fixtures cover interfaces/classes, constructors, getters, extension/top-level functions, overload removal/change, Kotlin-to-Java and Java-to-Kotlin, pinned external provider jar versus upgraded jar and unresolved dependencies. These are local source/module fixtures, not cross-repository PostgreSQL acceptance. The shared acceptance Git fixture now adds mixed Kotlin/Java Consumer C files and exact persisted caller/target assertions; it remains unexecuted. The incremental snapshot assertion now preserves explicit `<unknown>` values for completeness-marker rows instead of failing on SQL NULL concatenation.
+
+Not complete: Kotlin exported Maven ABI contracts/provider compatibility, indirect Kotlin callers, production cross-repository Kotlin impact, full Kotlin metadata/source semantic mapping, inter-module compilation topology, and external service validation. Do not equate compiler JVM evidence with complete Kotlin semantic intelligence. Priority 2–5 gaps in the ledger remain open.
+
+Incremental limitation: Kotlin compiler analysis recompiles each affected module snapshot on every indexing generation; Java semantic analysis and Graphify also reconstruct their stage. No unchanged Kotlin semantic-row reuse is claimed. Final Java21 validation after generator-version and acceptance-fixture changes: 148 tests passed, 0 failures/errors/skips; PostgreSQL fixtures compiled but not executed.
