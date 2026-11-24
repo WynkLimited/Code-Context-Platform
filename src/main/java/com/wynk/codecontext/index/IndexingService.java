@@ -16,6 +16,8 @@ import com.wynk.codecontext.repo.RepositoryStore;
 import com.wynk.codecontext.search.ZoektIndexer;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -27,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.sql.Timestamp;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.*;
 import java.util.regex.Matcher;
@@ -34,6 +37,7 @@ import java.util.regex.Pattern;
 
 @Service
 public class IndexingService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(IndexingService.class);
     private static final Pattern KAFKA_PRODUCER = Pattern.compile("(?:\\.send|\\.sendAsync)\\s*\\(\\s*[\"']([A-Za-z0-9._-]{2,150})[\"']");
     private static final Pattern KAFKA_CONSUMER = Pattern.compile("@KafkaListener\\s*\\([^)]{0,1000}?topics?\\s*=\\s*(?:\\{\\s*)?[\"']([A-Za-z0-9._-]{2,150})[\"']");
     private static final Pattern ROUTE = Pattern.compile("@(Get|Post|Put|Delete|Patch|Request)Mapping\\s*\\(\\s*(?:value\\s*=\\s*)?[\"']([^\"']+)");
@@ -108,6 +112,8 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
                 contractRefresher.pruneSupersededRelationships();
                 jdbc.update("UPDATE index_jobs SET state='SUCCEEDED',updated_at=now() WHERE id=?",jobId);return null;});
         } catch(Exception e) {
+            String sqlDiagnostics = sqlDiagnosticChain(e);
+            if (!sqlDiagnostics.isBlank()) LOGGER.error("Database failure while indexing job {}: {}", jobId, sqlDiagnostics);
             int retryDelay=Math.min(300,5*(1<<Math.max(0,job.attempt-1)));
             jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=?",truncate(e.getMessage()),retryDelay,jobId);
         }
@@ -192,13 +198,30 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
                             call.callerClass()+"#"+call.callerMethod(),call.callerClass(),call.callerMethod(),"METHOD","RESOLVED");
                     Long target=call.resolutionStatus().equals("RESOLVED")&&call.declaringType()!=null&&call.signature()!=null
                             ?ensureSemanticSymbol(repo,generation,commit,call.declaringType()+"#"+call.signature(),call.declaringType(),call.signature(),"METHOD","RESOLVED"):null;
-                    Long callId=jdbc.queryForObject("INSERT INTO semantic_call_sites(repository_id,generation_id,commit_sha,file_path,caller_class,caller_method,start_line,end_line,invocation,declaring_type,resolved_signature,parameter_types,return_type,resolution_status,evidence,confidence,extractor_version,caller_symbol_id,target_symbol_id,dependency_artifact,dependency_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'javaparser-symbol-solver-3.27.1',?,?,?,?) RETURNING id",Long.class,
-                            repo.id(),generation,commit,file.path(),call.callerClass(),call.callerMethod(),Math.max(1,call.startLine()),Math.max(1,call.endLine()),call.expression(),call.declaringType(),call.signature(),objectMapper.writeValueAsString(call.parameterTypes()),call.returnType(),call.resolutionStatus(),evidence,call.resolutionStatus().equals("RESOLVED")?0.85:0.0,caller,target,artifact,version);
-                    jdbc.update("INSERT INTO semantic_call_edges(repository_id,generation_id,call_site_id,caller_symbol_id,target_symbol_id,resolution_status,evidence,confidence) VALUES(?,?,?,?,?,?,?,?)",
-                            repo.id(),generation,callId,caller,target,call.resolutionStatus(),evidence,call.resolutionStatus().equals("RESOLVED")?0.85:0.0);
+                    persistSemanticCallSite(repo.id(),generation,commit,file.path(),call,evidence,caller,target,artifact,version);
                 }
             }
         } finally {try(var paths=Files.walk(snapshot)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
+    }
+
+    Long persistSemanticCallSite(UUID repositoryId, UUID generationId, String commitSha, String filePath,
+                                 com.wynk.codecontext.port.contract.source.JavaSemanticCallSiteAnalyzer.CallSite call,
+                                 String evidence, Long callerSymbolId, Long targetSymbolId,
+                                 String dependencyArtifact, String dependencyVersion) throws Exception {
+        double confidence = "RESOLVED".equals(call.resolutionStatus()) ? 0.85 : 0.0;
+        Long callId = jdbc.queryForObject("""
+INSERT INTO semantic_call_sites(repository_id,generation_id,commit_sha,file_path,caller_class,caller_method,
+ start_line,end_line,invocation,declaring_type,resolved_signature,parameter_types,return_type,
+ resolution_status,evidence,confidence,extractor_version,caller_symbol_id,target_symbol_id,dependency_artifact,dependency_version)
+VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,'javaparser-symbol-solver-3.27.1',?,?,?,?) RETURNING id
+""", Long.class,
+                repositoryId,generationId,commitSha,filePath,call.callerClass(),call.callerMethod(),
+                Math.max(1,call.startLine()),Math.max(1,call.endLine()),call.expression(),call.declaringType(),
+                call.signature(),objectMapper.writeValueAsString(call.parameterTypes()),call.returnType(),
+                call.resolutionStatus(),evidence,confidence,callerSymbolId,targetSymbolId,dependencyArtifact,dependencyVersion);
+        jdbc.update("INSERT INTO semantic_call_edges(repository_id,generation_id,call_site_id,caller_symbol_id,target_symbol_id,resolution_status,evidence,confidence) VALUES(?,?,?,?,?,?,?,?)",
+                repositoryId,generationId,callId,callerSymbolId,targetSymbolId,call.resolutionStatus(),evidence,confidence);
+        return callId;
     }
 
     private static String moduleFor(Path snapshot,String file,List<MavenClasspathResolver.ModuleClasspath> modules) {
@@ -315,6 +338,45 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
     }
     private static String sha256(String s) { try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8))); } catch(Exception e) { throw new IllegalStateException(e); } }
     private static String vectorLiteral(float[] v){return "["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";}
+    private static String sqlDiagnosticChain(Throwable failure) {
+        Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<String> details = new ArrayList<>();
+        for (Throwable current = failure; current != null && seen.add(current); current = current.getCause()) {
+            StringBuilder detail = new StringBuilder(current.getClass().getName());
+            if (current instanceof SQLException sql) {
+                detail.append("[SQLSTATE=").append(Objects.toString(sql.getSQLState(), "unknown"));
+                if ("org.postgresql.util.PSQLException".equals(current.getClass().getName())) {
+                    detail.append(", message=").append(Objects.toString(sql.getMessage(), "unknown"));
+                    appendPostgresServerFields(detail, current);
+                }
+                detail.append(']');
+                for (SQLException next = sql.getNextException(); next != null && seen.add(next); next = next.getNextException()) {
+                    StringBuilder nextDetail = new StringBuilder(next.getClass().getName())
+                            .append("[SQLSTATE=").append(Objects.toString(next.getSQLState(), "unknown"));
+                    if ("org.postgresql.util.PSQLException".equals(next.getClass().getName())) {
+                        nextDetail.append(", message=").append(Objects.toString(next.getMessage(), "unknown"));
+                        appendPostgresServerFields(nextDetail, next);
+                    }
+                    details.add(nextDetail.append(']').toString());
+                }
+            }
+            details.add(detail.toString());
+        }
+        return String.join(" <- ", details);
+    }
+
+    private static void appendPostgresServerFields(StringBuilder detail, Throwable exception) {
+        try {
+            Object serverError = exception.getClass().getMethod("getServerErrorMessage").invoke(exception);
+            if (serverError == null) return;
+            for (String field : List.of("schema", "table", "column", "constraint")) {
+                Object value = serverError.getClass().getMethod("get" + Character.toUpperCase(field.charAt(0)) + field.substring(1)).invoke(serverError);
+                if (value != null && !value.toString().isBlank()) detail.append(", ").append(field).append('=').append(value);
+            }
+        } catch (ReflectiveOperationException ignored) {
+            // PostgreSQL server detail fields are optional across driver and server error types.
+        }
+    }
     private static String truncate(String s){if(s==null)return "indexing failed";return s.substring(0,Math.min(s.length(),1500));}
     private record Job(UUID repositoryId,String sha,int attempt){}
     private record Symbol(String type,String name,String qualified,int start,int end,String text){}

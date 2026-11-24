@@ -7,6 +7,7 @@ import com.wynk.codecontext.model.RepositoryRecord;
 import com.wynk.codecontext.repo.RepositoryStore;
 import com.wynk.codecontext.port.contract.PostgresContractIndexStore;
 import com.wynk.codecontext.port.contract.ContractModels.ContractType;
+import com.wynk.codecontext.port.contract.source.JavaSemanticCallSiteAnalyzer.CallSite;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -147,6 +148,7 @@ class SharedLibraryImpactPostgresIT {
         assertEquals("1.0", dependencyVersion(consumerA));
         assertEquals("2.0", dependencyVersion(consumerB));
         assertEquals("2.0", dependencyVersion(consumerC));
+        assertSemanticCallSitePersistenceRoundTrip(consumerA, repositories.currentGeneration(consumerA).orElseThrow());
         var reloadedConsumerA = contractIndexes.published(consumerA).orElseThrow().index();
         var reloadedMavenImport = reloadedConsumerA.imports().stream()
                 .filter(entry -> entry.type() == ContractType.MAVEN)
@@ -257,6 +259,86 @@ WHERE site.repository_id=? AND site.file_path=? AND caller.symbol_key LIKE 'app.
 
     private String dependencyVersion(UUID repository) {
         return jdbc.queryForObject("SELECT dependency_version FROM semantic_call_sites WHERE repository_id=? AND resolution_status='RESOLVED' AND dependency_version IS NOT NULL ORDER BY id LIMIT 1", String.class, repository);
+    }
+
+    private void assertSemanticCallSitePersistenceRoundTrip(UUID repository, UUID generation) throws Exception {
+        Map<String,Object> existing = jdbc.queryForMap("""
+SELECT caller_symbol_id,target_symbol_id,commit_sha FROM semantic_call_sites
+WHERE repository_id=? AND generation_id=? AND file_path='src/main/java/app/ConsumerA.java'
+ AND resolution_status='RESOLVED' AND caller_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL
+ORDER BY id LIMIT 1
+""", repository, generation);
+        Long callerId = ((Number) existing.get("caller_symbol_id")).longValue();
+        Long targetId = ((Number) existing.get("target_symbol_id")).longValue();
+        String commit = (String) existing.get("commit_sha");
+        var resolved = new CallSite("money.convert(\"round-trip\")", 7, 7, "app.ConsumerA",
+                "call(org.acme.Money)", "RESOLVED", "org.acme.Money", "convert(java.lang.String)",
+                List.of("java.lang.String"), "java.lang.String", "JAVAPARSER_SYMBOL_SOLVER");
+        Long resolvedId = indexing.persistSemanticCallSite(repository, generation, commit,
+                "src/main/java/app/ConsumerA.java", resolved, "round-trip evidence", callerId, targetId,
+                "org.acme:common-library:1.0", "1.0");
+        try {
+            Map<String,Object> persisted = jdbc.queryForMap("""
+SELECT repository_id,generation_id,commit_sha,file_path,caller_class,caller_method,start_line,end_line,
+ invocation,declaring_type,resolved_signature,parameter_types::text AS parameter_types,return_type,
+ resolution_status,evidence,confidence,extractor_version,caller_symbol_id,target_symbol_id,
+ dependency_artifact,dependency_version
+FROM semantic_call_sites WHERE id=?
+""", resolvedId);
+            assertEquals(repository, persisted.get("repository_id"));
+            assertEquals(generation, persisted.get("generation_id"));
+            assertEquals(commit, persisted.get("commit_sha"));
+            assertEquals("src/main/java/app/ConsumerA.java", persisted.get("file_path"));
+            assertEquals("app.ConsumerA", persisted.get("caller_class"));
+            assertEquals("call(org.acme.Money)", persisted.get("caller_method"));
+            assertEquals(7, ((Number) persisted.get("start_line")).intValue());
+            assertEquals(7, ((Number) persisted.get("end_line")).intValue());
+            assertEquals(resolved.expression(), persisted.get("invocation"));
+            assertEquals("org.acme.Money", persisted.get("declaring_type"));
+            assertEquals("convert(java.lang.String)", persisted.get("resolved_signature"));
+            assertEquals(List.of("java.lang.String"), json.readValue((String) persisted.get("parameter_types"),
+                    new tools.jackson.core.type.TypeReference<List<String>>() {}));
+            assertEquals("java.lang.String", persisted.get("return_type"));
+            assertEquals("RESOLVED", persisted.get("resolution_status"));
+            assertEquals("round-trip evidence", persisted.get("evidence"));
+            assertEquals(0.85, ((Number) persisted.get("confidence")).doubleValue(), 0.00001);
+            assertEquals("javaparser-symbol-solver-3.27.1", persisted.get("extractor_version"));
+            assertEquals(callerId, ((Number) persisted.get("caller_symbol_id")).longValue());
+            assertEquals(targetId, ((Number) persisted.get("target_symbol_id")).longValue());
+            assertEquals("org.acme:common-library:1.0", persisted.get("dependency_artifact"));
+            assertEquals("1.0", persisted.get("dependency_version"));
+            assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM semantic_call_edges WHERE call_site_id=?", Integer.class, resolvedId));
+        } finally {
+            jdbc.update("DELETE FROM semantic_call_sites WHERE id=?", resolvedId);
+        }
+
+        var unresolved = new CallSite("money.convert(unknown)", 9, 9, null, null, "UNRESOLVED",
+                null, null, List.of(), null, "NO_TYPE_RESOLUTION");
+        Long unresolvedId = indexing.persistSemanticCallSite(repository, generation, commit,
+                "src/main/java/app/ConsumerA.java", unresolved, "nullable round-trip evidence", null, null, null, null);
+        try {
+            Map<String,Object> persisted = jdbc.queryForMap("""
+SELECT caller_class,caller_method,declaring_type,resolved_signature,parameter_types::text AS parameter_types,
+ return_type,resolution_status,confidence,caller_symbol_id,target_symbol_id,dependency_artifact,dependency_version
+FROM semantic_call_sites WHERE id=?
+""", unresolvedId);
+            assertNull(persisted.get("caller_class"));
+            assertNull(persisted.get("caller_method"));
+            assertNull(persisted.get("declaring_type"));
+            assertNull(persisted.get("resolved_signature"));
+            assertEquals(List.of(), json.readValue((String) persisted.get("parameter_types"),
+                    new tools.jackson.core.type.TypeReference<List<String>>() {}));
+            assertNull(persisted.get("return_type"));
+            assertEquals("UNRESOLVED", persisted.get("resolution_status"));
+            assertEquals(0.0, ((Number) persisted.get("confidence")).doubleValue(), 0.00001);
+            assertNull(persisted.get("caller_symbol_id"));
+            assertNull(persisted.get("target_symbol_id"));
+            assertNull(persisted.get("dependency_artifact"));
+            assertNull(persisted.get("dependency_version"));
+            assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM semantic_call_edges WHERE call_site_id=?", Integer.class, unresolvedId));
+        } finally {
+            jdbc.update("DELETE FROM semantic_call_sites WHERE id=?", unresolvedId);
+        }
     }
 
     private String dependencyCommit(UUID repository) {
