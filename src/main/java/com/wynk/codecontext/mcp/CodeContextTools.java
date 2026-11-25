@@ -20,6 +20,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.databind.json.JsonMapper;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -142,7 +143,11 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
 
 
     @Tool(description="Compare published contract generations, classify supported changes, and return fresh, evidence-backed candidate consumers with completeness status. Optional oldSignature/newSignature classify a proposed method change without claiming definite breakage. Method-level consumer behavior is not inferred; results never block a review.")
-    public java.util.Map<String,Object> impact_analysis(String contract,String repository,String oldSignature,String newSignature){
+    public java.util.Map<String,Object> impact_analysis(
+            String contract,
+            String repository,
+            @ToolParam(required=false, description="Existing method/API signature for proposed-change classification") String oldSignature,
+            @ToolParam(required=false, description="Proposed method/API signature for proposed-change classification") String newSignature){
         Timer.Sample sample=metrics.startMcp();
         boolean error=false;
         try { return computeImpactAnalysis(contract,repository,oldSignature,newSignature); }

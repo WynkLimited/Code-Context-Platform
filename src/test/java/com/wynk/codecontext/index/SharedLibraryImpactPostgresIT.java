@@ -240,6 +240,16 @@ class SharedLibraryImpactPostgresIT {
         JsonNode mcpResult = mcpImpactCall("Fixture/common-library");
         assertFalse(mcpResult.path("isError").asBoolean(false), mcpResult.toString());
         JsonNode payload = structuredToolPayload(mcpResult);
+        JsonNode proposed = mcpImpactCallWithProposedChange(
+                "Fixture/common-library",
+                "org.acme.Money#convert(java.lang.String)",
+                "org.acme.Money#convert(java.math.BigDecimal)");
+        assertFalse(proposed.path("result").path("isError").asBoolean(false), proposed.toString());
+        JsonNode proposedPayload = structuredToolPayload(proposed);
+        assertEquals("SIGNATURE_CHANGED", proposedPayload.path("proposedChange").path("kind").asText(), proposedPayload.toString());
+        assertEquals("POTENTIAL_BINARY_INCOMPATIBILITY",
+                proposedPayload.path("proposedChange").path("impactClass").asText(), proposedPayload.toString());
+        assertFalse(proposedPayload.path("proposedChange").path("confirmedBreakage").asBoolean(true));
         assertTrue(payload.has("semanticMethodImpacts"),payload.toString());
         assertFalse(payload.path("blocking").asBoolean(true),payload.toString());
         int refreshScheduled=payload.path("consumerRefreshScheduled").asInt();
@@ -1026,6 +1036,23 @@ FROM semantic_call_sites WHERE id=?
                 Map.of("name","impact_analysis","arguments",Map.of("contract","","repository",repository))));
     }
 
+    private JsonNode mcpImpactCallWithProposedChange(String repository, String oldSignature, String newSignature) throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        URI endpoint = URI.create("http://localhost:"+port+"/mcp");
+        Object initialize = Map.of("jsonrpc","2.0","id",1,"method","initialize","params",Map.of(
+                "protocolVersion","2025-03-26","capabilities",Map.of(),
+                "clientInfo",Map.of("name","postgres-proposed-change-it","version","1.0")));
+        JsonNode initialized = post(client, endpoint, null, initialize);
+        assertTrue(initialized.path("result").has("serverInfo"), initialized.toString());
+        String session = lastResponse.headers().firstValue("Mcp-Session-Id").orElse(null);
+        assertNotNull(session, "Streamable HTTP initialize must return a session identifier");
+        post(client, endpoint, session, Map.of("jsonrpc","2.0","method","notifications/initialized"));
+        return post(client, endpoint, session, Map.of("jsonrpc","2.0","id",3,"method","tools/call","params",
+                Map.of("name","impact_analysis","arguments",Map.of(
+                        "contract","","repository",repository,
+                        "oldSignature",oldSignature,"newSignature",newSignature))));
+    }
+
     private static void writeChecksumSidecars(Path artifact) throws Exception {
         byte[] content = Files.readAllBytes(artifact);
         for (String algorithm : List.of("SHA-1", "MD5")) {
@@ -1059,6 +1086,19 @@ FROM semantic_call_sites WHERE id=?
         listedTools.forEach(tool -> toolNames.add(tool.path("name").asText()));
         assertTrue(toolNames.containsAll(List.of("search_code","read_file","find_symbol","get_neighbors","semantic_search","impact_analysis")),
                 "tools/list is missing expected Code Context tools: " + listedTools);
+        JsonNode impactSchema = null;
+        for (JsonNode tool : listedTools) {
+            if ("impact_analysis".equals(tool.path("name").asText())) {
+                impactSchema = tool.path("inputSchema");
+                break;
+            }
+        }
+        assertNotNull(impactSchema, "impact_analysis schema missing from tools/list");
+        String required = impactSchema.path("required").toString();
+        assertFalse(required.contains("oldSignature"), "oldSignature must remain optional: " + impactSchema);
+        assertFalse(required.contains("newSignature"), "newSignature must remain optional: " + impactSchema);
+        assertTrue(impactSchema.path("properties").has("oldSignature"), impactSchema.toString());
+        assertTrue(impactSchema.path("properties").has("newSignature"), impactSchema.toString());
         awaitSearch(client,endpoint,session,3,"Money","exact search");
         awaitSearch(client,endpoint,session,4,"regex:money\\.convert\\(","regex search");
         JsonNode file=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",5,"method","tools/call","params",Map.of("name","read_file","arguments",Map.of("repository","Fixture/consumer-service-a","path","src/main/java/app/ConsumerA.java","startLine",1,"endLine",6))));

@@ -9,6 +9,7 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
 | Last green mandatory CI SHA | `b2346ee049528c705991de75051ef960da4abb3a` |
 | Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45629807050 |
+| Latest CI (c240499) | FAILED run 45634169162 — `oldSignature`/`newSignature` incorrectly required in MCP schema; fix pending push |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
 | Reference repo (read-only) | `WynkLimited/MultiRepo-Code-Review-Agent` @ `main` / `65144c6060e97c491546674586ea8ae5020588c7` |
@@ -79,7 +80,7 @@ Status vocabulary (this ledger):
 | XRI-K2J | Kotlin→Java | VERIFIED_PRODUCTION_READY | CI Kotlin provider IT |
 | XRI-K2K | Kotlin→Kotlin | VERIFIED_PRODUCTION_READY | CI Kotlin provider IT |
 | XRI-VER | Version-pinned vs upgraded consumers | VERIFIED_PRODUCTION_READY | CI excludes upgraded consumer from semantic impacts |
-| XRI-PROP | Proposed-change classification inputs | PARTIALLY_IMPLEMENTED | Optional oldSignature/newSignature on MCP; unit classifier green; PG/MCP evidence pending |
+| XRI-PROP | Proposed-change classification inputs | PARTIALLY_IMPLEMENTED | Optional @ToolParam signatures; schema + MCP proposedChange assertion added; await CI |
 | XRI-HOP | Multi-hop / indirect callers | PARTIALLY_IMPLEMENTED | Direct edges only; bounded hops open |
 | XRI-GRADLE | Gradle dependency resolution | NOT_IMPLEMENTED | Maven-first; Gradle TBD |
 | REF-IND | No MultiRepo coupling | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` unit gate |
