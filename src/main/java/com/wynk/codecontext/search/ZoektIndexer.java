@@ -33,7 +33,23 @@ public class ZoektIndexer {
         boolean done=process.waitFor(Duration.ofMinutes(20).toMillis(),TimeUnit.MILLISECONDS);
         if(!done){process.destroyForcibly();throw new IOException("Zoekt indexing exceeded 20 minute limit");}
         String output=Files.exists(log)?Files.readString(log):"";
-        if(process.exitValue()!=0)throw new IOException("Zoekt indexing failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1500,output.length())));
+        if(process.exitValue()!=0)throw new IOException("Zoekt indexing failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1500,output.length()))+"; "+gitDiagnostics(checkout,commit));
+    }
+
+    private static String gitDiagnostics(Path checkout,String commit) {
+        String refs;
+        try(var git=org.eclipse.jgit.api.Git.open(checkout.toFile())) {
+            refs="jgitRefDatabase="+git.getRepository().getRefDatabase().getClass().getSimpleName()+
+                    "; refs="+git.getRepository().getRefDatabase().getRefsByPrefix("refs/heads/").stream().limit(10)
+                    .map(r->r.getName()+"="+r.getObjectId().name()).toList()+
+                    "; gitDir="+git.getRepository().getDirectory()+
+                    "; repositoryFormat="+git.getRepository().getConfig().getString("core",null,"repositoryformatversion");
+        }catch(Exception failure){refs="jgitDiagnostics="+failure.getClass().getSimpleName();}
+        try {
+            var process=new ProcessBuilder("git","-C",checkout.toString(),"cat-file","-t",commit).redirectErrorStream(true).start();
+            if(!process.waitFor(5,TimeUnit.SECONDS)){process.destroyForcibly();return refs+"; nativeGit=timeout";}
+            return refs+"; nativeGit="+new String(process.getInputStream().readNBytes(1024),java.nio.charset.StandardCharsets.UTF_8).strip()+" exit="+process.exitValue();
+        }catch(Exception failure){return refs+"; nativeGit="+failure.getClass().getSimpleName();}
     }
 
     /** Delete only explicit obsolete generation repositories after database publication succeeds. */
