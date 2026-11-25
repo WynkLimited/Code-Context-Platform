@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `5c835622803087a7445ed1693dd8dc1b00483c88` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676761869 |
+| Last green mandatory CI SHA | `df9b83d7b8bcfb4cec274779cbd5cd5116c24b69` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45678687700 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -103,8 +103,8 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Next |
 |---|---|---|---|
-| OPS-METRICS | Domain meters + alert YAML | PARTIALLY_IMPLEMENTED | Live scrape/alert fire needs ops env |
-| OPS-BACKUP | Scripts + docs | PARTIALLY_IMPLEMENTED | PITR drill BLOCKED without isolated PG |
+| OPS-METRICS | Domain meters + alert YAML | PARTIALLY_IMPLEMENTED | Structured servlet correlation verified in df9b83d CI; worker propagation and live scrape/alerts remain open |
+| OPS-BACKUP | Scripts + docs | PARTIALLY_IMPLEMENTED | Logical restore CI verified at 0ec1591; production WAL/PITR and volume/application recovery remain external |
 | OPS-K8S | Manifests | PARTIALLY_IMPLEMENTED | Cluster smoke BLOCKED |
 | OPS-PERF | Pilot ≤1 min searchable | PARTIALLY_IMPLEMENTED | Representative benchmark open |
 
@@ -203,3 +203,15 @@ OPS-METRICS remains PARTIALLY_IMPLEMENTED. Added server-owned UUID response/requ
 Found a configuration-rollout edge case in the first shared-budget UPSERT: saturating at each replica's configured limit could let a lower-limit replica reduce a higher count. The counter now saturates at the common bound `2147483648`, strictly above every supported positive Java integer budget, and never rewinds within a window. PostgreSQL regression checks explicitly exercise a lower-limit replica and the universal saturation bound before expiry. This is an additional robustness fix; the previous green fixture used uniform configuration. Full Java21 suite after this correction: **247 passed**, zero failures/errors/skips, 42.441s; new SQL assertions await next exact-SHA CI.
 
 Structured logging was moved from the production-only YAML document to the common document so actual test-profile CI also exercises the formatter. Multi-document YAML placement was checked explicitly. Current operational scope remains partial. Pending PR runs: restore 0ec1591 → 45677646972; initial correlation 6f3a0fb → 45678358611. Preserve both successful baselines and inspect outcomes; use automatic PR runs for subsequent pushes, with no duplicate dispatch. Next functional gaps remain XRI-HOP cross-repository method propagation, Gradle safe dependency resolution, and broader contract schema/compatibility semantics. External production staging, WAL/PITR, representative pilot capacity and OS containment are still not certified. Do not stop after a green slice or claim overall readiness.
+
+### Accepted recovery/observability evidence and OpenAPI scalar domains — 2026-11-26
+
+`df9b83d7b8bcfb4cec274779cbd5cd5116c24b69` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45678687700. XML: **247 unit + seven PostgreSQL cases passed**, zero failures/errors/skips; five shell boundary tests and actual logical restore gate also passed. The restricted-role PostgreSQL fixture verified monotone counters across lower-budget replicas and the universal saturation bound. Parsed actual Maven log JSON: **44 HTTP dispatch events with valid UUID request_id**. Thus common-profile structured logging and actual authenticated/rejected MCP correlation are service-verified. `0ec1591` restore transcript additionally shows all public table content/count fingerprints matched, including populated semantic symbols/edges and saved impact data, plus the pre-mutation JSON/vector witness. This is CI fixture recovery evidence only, not production WAL/PITR or RTO/RPO certification.
+
+**Contract enum slice:** confirmed scalar OpenAPI enums previously normalized to literal `enum`, losing value-set changes from both signature and content hash. `ScalarEnumDomain` preserves canonical, delimiter-safe finite values; duplicates/order and numeric spelling normalize consistently. Request-domain narrowing and response-domain widening are BREAKING; inverse movement is backward compatible within the supported explicit scalar/format domain. Finite/unrestricted transitions follow the same inclusion rule. Required-field changes cannot be hidden by a compatible enum movement; response required→optional is breaking. Kafka's existing cardinality policy remains unchanged.
+
+Explicitly unsupported null/mixed/object/oversized enum domains and extra scalar validation become hashed opaque tokens with `schemaComplete=false`; changed opaque domains remain UNKNOWN. Array-contained enum evolution is UNKNOWN until its structural semantics are modelled. These limitations are not compatibility proofs. REST extractor version is 1.4.0 and compatibility rules 1.8.0; existing persisted indexes need reindexing under the standard freshness rules. No database migration or historical migration rewrite is involved. Normalization follows the OpenAPI schema/enum constraints at https://spec.openapis.org/oas/v3.0.4.html#schema-object; direction-aware inclusion is this platform's documented compatibility policy.
+
+Nine new regression cases cover request/response directions, unrestricted transitions, punctuation/Unicode, numeric equivalence, unsupported constraints/domains, array limits and combined cardinality changes. Final focused extraction/compatibility suite: **58 passed**. Complete Java21 suite: **256 passed**, zero failures/errors/skips (37.705s). The shared PostgreSQL test now requires both enum request-narrowing and response-widening BREAKING changes through actual HTTP MCP without changing its original exact consumer/security/indexing assertions. Those new service assertions are IMPLEMENTED_UNVERIFIED until next exact-SHA CI.
+
+**Persistent context:** recovered master directive is now also retained locally in ignored `.agent-handover/RECOVERED_MASTER_DIRECTIVE.md`, alongside the original Cursor transcripts. Continue in this checkout and branch only. Next: verify enum CI, then remaining multi-module Maven correctness/performance, safe Gradle resolution, full cross-repository caller propagation, worker correlation and operational/capacity requirements. A new concrete scalability observation is repeated reactor effective-model construction (quadratic work); module source visibility and sibling dependencies also require focused examination before changing them. These are actionable code gaps, not external blockers. Production remains NOT READY.

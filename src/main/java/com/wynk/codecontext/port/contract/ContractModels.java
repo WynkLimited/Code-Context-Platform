@@ -31,7 +31,7 @@ public final class ContractModels {
      * Participates in the index hash so a rules correction re-opens every cached analysis rather
      * than leaving stale BREAKING/COMPATIBLE conclusions in place.
      */
-    public static final String COMPATIBILITY_RULES_VERSION = "1.7.0";
+    public static final String COMPATIBILITY_RULES_VERSION = "1.8.0";
 
     private ContractModels() {}
 

@@ -358,6 +358,16 @@ class SharedLibraryImpactPostgresIT {
                         || changes.toString().contains("SCHEMA"),
                 "schema evolution should classify a detectable contract change: " + changes);
 
+        for (String detail : List.of("parameter 'query:state'", "response field 'state'")) {
+            var enumChanges = java.util.stream.StreamSupport.stream(changes.spliterator(), false)
+                    .filter(change -> "rest:GET:/catalog/{id}".equals(change.path("identity").path("canonicalKey").asText()))
+                    .filter(change -> change.path("detail").asText().contains(detail)).toList();
+            assertEquals(1, enumChanges.size(), "enum evolution must reach real HTTP MCP: " + changes);
+            assertEquals("BREAKING", enumChanges.getFirst().path("compatibility").asText());
+            assertEquals("ENDPOINT_SIGNATURE_CHANGED", enumChanges.getFirst().path("changeType").asText());
+            assertTrue(enumChanges.getFirst().path("beforeSignature").asText().contains("enum64~"));
+            assertTrue(enumChanges.getFirst().path("afterSignature").asText().contains("enum64~"));
+        }
         String persistedImpact = jdbc.queryForObject("SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1", String.class, TEAM, provider);
         assertNotNull(persistedImpact);
         JsonNode persistedImpactJson = json.readTree(persistedImpact);
@@ -909,6 +919,8 @@ FROM semantic_call_sites WHERE id=?
         String route=version.equals("1.0")?"/orders/{id}":"/orders/v2/{id}";
         String topic=version.equals("1.0")?"order-events":"order-events-v2";
         String openApiRequired = version.equals("1.0") ? "[id]" : "[id, owner]";
+        String requestEnum = version.equals("1.0") ? "[A, B]" : "[A]";
+        String responseEnum = version.equals("1.0") ? "[A]" : "[A, B]";
         String openApiOwnerProp = version.equals("1.0") ? "" : "                        owner: { type: string }\n";
         String avroFields = version.equals("1.0")
                 ? "[{\"name\":\"id\",\"type\":\"string\"}]"
@@ -928,6 +940,9 @@ FROM semantic_call_sites WHERE id=?
                           in: path
                           required: true
                           schema: { type: string }
+                        - name: state
+                          in: query
+                          schema: { type: string, enum: %s }
                       responses:
                         "200":
                           content:
@@ -942,7 +957,8 @@ FROM semantic_call_sites WHERE id=?
                       properties:
                         id: { type: string }
 %s                        tag: { type: string }
-                """.formatted(openApiRequired, openApiOwnerProp));
+                        state: { type: string, enum: %s }
+                """.formatted(requestEnum, openApiRequired, openApiOwnerProp, responseEnum));
         // Separate Avro-backed topic so annotation kafkaTemplate.send("order-events") remains
         // the single provider-consumer link asserted below.
         files.put("schemas/inventory-event.avsc",

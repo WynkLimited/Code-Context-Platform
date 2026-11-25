@@ -66,9 +66,9 @@ final class OpenApiSchemaSupport {
         if (!params.isEmpty()) evidence.put("parameters", List.copyOf(params.values()));
         if (!request.isEmpty()) evidence.put("requestSchema", List.copyOf(request.values()));
         if (!response.isEmpty()) evidence.put("responseSchema", List.copyOf(response.values()));
-        boolean unresolvedType = params.values().stream().anyMatch(v -> v.contains(":ref:"))
-                || request.values().stream().anyMatch(v -> v.contains(":ref:"))
-                || response.values().stream().anyMatch(v -> v.contains(":ref:"));
+        boolean unresolvedType = params.values().stream().anyMatch(v -> (v.contains(":ref:") || v.contains(":enumUnknown~") || v.contains(":scalarUnknown~")))
+                || request.values().stream().anyMatch(v -> (v.contains(":ref:") || v.contains(":enumUnknown~") || v.contains(":scalarUnknown~")))
+                || response.values().stream().anyMatch(v -> (v.contains(":ref:") || v.contains(":enumUnknown~") || v.contains(":scalarUnknown~")));
         evidence.put("schemaComplete", !unresolvedType && (!params.isEmpty() || !request.isEmpty() || !response.isEmpty()));
         return Map.copyOf(evidence);
     }
@@ -139,6 +139,10 @@ final class OpenApiSchemaSupport {
         var fields = new TreeMap<String, String>();
         JsonNode resolved = resolveRef(document, schema, depth, loader);
         if (resolved == null || resolved.isMissingNode() || resolved.isNull()) return fields;
+        if (resolved.path("enum").isArray()) {
+            fields.put("$", "$:" + schemaType(document, resolved, depth, loader) + ":optional");
+            return fields;
+        }
         if (resolved.has("allOf") && resolved.path("allOf").isArray()) {
             for (JsonNode part : resolved.path("allOf")) {
                 fields.putAll(objectFields(document, part, depth + 1, loader));
@@ -192,8 +196,34 @@ final class OpenApiSchemaSupport {
             String ref = schema != null ? text(schema, "$ref") : "";
             return ref.isBlank() ? "unknown" : "ref:" + refLeaf(ref);
         }
-        if (resolved.path("enum").isArray() && !resolved.path("enum").isEmpty()) {
-            return "enum";
+        if (resolved.path("enum").isArray()) {
+            var values = new java.util.TreeSet<String>();
+            String base = text(resolved, "type");
+            boolean supported = !unsupportedScalarKeywords(resolved) && Set.of("string", "integer", "number", "boolean").contains(base)
+                    && !resolved.path("enum").isEmpty() && resolved.path("enum").size() <= 256;
+            for (JsonNode value : resolved.path("enum")) {
+                boolean matches = switch (base) {
+                    case "string" -> value.isString();
+                    case "boolean" -> value.isBoolean();
+                    case "integer" -> value.isNumber() && value.decimalValue().stripTrailingZeros().scale() <= 0;
+                    case "number" -> value.isNumber();
+                    default -> false;
+                };
+                supported &= matches;
+                values.add(value.isNumber() ? value.decimalValue().stripTrailingZeros().toPlainString() : value.toString());
+            }
+            supported &= values.stream().mapToInt(value -> value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum() <= 16384;
+            if (supported) {
+                String format = text(resolved, "format");
+                return com.wynk.codecontext.port.contract.ScalarEnumDomain.encode(
+                        format.isBlank() ? base : base + "/" + format, values);
+            }
+            // Unsupported null/mixed/object/very large domains still change identity; never flatten to "enum".
+            return "enumUnknown~" + ExtractorFileSupport.sha256(resolved.toString());
+        }
+        if (resolved.path("type").isArray() || (Set.of("string", "integer", "number", "boolean").contains(text(resolved, "type"))
+                && unsupportedScalarKeywords(resolved))) {
+            return "scalarUnknown~" + ExtractorFileSupport.sha256(resolved.toString());
         }
         String type = text(resolved, "type");
         if (type.isBlank() && resolved.path("properties").isObject()) type = "object";
@@ -205,6 +235,12 @@ final class OpenApiSchemaSupport {
         if (!type.isBlank()) return type;
         String ref = text(schema, "$ref");
         return ref.isBlank() ? "object" : "ref:" + refLeaf(ref);
+    }
+
+    private static boolean unsupportedScalarKeywords(JsonNode schema) {
+        var supported = Set.of("type", "enum", "format", "title", "description", "default", "example", "examples", "deprecated", "nullable");
+        for (var entry : schema.properties()) if (!supported.contains(entry.getKey())) return true;
+        return false;
     }
 
     private static JsonNode resolveRef(JsonNode document, JsonNode node, int depth, DocumentLoader loader) {

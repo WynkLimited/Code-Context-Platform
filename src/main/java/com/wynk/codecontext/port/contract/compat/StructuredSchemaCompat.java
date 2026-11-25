@@ -118,12 +118,16 @@ final class StructuredSchemaCompat {
                                 ? "consumers reading it lose data."
                                 : "clients may keep sending it; servers ignore unknown fields.")));
             } else if (!Objects.equals(beforeField.type(), afterField.type())) {
-                changes.add(new Diff(changeType, Compatibility.BREAKING,
+                Compatibility typeCompatibility = enumCompatibility(beforeField.type(), afterField.type(), direction);
+                boolean cardinalityChanged = beforeField.required() != afterField.required();
+                if (cardinalityChanged && cardinalityBreaks(beforeField, afterField, direction, requiredAdditionsBreak))
+                    typeCompatibility = Compatibility.BREAKING;
+                changes.add(new Diff(changeType, typeCompatibility,
                         noun + " '" + name + "' type changed from " + beforeField.type()
-                                + " to " + afterField.type() + " (" + direction.label() + ")."));
+                                + " to " + afterField.type() + " (" + direction.label() + ")"
+                                + (cardinalityChanged ? "; cardinality changed from " + beforeField.cardinality() + " to " + afterField.cardinality() : "") + "."));
             } else if (beforeField.required() != afterField.required()) {
-                Compatibility compatibility = !beforeField.required() && afterField.required()
-                        && (direction == Direction.REQUEST || requiredAdditionsBreak)
+                Compatibility compatibility = cardinalityBreaks(beforeField, afterField, direction, requiredAdditionsBreak)
                         ? Compatibility.BREAKING
                         : Compatibility.BACKWARD_COMPATIBLE;
                 changes.add(new Diff(changeType, compatibility,
@@ -132,6 +136,36 @@ final class StructuredSchemaCompat {
             }
         }
         return changes;
+    }
+
+    private static boolean cardinalityBreaks(Field before, Field after, Direction direction, boolean requiredAdditionsBreak) {
+        return direction == Direction.REQUEST || requiredAdditionsBreak
+                ? !before.required() && after.required() : before.required() && !after.required();
+    }
+
+    private static Compatibility enumCompatibility(String before, String after, Direction direction) {
+        if (before.startsWith("enumUnknown~") || after.startsWith("enumUnknown~")
+                || before.startsWith("scalarUnknown~") || after.startsWith("scalarUnknown~")) return Compatibility.UNKNOWN;
+        var oldDomain = com.wynk.codecontext.port.contract.ScalarEnumDomain.parse(before);
+        var newDomain = com.wynk.codecontext.port.contract.ScalarEnumDomain.parse(after);
+        if ((before.startsWith("enum64~") && oldDomain == null) || (after.startsWith("enum64~") && newDomain == null))
+            return Compatibility.UNKNOWN;
+        if (oldDomain == null && newDomain == null)
+            return before.contains("enum64~") || after.contains("enum64~") || before.contains("Unknown~") || after.contains("Unknown~")
+                    ? Compatibility.UNKNOWN : Compatibility.BREAKING;
+        if (before.equals("enum") || after.equals("enum")) return Compatibility.UNKNOWN;
+        if (oldDomain != null && newDomain != null) {
+            if (!oldDomain.baseType().equals(newDomain.baseType())) return Compatibility.UNKNOWN;
+            boolean accepts = direction == Direction.REQUEST ? newDomain.values().containsAll(oldDomain.values())
+                    : oldDomain.values().containsAll(newDomain.values());
+            return accepts ? Compatibility.BACKWARD_COMPATIBLE : Compatibility.BREAKING;
+        }
+        var finite = oldDomain == null ? newDomain : oldDomain;
+        String unrestricted = oldDomain == null ? before : after;
+        if (!finite.baseType().equals(unrestricted)) return Compatibility.UNKNOWN;
+        boolean widening = oldDomain != null;
+        return (direction == Direction.REQUEST ? widening : !widening)
+                ? Compatibility.BACKWARD_COMPATIBLE : Compatibility.BREAKING;
     }
 
     private static RestOp parseRestOp(String signature) {
