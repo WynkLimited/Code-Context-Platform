@@ -77,8 +77,17 @@ public final class MavenClasspathResolver {
             }
             if(poms.size()>MAX_POMS) return Result.incomplete(commit,"POM_LIMIT_EXCEEDED",List.of());
             Set<Path> reactorPoms=Set.copyOf(poms); var modules=new ArrayList<ModuleClasspath>();
+            // Build each effective model once per immutable snapshot, rather than rebuilding
+            // the entire reactor for every module. Never retain models across commits/repositories.
+            var models=new LinkedHashMap<Path,Model>();
+            var reactorCoordinates=new LinkedHashSet<String>();
             for(Path pom:poms.stream().sorted().toList()) {
                 Model model=effectiveModel(pom,reactorPoms,approvedRepositories);
+                models.put(pom,model);
+                reactorCoordinates.add(coord(model.getGroupId(),model.getArtifactId(),model.getVersion()));
+            }
+            for(var entry:models.entrySet()) {
+                Path pom=entry.getKey(); Model model=entry.getValue();
                 String module=root.relativize(pom.getParent()).toString().replace(File.separatorChar,'/');
                 var repositories=approvedRepositories.stream().map(RepositorySpec::remote).toList();
                 var session=(DefaultRepositorySystemSession)MavenRepositorySystemUtils.newSession();
@@ -91,8 +100,6 @@ public final class MavenClasspathResolver {
                 // layer; approved HTTPS hosts are DNS/private-address checked below, and cluster
                 // NetworkPolicy must deny private egress as the remaining control.
                 session.setConfigProperty("aether.artifactResolver.snapshotNormalization",false);
-                var reactorCoordinates=new LinkedHashSet<String>();
-                for(Path reactorPom:reactorPoms) { try { var m=effectiveModel(reactorPom,reactorPoms,approvedRepositories); reactorCoordinates.add(coord(m.getGroupId(),m.getArtifactId(),m.getVersion())); } catch(Exception ignored) { } }
                 var collect=new CollectRequest(); collect.setRepositories(repositories);
                 var dependencies=new ArrayList<org.eclipse.aether.graph.Dependency>();
                 for(Dependency d:model.getDependencies()) {
