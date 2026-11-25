@@ -12,6 +12,8 @@ import com.wynk.codecontext.port.contract.RepositoryContext;
 import com.wynk.codecontext.port.gnostic.GnosticModels.SourceRange;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HexFormat;
@@ -30,7 +32,7 @@ public class RestContractExtractor implements ContractExtractor {
         this.mapper = mapper;
     }
 
-    public static final String VERSION = "1.2.0";
+    public static final String VERSION = "1.3.0";
     private static final long MAX_BYTES = 2L * 1024 * 1024;
     private static final Pattern CLASS_PATH = Pattern.compile(
             "@(?:Path|RequestMapping)\\s*\\(\\s*(?:(?:value|path)\\s*=\\s*)?([^,\\)]+)");
@@ -192,13 +194,14 @@ public class RestContractExtractor implements ContractExtractor {
             if (!paths.isObject()) {
                 return;
             }
+            OpenApiSchemaSupport.DocumentLoader loader = relativeOpenApiLoader(repository, sourceFile);
             paths.properties().forEach(path -> path.getValue().properties().forEach(operation -> {
                 if (operation.getKey().matches("(?i)get|post|put|patch|delete|head|options")) {
-                    String signature = OpenApiSchemaSupport.operationSignature(document, operation.getValue());
+                    String signature = OpenApiSchemaSupport.operationSignature(document, operation.getValue(), loader);
                     if (signature.isBlank()) {
                         signature = operation.getValue().toString();
                     }
-                    Map<String, Object> evidence = OpenApiSchemaSupport.operationEvidence(document, operation.getValue());
+                    Map<String, Object> evidence = OpenApiSchemaSupport.operationEvidence(document, operation.getValue(), loader);
                     add(repository, false, operation.getKey(), path.getKey(), sourceFile, null, -1, "openapi",
                             signature, evidence, exports, new LinkedHashMap<>());
                 }
@@ -217,13 +220,14 @@ public class RestContractExtractor implements ContractExtractor {
         try {
             JsonNode document = mapper.readTree(content);
             JsonNode paths = document.path("paths");
+            OpenApiSchemaSupport.DocumentLoader loader = relativeOpenApiLoader(repository, sourceFile);
             paths.properties().forEach(path -> path.getValue().properties().forEach(operation -> {
                 if (operation.getKey().matches("(?i)get|post|put|patch|delete|head|options")) {
-                    String signature = OpenApiSchemaSupport.operationSignature(document, operation.getValue());
+                    String signature = OpenApiSchemaSupport.operationSignature(document, operation.getValue(), loader);
                     if (signature.isBlank()) {
                         signature = operation.getValue().toString();
                     }
-                    Map<String, Object> evidence = OpenApiSchemaSupport.operationEvidence(document, operation.getValue());
+                    Map<String, Object> evidence = OpenApiSchemaSupport.operationEvidence(document, operation.getValue(), loader);
                     add(repository, false, operation.getKey(), path.getKey(), sourceFile, null, -1, "openapi",
                             signature, evidence, exports, new LinkedHashMap<>());
                 }
@@ -231,6 +235,33 @@ public class RestContractExtractor implements ContractExtractor {
         } catch (Exception ignored) {
             // Invalid OpenAPI reduces coverage; it never fails the origin review.
         }
+    }
+
+    /** Loads same-repo relative OpenAPI fragments; rejects path traversal and absolute URLs. */
+    private OpenApiSchemaSupport.DocumentLoader relativeOpenApiLoader(RepositoryContext repository, String sourceFile) {
+        Path sourceParent = Path.of(sourceFile).getParent();
+        Path base = sourceParent == null ? repository.root() : repository.root().resolve(sourceParent).normalize();
+        Path root = repository.root().normalize();
+        return relative -> {
+            try {
+                if (relative == null || relative.isBlank() || relative.contains("..") || relative.startsWith("/")
+                        || relative.contains(":")) {
+                    return null;
+                }
+                Path candidate = base.resolve(relative).normalize();
+                if (!candidate.startsWith(root) || !Files.isRegularFile(candidate)) return null;
+                if (Files.size(candidate) > MAX_BYTES) return null;
+                String body = Files.readString(candidate);
+                if (candidate.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".json")
+                        || body.stripLeading().startsWith("{")) {
+                    return mapper.readTree(body);
+                }
+                Object loaded = new org.yaml.snakeyaml.Yaml().load(body);
+                return loaded == null ? null : mapper.valueToTree(loaded);
+            } catch (Exception ignored) {
+                return null;
+            }
+        };
     }
 
     private static void add(

@@ -212,6 +212,44 @@ class RestContractExtractorTest {
     }
 
     @Test
+    void resolvesCrossFileOpenApiYamlRefsFromSameRepository() throws Exception {
+        Files.createDirectories(root.resolve("schemas"));
+        Files.writeString(root.resolve("schemas/catalog.yaml"), """
+                components:
+                  schemas:
+                    CatalogItem:
+                      type: object
+                      required: [id]
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                """);
+        Files.writeString(root.resolve("openapi.yaml"), """
+                openapi: 3.0.3
+                paths:
+                  /catalog/{id}:
+                    get:
+                      parameters:
+                        - name: id
+                          in: path
+                          required: true
+                          schema: { type: string }
+                      responses:
+                        "200":
+                          content:
+                            application/json:
+                              schema:
+                                $ref: "schemas/catalog.yaml#/components/schemas/CatalogItem"
+                """);
+        var exports = extractor().extractExports(new RepositoryContext("o", "r", "a".repeat(40), "main", root));
+        assertEquals(1, exports.size());
+        String signature = exports.get(0).metadata().get("signature").toString();
+        assertTrue(signature.contains("id:string:required"), signature);
+        assertTrue(signature.contains("name:string:optional"), signature);
+        assertTrue(Boolean.TRUE.equals(exports.get(0).metadata().get("schemaComplete")), exports.get(0).metadata().toString());
+    }
+
+    @Test
     void nestedYamlRefSchemaEvolutionDetectsBreakingRequiredFieldAddition() throws Exception {
         Path beforeRoot = Files.createDirectories(root.resolve("before"));
         Path afterRoot = Files.createDirectories(root.resolve("after"));

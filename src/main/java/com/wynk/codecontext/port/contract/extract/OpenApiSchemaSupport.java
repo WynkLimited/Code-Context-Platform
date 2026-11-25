@@ -19,37 +19,50 @@ import java.util.TreeMap;
  * <p>Signature form:
  * {@code restOp{params=in:name:required|optional:type;...;request=name:type:required|optional;...;response=...}}
  *
- * <p>{@code $ref} values under {@code #/components/schemas/} are resolved with a bounded depth.
- * Unresolved refs are retained as opaque type tokens so missing components degrade to UNKNOWN
- * rather than inventing fields.
+ * <p>{@code $ref} values under {@code #/components/schemas/} and same-document anchors are
+ * resolved with a bounded depth. Relative file refs ({@code schemas/foo.yaml#/...}) are resolved
+ * when a {@link DocumentLoader} is supplied. Unresolved refs remain opaque type tokens.
  */
 final class OpenApiSchemaSupport {
 
     private static final int MAX_REF_DEPTH = 6;
     private static final int MAX_FIELDS = 128;
 
+    @FunctionalInterface
+    interface DocumentLoader {
+        JsonNode load(String relativePath);
+    }
+
     private OpenApiSchemaSupport() {}
 
     static String operationSignature(JsonNode document, JsonNode operation) {
+        return operationSignature(document, operation, null);
+    }
+
+    static String operationSignature(JsonNode document, JsonNode operation, DocumentLoader loader) {
         if (operation == null || operation.isMissingNode() || operation.isNull()) {
             return "";
         }
         Map<String, String> params = new TreeMap<>();
-        collectParameters(document, operation.path("parameters"), params, 0);
-        Map<String, String> request = objectFields(document, requestSchema(operation), 0);
-        Map<String, String> response = objectFields(document, primaryResponseSchema(operation), 0);
+        collectParameters(document, operation.path("parameters"), params, 0, loader);
+        Map<String, String> request = objectFields(document, requestSchema(operation), 0, loader);
+        Map<String, String> response = objectFields(document, primaryResponseSchema(operation), 0, loader);
         return "restOp{params=" + join(params) + ";request=" + join(request) + ";response=" + join(response) + "}";
     }
 
     static Map<String, Object> operationEvidence(JsonNode document, JsonNode operation) {
+        return operationEvidence(document, operation, null);
+    }
+
+    static Map<String, Object> operationEvidence(JsonNode document, JsonNode operation, DocumentLoader loader) {
         var evidence = new LinkedHashMap<String, Object>();
         if (operation == null || operation.isMissingNode()) {
             return Map.copyOf(evidence);
         }
         Map<String, String> params = new TreeMap<>();
-        collectParameters(document, operation.path("parameters"), params, 0);
-        Map<String, String> request = objectFields(document, requestSchema(operation), 0);
-        Map<String, String> response = objectFields(document, primaryResponseSchema(operation), 0);
+        collectParameters(document, operation.path("parameters"), params, 0, loader);
+        Map<String, String> request = objectFields(document, requestSchema(operation), 0, loader);
+        Map<String, String> response = objectFields(document, primaryResponseSchema(operation), 0, loader);
         if (!params.isEmpty()) evidence.put("parameters", List.copyOf(params.values()));
         if (!request.isEmpty()) evidence.put("requestSchema", List.copyOf(request.values()));
         if (!response.isEmpty()) evidence.put("responseSchema", List.copyOf(response.values()));
@@ -101,16 +114,17 @@ final class OpenApiSchemaSupport {
         return response.path("schema");
     }
 
-    private static void collectParameters(JsonNode document, JsonNode parameters, Map<String, String> out, int depth) {
+    private static void collectParameters(JsonNode document, JsonNode parameters, Map<String, String> out, int depth,
+                                          DocumentLoader loader) {
         if (parameters == null || !parameters.isArray() || depth > MAX_REF_DEPTH) return;
         for (JsonNode parameter : parameters) {
-            JsonNode resolved = resolveRef(document, parameter, depth);
+            JsonNode resolved = resolveRef(document, parameter, depth, loader);
             if (resolved == null || resolved.isMissingNode()) continue;
             String in = text(resolved, "in");
             String name = text(resolved, "name");
             if (in.isBlank() || name.isBlank()) continue;
             boolean required = resolved.path("required").asBoolean("path".equalsIgnoreCase(in));
-            String type = schemaType(document, resolved.path("schema"), depth + 1);
+            String type = schemaType(document, resolved.path("schema"), depth + 1, loader);
             out.put(in.toLowerCase(Locale.ROOT) + ":" + name,
                     in.toLowerCase(Locale.ROOT) + ":" + name + ":" + (required ? "required" : "optional") + ":" + type);
             if (out.size() >= MAX_FIELDS) return;
@@ -118,19 +132,23 @@ final class OpenApiSchemaSupport {
     }
 
     private static Map<String, String> objectFields(JsonNode document, JsonNode schema, int depth) {
+        return objectFields(document, schema, depth, null);
+    }
+
+    private static Map<String, String> objectFields(JsonNode document, JsonNode schema, int depth, DocumentLoader loader) {
         var fields = new TreeMap<String, String>();
-        JsonNode resolved = resolveRef(document, schema, depth);
+        JsonNode resolved = resolveRef(document, schema, depth, loader);
         if (resolved == null || resolved.isMissingNode() || resolved.isNull()) return fields;
         if (resolved.has("allOf") && resolved.path("allOf").isArray()) {
             for (JsonNode part : resolved.path("allOf")) {
-                fields.putAll(objectFields(document, part, depth + 1));
+                fields.putAll(objectFields(document, part, depth + 1, loader));
                 if (fields.size() >= MAX_FIELDS) return fields;
             }
             return fields;
         }
         JsonNode properties = resolved.path("properties");
         if (!properties.isObject()) {
-            String type = schemaType(document, resolved, depth);
+            String type = schemaType(document, resolved, depth, loader);
             if (!type.isBlank() && !"object".equals(type)) {
                 fields.put("$", "$:" + type + ":optional");
             }
@@ -144,8 +162,8 @@ final class OpenApiSchemaSupport {
         }
         for (var property : properties.properties()) {
             String name = property.getKey();
-            JsonNode nested = resolveRef(document, property.getValue(), depth + 1);
-            Map<String, String> nestedFields = objectFields(document, nested, depth + 1);
+            JsonNode nested = resolveRef(document, property.getValue(), depth + 1, loader);
+            Map<String, String> nestedFields = objectFields(document, nested, depth + 1, loader);
             boolean isRequired = required.contains(name);
             if (!nestedFields.isEmpty() && nestedFields.keySet().stream().noneMatch("$"::equals)) {
                 // Flatten nested object/$ref properties so schema evolution sees leaf fields.
@@ -160,7 +178,7 @@ final class OpenApiSchemaSupport {
                     if (fields.size() >= MAX_FIELDS) return fields;
                 }
             } else {
-                String type = schemaType(document, property.getValue(), depth + 1);
+                String type = schemaType(document, property.getValue(), depth + 1, loader);
                 fields.put(name, name + ":" + type + ":" + (isRequired ? "required" : "optional"));
                 if (fields.size() >= MAX_FIELDS) break;
             }
@@ -168,8 +186,8 @@ final class OpenApiSchemaSupport {
         return fields;
     }
 
-    private static String schemaType(JsonNode document, JsonNode schema, int depth) {
-        JsonNode resolved = resolveRef(document, schema, depth);
+    private static String schemaType(JsonNode document, JsonNode schema, int depth, DocumentLoader loader) {
+        JsonNode resolved = resolveRef(document, schema, depth, loader);
         if (resolved == null || resolved.isMissingNode() || resolved.isNull()) {
             String ref = schema != null ? text(schema, "$ref") : "";
             return ref.isBlank() ? "unknown" : "ref:" + refLeaf(ref);
@@ -180,7 +198,7 @@ final class OpenApiSchemaSupport {
         String type = text(resolved, "type");
         if (type.isBlank() && resolved.path("properties").isObject()) type = "object";
         if ("array".equals(type)) {
-            return "array<" + schemaType(document, resolved.path("items"), depth + 1) + ">";
+            return "array<" + schemaType(document, resolved.path("items"), depth + 1, loader) + ">";
         }
         String format = text(resolved, "format");
         if (!type.isBlank() && !format.isBlank()) return type + "/" + format;
@@ -189,20 +207,34 @@ final class OpenApiSchemaSupport {
         return ref.isBlank() ? "object" : "ref:" + refLeaf(ref);
     }
 
-    private static JsonNode resolveRef(JsonNode document, JsonNode node, int depth) {
+    private static JsonNode resolveRef(JsonNode document, JsonNode node, int depth, DocumentLoader loader) {
         if (node == null || node.isMissingNode() || node.isNull()) return node;
         String ref = text(node, "$ref");
         if (ref.isBlank()) return node;
         if (depth >= MAX_REF_DEPTH || document == null) return node;
-        if (!ref.startsWith("#/")) return node;
+        JsonNode root = document;
         JsonNode current = document;
-        for (String part : ref.substring(2).split("/")) {
+        String pointer = ref;
+        if (!ref.startsWith("#")) {
+            if (loader == null) return node;
+            int hash = ref.indexOf('#');
+            String file = hash < 0 ? ref : ref.substring(0, hash);
+            pointer = hash < 0 ? "" : ref.substring(hash);
+            if (file.isBlank() || file.contains("..") || file.startsWith("/") || file.contains(":")) return node;
+            JsonNode external = loader.load(file);
+            if (external == null || external.isMissingNode() || external.isNull()) return node;
+            root = external;
+            current = external;
+        }
+        if (pointer.isBlank() || "#".equals(pointer)) return current;
+        if (!pointer.startsWith("#/")) return node;
+        for (String part : pointer.substring(2).split("/")) {
             if (part.isBlank()) continue;
             current = current.path(part.replace("~1", "/").replace("~0", "~"));
             if (current.isMissingNode()) return node;
         }
         if (current.has("$ref")) {
-            return resolveRef(document, current, depth + 1);
+            return resolveRef(root, current, depth + 1, loader);
         }
         return current;
     }

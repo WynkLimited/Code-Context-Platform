@@ -11,7 +11,7 @@ Statuses: `FUNCTIONALLY_EQUIVALENT` · `PLATFORM_IMPLEMENTATION_SUPERIOR` · `PA
 | Gradle dependency graph | Not production resolver | Not implemented | NOT_APPLICABLE_WITH_JUSTIFICATION | — | Track as XRI-GRADLE if product requires |
 | Java method call evidence | Exact matchers + optional javac shadow | JavaParser Symbol Solver + V5 edges | PLATFORM_IMPLEMENTATION_SUPERIOR | SharedLibraryImpactPostgresIT | Keep |
 | Kotlin JVM ABI / interop | Structure + interop replay; prod gate weak | kotlinc JVM ABI + K↔J MCP impact | PLATFORM_IMPLEMENTATION_SUPERIOR | Kotlin provider IT @ b2346ee | Source UNKNOWN remains |
-| REST contract extract + compat | RestContractExtractor + rules | Same family + OpenAPI JSON/YAML `$ref` | PARTIALLY_EQUIVALENT | Nested `$ref` + MCP changes @ f905835 | External file `$ref` still open |
+| REST contract extract + compat | RestContractExtractor + rules | Same family + OpenAPI JSON/YAML `$ref` | PARTIALLY_EQUIVALENT | Nested+cross-file `$ref` + MCP @ f905835 | Remote URL `$ref` intentionally rejected |
 | Kafka / Avro / proto | Extractors; many UNKNOWN | fields{} + required-add BREAKING + proto numbers | PARTIALLY_EQUIVALENT | Avro evolution in MCP changes @ f905835 | Consumer-linked Avro impact depth |
 | Direct consumer impact | Routing + call match | Persisted semanticMethodImpacts | FUNCTIONALLY_EQUIVALENT | CI Java+Kotlin | — |
 | Indirect / multi-hop | Producer BFS + Graphify hops | Direct edges; limitation documented | PARTIALLY_EQUIVALENT | Limitations string in MCP | Bounded hop resolver |
