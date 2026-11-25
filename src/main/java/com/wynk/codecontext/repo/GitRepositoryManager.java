@@ -86,6 +86,24 @@ public class GitRepositoryManager {
         try (Git git = Git.open(root.toFile())) { return git.getRepository().resolve("HEAD").name(); }
     }
 
+    /** Removes a repository mirror under the configured root; refuses symlink escapes. */
+    public void deleteMirror(RepositoryRecord repo) throws IOException {
+        Path root = safeRoot();
+        Path mirror = root.resolve(safeComponent(repo.owner())).resolve(safeComponent(repo.name())).normalize();
+        PathContainment.requireUnder(root, mirror);
+        PathContainment.rejectSymlinkAncestors(root, mirror);
+        if (!Files.exists(mirror, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
+        if (Files.isSymbolicLink(mirror)) throw new IOException("symlinked repository path rejected");
+        try (var walk = PathContainment.walkContained(mirror)) {
+            List<Path> paths = walk.sorted(java.util.Comparator.reverseOrder()).toList();
+            for (Path path : paths) {
+                if (PathContainment.isSymlink(path)) throw new IOException("symlinked repository path rejected");
+                Files.deleteIfExists(path);
+            }
+        }
+        locks.remove(mirror);
+    }
+
     public List<SourceFile> filesAt(Path root, String revision) throws Exception {
         List<SourceFile> files = new ArrayList<>();
         try (Git git = Git.open(root.toFile()); RevWalk walk = new RevWalk(git.getRepository())) {

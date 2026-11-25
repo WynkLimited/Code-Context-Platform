@@ -56,4 +56,38 @@ class KotlinAbiImpactRoutingTest {
         assertEquals(List.of("lib.Library#convert(java.lang.String)"),
                 KotlinAbiSurface.removedSemanticKeys(before, after));
     }
+
+    @Test
+    void baselineVsHeadRoutesConstructorsAccessorsExtensionsTopLevelAndOverloads() {
+        String before = """
+                KOTLIN_BINARY org.acme.kotlin.Amount#<init>(Ljava/lang/String;)V
+                KOTLIN_BINARY org.acme.kotlin.Amount#getLabel()Ljava/lang/String;
+                KOTLIN_BINARY org.acme.kotlin.Amount#convert(Ljava/lang/String;)Ljava/lang/String;
+                KOTLIN_BINARY org.acme.kotlin.Amount#convert(I)Ljava/lang/String;
+                KOTLIN_BINARY org.acme.kotlin.AmountKt#decorate(Ljava/lang/String;)Ljava/lang/String;
+                KOTLIN_BINARY org.acme.kotlin.AmountKt#entryPoint()Ljava/lang/String;
+                """;
+        String after = """
+                KOTLIN_BINARY org.acme.kotlin.Amount#<init>(I)V
+                KOTLIN_BINARY org.acme.kotlin.Amount#getLabel()I
+                KOTLIN_BINARY org.acme.kotlin.Amount#convert(Ljava/math/BigDecimal;)Ljava/lang/String;
+                KOTLIN_BINARY org.acme.kotlin.Amount#convert(I)Ljava/lang/String;
+                """;
+        assertEquals(List.of(
+                        "org.acme.kotlin.Amount#<init>(Ljava/lang/String;)V",
+                        "org.acme.kotlin.Amount#convert(Ljava/lang/String;)Ljava/lang/String;",
+                        "org.acme.kotlin.Amount#getLabel()Ljava/lang/String;",
+                        "org.acme.kotlin.AmountKt#decorate(Ljava/lang/String;)Ljava/lang/String;",
+                        "org.acme.kotlin.AmountKt#entryPoint()Ljava/lang/String;"),
+                KotlinAbiSurface.removedBinaryKeys(before, after));
+        assertEquals(List.of(
+                        "org.acme.kotlin.Amount#Amount(java.lang.String)",
+                        "org.acme.kotlin.Amount#convert(java.lang.String)",
+                        "org.acme.kotlin.Amount#getLabel()",
+                        "org.acme.kotlin.AmountKt#decorate(java.lang.String)",
+                        "org.acme.kotlin.AmountKt#entryPoint()"),
+                KotlinAbiSurface.removedSemanticKeys(before, after));
+        assertFalse(KotlinAbiSurface.removedSemanticKeys(before, after)
+                .contains("org.acme.kotlin.Amount#convert(int)"));
+    }
 }

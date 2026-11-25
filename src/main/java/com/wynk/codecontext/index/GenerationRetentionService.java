@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.util.List;
 import java.util.UUID;
 
 /** Deletes only unreferenced history; PostgreSQL owns the durable external-cleanup queue. */
@@ -45,6 +46,7 @@ public class GenerationRetentionService {
         var candidates=jdbc.query("SELECT g.id,g.repository_id FROM index_generations g WHERE NOT g.published AND g.created_at<now()-(? * interval '1 day') " + PROTECTED + " ORDER BY g.created_at LIMIT ?",
                 (rs,n)->new Candidate(rs.getObject(1,UUID.class),rs.getObject(2,UUID.class)),days,batch);
         for(var candidate:candidates) collect(candidate.generation,candidate.repository);
+        reconcileOrphanedShards();
         for(int i=0;i<batch;i++) if(!cleanOne()) break;
     }
 
@@ -71,7 +73,7 @@ public class GenerationRetentionService {
         }
     }
 
-    boolean cleanOne() {
+    public boolean cleanOne() {
         return Boolean.TRUE.equals(transactions.execute(status->{
             var work=jdbc.query("SELECT generation_id,repository_id,owner,name FROM generation_cleanup_outbox WHERE state='QUEUED' AND available_at<=now() ORDER BY available_at FOR UPDATE SKIP LOCKED LIMIT 1",
                     (rs,n)->new Cleanup(rs.getObject(1,UUID.class),new RepositoryRecord(rs.getObject(2,UUID.class),rs.getString(3),rs.getString(4),"","","","","")));
@@ -88,6 +90,35 @@ public class GenerationRetentionService {
             return true;
         }));
     }
+
+    /**
+     * Enqueues Zoekt cleanup for shards observed on disk whose generation rows are absent from PostgreSQL
+     * and not already tracked as durable cleanup work.
+     */
+    public int reconcileOrphanedShards() {
+        List<ZoektIndexer.IndexedGeneration> observed;
+        try { observed=zoekt.listIndexedGenerations(); }
+        catch(Exception failure) { return 0; }
+        int enqueued=0;
+        for(var shard:observed) {
+            Boolean present=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM index_generations WHERE id=?)",Boolean.class,shard.generation());
+            if(Boolean.TRUE.equals(present)) continue;
+            Boolean tracked=jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM generation_cleanup_outbox WHERE generation_id=?)",Boolean.class,shard.generation());
+            if(Boolean.TRUE.equals(tracked)) continue;
+            // repository_id is informational after purge; use nil UUID when the row is already gone.
+            UUID repository=jdbc.query("SELECT id FROM repositories WHERE owner=? AND name=?",(rs,n)->rs.getObject(1,UUID.class),shard.owner(),shard.name())
+                    .stream().findFirst().orElse(new UUID(0,0));
+            enqueued+=jdbc.update("INSERT INTO generation_cleanup_outbox(generation_id,repository_id,owner,name) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
+                    shard.generation(),repository,shard.owner(),shard.name());
+        }
+        return enqueued;
+    }
+
+    public void removeRepositoryMetadata(UUID repositoryId) {
+        try { zoekt.removeRepositoryMetadata(repositoryId); }
+        catch(Exception ignored) { /* metadata removal is best-effort after durable outbox insert */ }
+    }
+
     private record Candidate(UUID generation,UUID repository) {}
     private record Cleanup(UUID generation,RepositoryRecord repository) {}
 }

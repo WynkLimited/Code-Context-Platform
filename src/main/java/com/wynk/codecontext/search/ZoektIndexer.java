@@ -78,5 +78,36 @@ public class ZoektIndexer {
             Files.deleteIfExists(log);
         }
     }
+
+    /** Best-effort inventory of generation identities recorded in Zoekt metadata files. */
+    public List<IndexedGeneration> listIndexedGenerations() throws IOException {
+        Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();
+        if(!Files.isDirectory(index))return List.of();
+        List<IndexedGeneration> found=new java.util.ArrayList<>();
+        try(var stream=Files.list(index)) {
+            for(Path path:stream.filter(p->p.getFileName().toString().startsWith("meta-")&&p.getFileName().toString().endsWith(".json")).toList()) {
+                try {
+                    var tree=json.readTree(path.toFile());
+                    String identity=tree.path("name").asText("");
+                    int at=identity.lastIndexOf('@');
+                    if(at<=0||at>=identity.length()-1)continue;
+                    String key=identity.substring(0,at);
+                    int slash=key.indexOf('/');
+                    if(slash<=0)continue;
+                    found.add(new IndexedGeneration(key.substring(0,slash),key.substring(slash+1),java.util.UUID.fromString(identity.substring(at+1))));
+                } catch(Exception ignored) { /* untrusted index files must not abort reconciliation */ }
+            }
+        }
+        return List.copyOf(found);
+    }
+
+    public void removeRepositoryMetadata(java.util.UUID repositoryId) throws IOException {
+        Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();
+        if(!Files.isDirectory(index))return;
+        Files.deleteIfExists(index.resolve("meta-"+repositoryId+".json"));
+        Files.deleteIfExists(index.resolve("index-"+repositoryId+".log"));
+    }
+
+    public record IndexedGeneration(String owner,String name,java.util.UUID generation) {}
     private record RepoMetadata(String name,String description) {}
 }

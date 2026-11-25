@@ -1,13 +1,17 @@
 package com.wynk.codecontext.index;
 
 import com.wynk.codecontext.model.RepositoryRecord;
+import com.wynk.codecontext.repo.RepositoryStore;
 import com.wynk.codecontext.search.ZoektIndexer;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.transaction.support.TransactionTemplate;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
@@ -115,10 +119,75 @@ class GenerationRetentionPostgresIT {
                 assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM contract_links",Integer.class),"revoked shared access must prune stored relationships");
             } finally { relationships.shutdown(); }
             // Disable and re-onboard retain the published evidence and the same repository identity.
-            jdbc.update("UPDATE repositories SET enabled=false WHERE id=?",repo);
+            var store=new RepositoryStore(jdbc);
+            store.disable(repo);
+            assertTrue(jdbc.queryForObject("SELECT NOT enabled FROM repositories WHERE id=?",Boolean.class,repo));
+            assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM team_repository_access WHERE repository_id=?",Integer.class,repo));
             assertFalse(gc.collect(active,repo));
-            jdbc.update("UPDATE repositories SET enabled=true WHERE id=?",repo);
+            assertThrows(AccessDeniedException.class,()->store.insert("fixture","retention","","foreign-team","main","SERVICE",""));
+            var reonboarded=store.insert("fixture","retention","","team","main","SERVICE","/tmp/retention");
+            assertEquals(repo,reonboarded.id(),"soft-disabled repositories retain identity for the owning team");
+            jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES('team',?)",repo);
             assertFalse(gc.collect(baseline,repo));
+
+            // Permanent Zoekt cleanup failure after ten attempts.
+            UUID doomed=generation(jdbc,repo,4,false);
+            jdbc.update("UPDATE index_generations SET created_at=now()-interval '60 days' WHERE id=?",doomed);
+            adapter.fail=true;
+            assertTrue(gc.collect(doomed,repo));
+            for(int attempt=1;attempt<=10;attempt++) {
+                jdbc.update("UPDATE generation_cleanup_outbox SET available_at=now() WHERE generation_id=?",doomed);
+                assertTrue(gc.cleanOne());
+                assertEquals(attempt,jdbc.queryForObject("SELECT attempt FROM generation_cleanup_outbox WHERE generation_id=?",Integer.class,doomed));
+            }
+            assertEquals("FAILED",jdbc.queryForObject("SELECT state FROM generation_cleanup_outbox WHERE generation_id=?",String.class,doomed));
+            jdbc.update("UPDATE generation_cleanup_outbox SET available_at=now() WHERE generation_id=?",doomed);
+            assertFalse(gc.cleanOne(),"terminal FAILED outbox rows must not be claimed");
+
+            // Concurrent lease fencing: a second collector cannot delete while the first holds the fence.
+            UUID contended=generation(jdbc,repo,5,false);
+            jdbc.update("UPDATE index_generations SET created_at=now()-interval '60 days' WHERE id=?",contended);
+            try(var held=leases.tryAcquire(repo,UUID.randomUUID()).orElseThrow()) {
+                new TransactionTemplate(tx).execute(status->{
+                    held.fenceTransaction();
+                    var blocked=java.util.concurrent.CompletableFuture.supplyAsync(()->gc.collect(contended,repo));
+                    assertFalse(assertTimeoutPreemptively(java.time.Duration.ofSeconds(3),blocked::join),
+                            "collector without the lease must not delete while another owner fences the repository");
+                    return null;
+                });
+            }
+            assertTrue(gc.collect(contended,repo));
+            adapter.fail=false;
+            jdbc.update("UPDATE generation_cleanup_outbox SET available_at=now()+interval '1 hour' WHERE state='QUEUED'");
+            jdbc.update("UPDATE generation_cleanup_outbox SET available_at=now() WHERE generation_id=?",contended);
+            assertTrue(gc.cleanOne());
+            assertEquals("DONE",jdbc.queryForObject("SELECT state FROM generation_cleanup_outbox WHERE generation_id=?",String.class,contended));
+
+            // Orphaned Zoekt shard reconciliation enqueues missing PostgreSQL generations.
+            UUID orphan=UUID.randomUUID();
+            adapter.orphans=java.util.List.of(new ZoektIndexer.IndexedGeneration("fixture","retention",orphan));
+            assertEquals(1,gc.reconcileOrphanedShards());
+            assertEquals(0,gc.reconcileOrphanedShards(),"already tracked orphans must not duplicate outbox rows");
+            assertEquals("QUEUED",jdbc.queryForObject("SELECT state FROM generation_cleanup_outbox WHERE generation_id=?",String.class,orphan));
+            jdbc.update("UPDATE generation_cleanup_outbox SET available_at=now()+interval '1 hour' WHERE generation_id=?",orphan);
+
+            // Authorized hard purge removes PostgreSQL evidence and queues Zoekt cleanup for every generation.
+            jdbc.update("INSERT INTO code_chunks(generation_id,file_path,start_line,end_line,content_hash,content) VALUES(?,'Active.java',1,1,'hash','active')",active);
+            jdbc.update("INSERT INTO cross_repo_impact_analyses(team,origin_repository_id,before_generation_id,after_generation_id,after_commit,analysis_status,result) VALUES('team',?,?,?,'3','COMPLETE','{}')",repo,baseline,active);
+            Path mirror=Files.createTempDirectory("purge-mirror-");
+            Files.writeString(mirror.resolve("README"),"mirror");
+            jdbc.update("UPDATE repositories SET mirror_path=? WHERE id=?",mirror.toString(),repo);
+            Integer queued=new TransactionTemplate(tx).execute(status->store.purge(repo));
+            assertNotNull(queued);
+            assertTrue(queued>=2);
+            assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM repositories WHERE id=?",Integer.class,repo));
+            assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=?",Integer.class,repo));
+            assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_chunks",Integer.class));
+            assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM cross_repo_impact_analyses",Integer.class));
+            assertTrue(jdbc.queryForObject("SELECT count(*) FROM generation_cleanup_outbox WHERE owner='fixture' AND name='retention' AND state='QUEUED'",Integer.class)>=2);
+            // After hard purge any administrator team may reclaim the identity.
+            var reclaimed=store.insert("fixture","retention","","foreign-team","main","SERVICE","/tmp/reclaim");
+            assertNotEquals(repo,reclaimed.id());
         } finally {
             leases.shutdown();
             admin.execute("DROP SCHEMA "+schema+" CASCADE");
@@ -132,9 +201,12 @@ class GenerationRetentionPostgresIT {
     }
     private static final class CleanupAdapter extends ZoektIndexer {
         boolean fail=true;
+        java.util.List<IndexedGeneration> orphans=java.util.List.of();
         CleanupAdapter(){super(null,null);}
         @Override public void removeGeneration(RepositoryRecord repo,UUID generation) throws Exception {
             if(fail) throw new java.io.IOException("simulated unavailable Zoekt");
         }
+        @Override public java.util.List<IndexedGeneration> listIndexedGenerations() { return orphans; }
+        @Override public void removeRepositoryMetadata(UUID repositoryId) {}
     }
 }

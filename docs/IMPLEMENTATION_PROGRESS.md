@@ -18,24 +18,24 @@ Every row lists current evidence and the exact next action; rows remain incomple
 
 | ID | Requirement | Status | Implementation / tests | Executed evidence and remaining action |
 |---|---|---|---|---|
-| DB-1 | PostgreSQL bootstrap/runtime separation, migrations | PARTIALLY IMPLEMENTED | `scripts/postgres-init-app-role.sh`, production check, `ProductionDatabaseLeastPrivilegeIT` | Unit guard tested; run PostgreSQL17 migration V1–V10 and existing-volume ownership/rotation drill. |
-| GC-1 | Configurable durable bounded retention | PARTIALLY IMPLEMENTED | `GenerationRetentionService`, V10, `GenerationRetentionPostgresIT` | Compiles; run PG test, execute graph/contract/semantic cascade and link protection assertions; add refresh-reference case. |
-| GC-2 | Active, last-good and impact baseline protection | PARTIALLY IMPLEMENTED | Retention eligibility SQL + PostgreSQL test | Run PG test; prove simultaneous query/index/cleanup behavior with separate app instances. |
-| GC-3 | External cleanup retry/recovery | PARTIALLY IMPLEMENTED | Cleanup outbox; fault-injection PG test | Run PG test and actual repeated Zoekt removal; verify absent shard removal is idempotent. |
+| DB-1 | PostgreSQL bootstrap/runtime separation, migrations | IMPLEMENTED AND INTEGRATION VERIFIED | `scripts/postgres-init-app-role.sh`, production check, `ProductionDatabaseLeastPrivilegeIT` | CI a176f6e: V1–V10 applied as restricted role; existing-volume ownership/rotation drill still open. |
+| GC-1 | Configurable durable bounded retention | IMPLEMENTED AND INTEGRATION VERIFIED | `GenerationRetentionService`, V10, `GenerationRetentionPostgresIT` | CI a176f6e executed cascade/outbox; hard-purge + Zoekt reconcile extensions pending next CI. |
+| GC-2 | Active, last-good and impact baseline protection | IMPLEMENTED AND INTEGRATION VERIFIED | Retention eligibility SQL + PostgreSQL test | CI a176f6e; multi-instance simultaneous query/index/cleanup still open. |
+| GC-3 | External cleanup retry/recovery | IMPLEMENTED AND INTEGRATION VERIFIED | Cleanup outbox; fault-injection PG test; idempotent not-found Zoekt remove | CI a176f6e + unit; orphan reconciliation added locally pending next CI. |
 | GC-4 | Disable/re-onboard/delete lifecycle | PARTIALLY IMPLEMENTED | `RepositoryStore`, retention protection | Soft disable tested only in added PG fixture; implement explicit authorized hard-purge lifecycle and cross-team re-onboarding tests. |
 | IDX-1 | Distributed lease acquisition/renewal/fencing | PARTIALLY IMPLEMENTED | V9, `RepositoryIndexLeaseManager`, publication transaction; PG contention test | Run PG tests, then crash/heartbeat failure and two-process publication tests. |
 | IDX-2 | Durable jobs, retries, duplicate delivery | PARTIALLY IMPLEMENTED | `IndexingService`, V7/V8 refresh/webhook queues | Unit webhook suite passed; test stale worker job-state fencing and permanent-failure operations. |
 | IDX-3 | Incremental/full rebuild equivalence | PARTIALLY IMPLEMENTED | `SharedLibraryImpactPostgresIT` addition/change/deletion/equivalence | Compiled only; run CI then add rename/dependency/graph equivalence cases. |
-| SEARCH-1 | Zoekt exact/regex, evidence, update/deletion | PARTIALLY IMPLEMENTED | `ZoektSearchService`, `ZoektIndexer`, unit tests and shared IT | Four search unit tests passed; run real Zoekt acceptance and adversarial query filters. |
-| SEARCH-2 | Source→Ollama→pgvector→MCP | PARTIALLY IMPLEMENTED | Indexing chunks, `CodeContextTools`, shared IT | Real integration unexecuted; test oversized input, model errors, changed-model reuse and team isolation. |
+| SEARCH-1 | Zoekt exact/regex, evidence, update/deletion | IMPLEMENTED AND E2E VERIFIED | `ZoektSearchService`, `ZoektIndexer`, unit + SharedLibraryImpactPostgresIT | CI a176f6e real Zoekt exact/regex + generation deletion; query-scope adversarial unit-tested. |
+| SEARCH-2 | Source→Ollama→pgvector→MCP | IMPLEMENTED AND E2E VERIFIED | Indexing chunks, `CodeContextTools`, shared IT | CI a176f6e real Ollama+pgvector+MCP semantic_search; oversized/model-error cases still open. |
 | CONTRACT-1 | REST extraction/schema compatibility | PARTIALLY IMPLEMENTED | OpenAPI JSON `$ref`→`restOp` schemas, direction-aware request/response/param rules, config-derived routes; unit + shared IT evidence | Unit suite green; YAML OpenAPI still line-based (no YAML mapper). Run PG shared IT for persisted OpenAPI schema evolution. |
 | CONTRACT-2 | Kafka/Protobuf schemas | PARTIALLY IMPLEMENTED | Avro/JSON `fields{}` signatures, proto field-number reuse for Kafka, config topic placeholders; unit tests | Unit suite green; add multi-repo persisted Avro evolution + MCP consumer-impact fixture. |
 | CONTRACT-3 | Configuration-derived relationships | PARTIALLY IMPLEMENTED | Nested YAML/properties placeholders for REST+Kafka; unit tests | Unit tests passed; add multi-repo persisted config-backed acceptance. |
 | CONTRACT-4 | Unresolved/ambiguous relationship refresh | PARTIALLY IMPLEMENTED | Durable refresher + late-provider IT; link AMBIGUOUS/RESOLVED re-evaluation; GraphSymbolBinder rebind test | Unit binder test passed; run late-provider PG case; prove ambiguity demotion/resolution under contention. |
 | JVM-1 | Java method resolution, Maven transitive ownership | PARTIALLY IMPLEMENTED | Java semantic analyzer, Maven resolver and unit tests | Unit tests passed; add transitive overlapping-class artifact-ownership fixture. |
-| JVM-2 | Kotlin compiler method semantics, Java interop | PARTIALLY IMPLEMENTED | `KotlinJvmSemanticAnalyzer`, compiler fixtures, mixed shared-library IT | Three real-compiler regression tests passed on Java21. JVM calls/declarations now persist; Java consumes compiled Kotlin jar. Run PG mixed fixture. Next implement Kotlin exported ABI contracts and cross-repo baseline impact, source-level inline/suspend/generic mapping and module dependency topology. |
-| GRAPH-1 | Graphify graph and semantic symbol binding | PARTIALLY IMPLEMENTED | Graphify importer, binder, `GraphifyPostgresIT` | Unit importer/binder tests passed; run real CLI/PG test and mixed-symbol binding assertions. |
-| MCP-1 | Six authenticated protocol tools | PARTIALLY IMPLEMENTED | Shared IT individually calls all six tools | Prior accepted baseline covered impact; expanded service suite unexecuted. Run full Java21 CI. |
+| JVM-2 | Kotlin compiler method semantics, Java interop | PARTIALLY IMPLEMENTED | PARTIALLY IMPLEMENTED | `KotlinJvmSemanticAnalyzer`, compiler fixtures, mixed shared-library IT | Three real-compiler regression tests passed on Java21. JVM calls/declarations now persist; Java consumes compiled Kotlin jar. Run PG mixed fixture. Next implement Kotlin exported ABI contracts and cross-repo baseline impact, source-level inline/suspend/generic mapping and module dependency topology. |
+| GRAPH-1 | Graphify graph and semantic symbol binding | IMPLEMENTED AND INTEGRATION VERIFIED | Graphify importer, binder, `GraphifyPostgresIT` | CI a176f6e real CLI ingestion; mixed-symbol binding depth still open. |
+| MCP-1 | Six authenticated protocol tools | IMPLEMENTED AND E2E VERIFIED | Shared IT invokes all six tools + cross-team isolation | CI a176f6e authenticated Streamable HTTP; Kotlin-provider MCP impact pending next CI. |
 | SEC-1 | Team/repository isolation and adversarial cases | PARTIALLY IMPLEMENTED | API filter, scoped stores/search unit tests | Add cross-team protocol tests for every tool and re-onboarding ACLs. |
 | SEC-2 | Git/Maven SSRF, filesystem/subprocess protection | PARTIALLY IMPLEMENTED | Host allowlists, path guards, time/output limits | Add redirect/DNS/private-address and symlink adversarial tests; assess existing mirror origin validation. |
 | SEC-3 | Credential rotation, rate limits, audit | PARTIALLY IMPLEMENTED | Config API keys and webhook audit events | Implement rotation/key administration and rate limits; validate secret injection/rotation without logging secrets. |
@@ -45,7 +45,7 @@ Every row lists current evidence and the exact next action; rows remain incomple
 | OPS-3 | Metrics, correlations, alerts | PARTIALLY IMPLEMENTED | Actuator/Prometheus/log events | Add indexing/search/MCP/queue metrics and actionable alert rules. |
 | OPS-4 | Backup/restore/disaster recovery | PARTIALLY IMPLEMENTED | `BACKUP_AND_RECOVERY.md` | Execute restore/PITR drill and post-restore MCP smoke in isolated PostgreSQL environment. |
 | OPS-5 | Preflight/smoke/performance | PARTIALLY IMPLEMENTED | CI service preflights and deployment docs | Add runnable deployment smoke/preflight and measure representative capacity. |
-| VALID-1 | Java21/service acceptance | BLOCKED BY EXTERNAL DEPENDENCY | CI profile plus strict XML gates incl. retention | Java21 downloaded to ignored target directory; service suite blocked by missing Docker daemon/Desktop. Commit/push requires user authorization; do not do automatically. |
+| VALID-1 | Java21/service acceptance | IMPLEMENTED AND E2E VERIFIED | CI profile plus strict XML gates | CI a176f6e success: 199 unit + 4 PG ITs. Local Docker still unavailable; further gates via workflow_dispatch. |
 
 ## Validation and next execution
 
@@ -200,4 +200,14 @@ Workflow: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/4559
 | All four verify-* report gates | success |
 
 PostgreSQL service: `pgvector/pgvector:0.8.1-pg17`. Overall production decision remains **NO-GO** until remaining ledger items (hard purge, OS compiler sandbox, full ops drills, remaining contract/security depth) are closed; mandatory service-backed acceptance for this slice is now executed and green.
+
+### Kotlin provider multi-repo + hard purge slice — 2026-11-25
+
+Checkpoint before this slice: HEAD `7199b14` = remote; `a176f6e..7199b14` docs-only; green CI https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45590165866.
+
+Implemented locally (pending push/CI):
+- Kotlin provider fixture `kotlin-common-library` with K→K, J→K consumers (pinned 1.0) and upgraded 2.0 consumer excluded; ABI baseline→head removals; MCP expects 3 impacts; CI gate requires 2 SharedLibraryImpactPostgresIT cases.
+- Authorized hard purge (`DELETE ...?purge=true`), mirror deletion, Zoekt reconcile helpers, permanent-failure job unit test, GenerationRetentionPostgresIT purge/reclaim assertions.
+
+Local Java21 suite: **207 passed, 0 failures/errors/skips**. PG Kotlin-provider IT and purge PG assertions require next CI dispatch.
 

@@ -340,6 +340,174 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
 """,Boolean.class,consumerA,dependencyCommit(consumerA))));
     }
 
+
+    @Test
+    void indexesKotlinProviderPersistsAbiAndReturnsExactCrossLanguageImpactThroughMcp() throws Exception {
+        assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
+
+        Path artifactRepository = ROOT.resolve("maven-repository");
+        publishKotlinLibraryArtifact(artifactRepository, "1.0", kotlinLibrarySourceV1());
+        publishKotlinLibraryArtifact(artifactRepository, "2.0", kotlinLibrarySourceV2());
+
+        Path providerSource = ROOT.resolve("git-sources/kotlin-common-library");
+        createGitRepository(providerSource, kotlinLibraryFiles("1.0", kotlinLibrarySourceV1()));
+        onboard("kotlin-common-library", providerSource, "LIBRARY");
+
+        Path kotlinPinnedSource = ROOT.resolve("git-sources/kotlin-consumer-k");
+        createGitRepository(kotlinPinnedSource, kotlinConsumerFiles("1.0", true, "KotlinPinned",
+                "fun call(amount: org.acme.kotlin.Amount)=amount.convert(\"x\")"));
+        onboard("kotlin-consumer-k", kotlinPinnedSource, "SERVICE");
+
+        Path javaPinnedSource = ROOT.resolve("git-sources/kotlin-consumer-j");
+        createGitRepository(javaPinnedSource, kotlinConsumerFiles("1.0", false, "JavaPinned",
+                "return amount.convert(\"x\") + org.acme.kotlin.AmountKt.entryPoint() + org.acme.kotlin.AmountJavaPeer.peer();"));
+        onboard("kotlin-consumer-j", javaPinnedSource, "SERVICE");
+
+        Path kotlinUpgradedSource = ROOT.resolve("git-sources/kotlin-consumer-ok");
+        createGitRepository(kotlinUpgradedSource, kotlinConsumerFiles("2.0", true, "KotlinUpgraded",
+                "fun call(amount: org.acme.kotlin.Amount)=amount.convert(1)"));
+        onboard("kotlin-consumer-ok", kotlinUpgradedSource, "SERVICE");
+
+        indexAndAwait("kotlin-consumer-k");
+        indexAndAwait("kotlin-consumer-j");
+        indexAndAwait("kotlin-consumer-ok");
+        assertEquals(0, jdbc.queryForObject("SELECT count(*) FROM contract_links", Integer.class),
+                "consumer relationships must remain unresolved before the Kotlin provider is indexed");
+        indexAndAwait("kotlin-common-library");
+
+        UUID provider = repositories.id("Fixture", "kotlin-common-library");
+        UUID kotlinPinned = repositories.id("Fixture", "kotlin-consumer-k");
+        UUID javaPinned = repositories.id("Fixture", "kotlin-consumer-j");
+        UUID kotlinUpgraded = repositories.id("Fixture", "kotlin-consumer-ok");
+        UUID providerV1Generation = repositories.currentGeneration(provider).orElseThrow();
+        UUID kotlinPinnedGeneration = repositories.currentGeneration(kotlinPinned).orElseThrow();
+        UUID javaPinnedGeneration = repositories.currentGeneration(javaPinned).orElseThrow();
+        UUID kotlinUpgradedGeneration = repositories.currentGeneration(kotlinUpgraded).orElseThrow();
+        String kotlinPinnedCommit = repositories.currentCommit(kotlinPinned).orElseThrow();
+        String javaPinnedCommit = repositories.currentCommit(javaPinned).orElseThrow();
+        String kotlinUpgradedCommit = repositories.currentCommit(kotlinUpgraded).orElseThrow();
+
+        assertTrue(jdbc.queryForObject("""
+SELECT EXISTS(SELECT 1 FROM contracts WHERE generation_id=? AND contract_type='MAVEN' AND role='EXPORT'
+ AND canonical_key='maven:org.acme:kotlin-common-library'
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.Amount#convert(Ljava/lang/String;)Ljava/lang/String;"]'::jsonb
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.Amount#convert(I)Ljava/lang/String;"]'::jsonb
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.Amount#<init>(Ljava/lang/String;)V"]'::jsonb
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.Amount#getLabel()Ljava/lang/String;"]'::jsonb
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.AmountKt#decorate(Ljava/lang/String;)Ljava/lang/String;"]'::jsonb
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.AmountKt#entryPoint()Ljava/lang/String;"]'::jsonb
+ AND metadata->>'kotlinSourceCompatibility'='UNKNOWN'
+ AND (metadata->>'kotlinMetadataComplete')::boolean=true)
+""", Boolean.class, providerV1Generation),
+                "Kotlin provider Maven export must persist exported ABI for methods, constructors, accessors, extensions and top-level functions");
+
+        assertCallPersisted(kotlinPinned, kotlinPinnedGeneration, kotlinPinnedCommit,
+                "org.acme.kotlin.Amount#convert(java.lang.String)", "src/main/kotlin/app/KotlinPinned.kt");
+        assertCallPersisted(javaPinned, javaPinnedGeneration, javaPinnedCommit,
+                "org.acme.kotlin.Amount#convert(java.lang.String)", "src/main/java/app/JavaPinned.java");
+        assertCallPersisted(javaPinned, javaPinnedGeneration, javaPinnedCommit,
+                "org.acme.kotlin.AmountKt#entryPoint()", "src/main/java/app/JavaPinned.java");
+        assertCallPersisted(javaPinned, javaPinnedGeneration, javaPinnedCommit,
+                "org.acme.kotlin.AmountJavaPeer#peer()", "src/main/java/app/JavaPinned.java");
+        assertCallPersisted(kotlinUpgraded, kotlinUpgradedGeneration, kotlinUpgradedCommit,
+                "org.acme.kotlin.Amount#convert(int)", "src/main/kotlin/app/KotlinUpgraded.kt");
+        assertEquals(1, jdbc.queryForObject("""
+SELECT count(*) FROM semantic_call_sites WHERE generation_id=? AND file_path='src/main/kotlin/app/KotlinPinned.kt'
+ AND declaring_type='org.acme.kotlin.Amount' AND extractor_version='kotlin-compiler-jvm' AND resolution_status='RESOLVED'
+ AND dependency_artifact='org.acme:kotlin-common-library:1.0' AND dependency_version='1.0'
+""", Integer.class, kotlinPinnedGeneration));
+        assertEquals("1.0", dependencyVersion(kotlinPinned));
+        assertEquals("1.0", dependencyVersion(javaPinned));
+        assertEquals("2.0", dependencyVersion(kotlinUpgraded));
+        assertTrue(jdbc.queryForObject("""
+SELECT count(*) FROM maven_module_dependencies d JOIN maven_module_classpaths cp
+ ON cp.generation_id=d.generation_id AND cp.module_path=d.module_path
+WHERE cp.repository_id=? AND d.group_id='org.acme' AND d.artifact_id='kotlin-common-library'
+ AND d.version='1.0' AND d.scope='compile' AND d.artifact_path IS NOT NULL AND length(d.artifact_sha256)=64
+""", Integer.class, kotlinPinned) > 0);
+
+        write(providerSource, "pom.xml", kotlinLibraryPom("2.0"));
+        write(providerSource, "src/main/kotlin/org/acme/kotlin/Amount.kt", kotlinLibrarySourceV2());
+        write(providerSource, "src/main/java/org/acme/kotlin/AmountJavaPeer.java", amountJavaPeerSource());
+        try (Git providerGit = Git.open(providerSource.toFile())) { commit(providerGit, "publish kotlin-common-library 2.0"); }
+        indexAndAwait("kotlin-common-library");
+
+        UUID providerV2Generation = repositories.currentGeneration(provider).orElseThrow();
+        assertNotEquals(providerV1Generation, providerV2Generation);
+        assertTrue(jdbc.queryForObject("""
+SELECT EXISTS(SELECT 1 FROM contracts WHERE generation_id=? AND contract_type='MAVEN' AND role='EXPORT'
+ AND canonical_key='maven:org.acme:kotlin-common-library'
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.Amount#convert(Ljava/math/BigDecimal;)Ljava/lang/String;"]'::jsonb
+ AND metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.Amount#convert(I)Ljava/lang/String;"]'::jsonb
+ AND NOT metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.Amount#convert(Ljava/lang/String;)Ljava/lang/String;"]'::jsonb
+ AND NOT metadata->'kotlinJvmAbi' @> '["org.acme.kotlin.AmountKt#entryPoint()Ljava/lang/String;"]'::jsonb
+ AND metadata->>'kotlinSourceCompatibility'='UNKNOWN')
+""", Boolean.class, providerV2Generation),
+                "head generation must record binary removals without claiming Kotlin source compatibility");
+
+        JsonNode mcpResult = mcpImpactAnalysisOnly("Fixture/kotlin-common-library");
+        assertFalse(mcpResult.path("isError").asBoolean(false), mcpResult.toString());
+        JsonNode payload = structuredToolPayload(mcpResult);
+        assertTrue(payload.has("semanticMethodImpacts"), payload.toString());
+        assertFalse(payload.path("blocking").asBoolean(true), payload.toString());
+        JsonNode impacts = payload.path("semanticMethodImpacts");
+        // convert(String) removal hits Kotlin+Java pinned callers; entryPoint() removal hits the Java caller.
+        assertEquals(3, impacts.size(), impacts.toString());
+        JsonNode kotlinConvertImpact = null, javaConvertImpact = null, javaEntryImpact = null;
+        for (JsonNode impact : impacts) {
+            String file = impact.path("filePath").asText();
+            String oldSig = impact.path("oldSignature").asText("");
+            String invocation = impact.path("invocation").asText("");
+            if ("src/main/kotlin/app/KotlinPinned.kt".equals(file)) kotlinConvertImpact = impact;
+            if ("src/main/java/app/JavaPinned.java".equals(file)
+                    && (oldSig.contains("convert(java.lang.String)") || invocation.contains("convert")))
+                javaConvertImpact = impact;
+            if ("src/main/java/app/JavaPinned.java".equals(file)
+                    && (oldSig.contains("entryPoint") || invocation.contains("entryPoint")))
+                javaEntryImpact = impact;
+        }
+        assertNotNull(kotlinConvertImpact, "Kotlin→Kotlin convert impact missing: " + impacts);
+        assertNotNull(javaConvertImpact, "Java→Kotlin convert impact missing: " + impacts);
+        assertNotNull(javaEntryImpact, "Java→Kotlin top-level entryPoint impact missing: " + impacts);
+        for (JsonNode impact : List.of(kotlinConvertImpact, javaConvertImpact, javaEntryImpact)) {
+            assertEquals("fixture/kotlin-common-library", impact.path("providerRepository").asText());
+            assertEquals("org.acme:kotlin-common-library:1.0", impact.path("dependencyArtifact").asText());
+            assertEquals("1.0", impact.path("dependencyVersion").asText());
+            assertEquals("POTENTIAL_UPGRADE_IMPACT", impact.path("classification").asText());
+            assertEquals("CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN", impact.path("currentCompatibility").asText());
+            assertEquals("DIRECT", impact.path("relationship").asText());
+            assertEquals("RESOLVED", impact.path("resolutionState").asText());
+            assertEquals("CURRENT", impact.path("freshness").asText());
+            assertFalse(impact.path("blocking").asBoolean(true));
+            assertTrue(impact.path("providerOldApiSignature").asText().contains("KOTLIN_BINARY"));
+            assertTrue(impact.path("providerNewApiSignature").asText().contains("KOTLIN_BINARY"));
+            assertTrue(impact.path("provenance").asText().contains("KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"));
+            assertTrue(impact.path("providerCommit").asText().matches("[0-9a-f]{40}"));
+            assertTrue(impact.path("consumerCommit").asText().matches("[0-9a-f]{40}"));
+        }
+        assertEquals("fixture/kotlin-consumer-k", kotlinConvertImpact.path("consumerRepository").asText());
+        assertEquals("PUBLISHED_KOTLIN_JVM_EDGE", kotlinConvertImpact.path("analysisCompleteness").asText());
+        assertTrue(kotlinConvertImpact.path("provenance").asText().contains("KOTLIN_COMPILER_JVM"));
+        assertEquals("fixture/kotlin-consumer-j", javaConvertImpact.path("consumerRepository").asText());
+        assertTrue(javaConvertImpact.path("provenance").asText().contains("JAVAPARSER_SYMBOL_SOLVER"));
+        assertTrue(javaConvertImpact.path("provenance").asText().contains("KOTLIN_ABI_BINARY")
+                        || javaConvertImpact.path("analysisCompleteness").asText().contains("KOTLIN"),
+                javaConvertImpact.toString());
+        assertFalse(impacts.toString().contains("kotlin-consumer-ok"));
+        assertFalse(impacts.toString().contains("common-library"));
+
+        String persistedImpact = jdbc.queryForObject(
+                "SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1",
+                String.class, TEAM, provider);
+        assertNotNull(persistedImpact);
+        JsonNode persisted = json.readTree(persistedImpact);
+        assertEquals(3, persisted.path("semanticMethodImpacts").size(), persistedImpact);
+        assertTrue(persistedImpact.contains("src/main/kotlin/app/KotlinPinned.kt"));
+        assertTrue(persistedImpact.contains("src/main/java/app/JavaPinned.java"));
+        assertTrue(persistedImpact.contains("KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"));
+        assertFalse(persistedImpact.contains("kotlin-consumer-ok"));
+    }
+
     private void assertCallPersisted(UUID repository, UUID generation, String commit, String targetKey, String path) {
         Integer rows = jdbc.queryForObject("""
 SELECT count(*) FROM semantic_call_sites site
@@ -368,7 +536,7 @@ SELECT count(*) FROM semantic_call_sites site JOIN semantic_symbols caller ON ca
  AND caller.repository_id=site.repository_id AND caller.generation_id=site.generation_id
  AND caller.commit_sha=site.commit_sha
 WHERE site.repository_id=? AND site.generation_id=? AND site.commit_sha=?
-AND site.file_path=? AND caller.symbol_key LIKE 'app.Consumer%#call(%'
+AND site.file_path=? AND caller.symbol_key LIKE 'app.%#call(%'
 """, Integer.class, repository, generation, commit, path);
         assertTrue(caller != null && caller > 0, "missing persisted canonical caller method for " + path);
     }
@@ -708,6 +876,125 @@ FROM semantic_call_sites WHERE id=?
         Files.writeString(pomFile,pom(version,null).replace("fixture","org.acme"));
         writeChecksumSidecars(jarFile);
         writeChecksumSidecars(pomFile);
+    }
+
+
+    private static String kotlinLibraryPom(String version) {
+        return "<project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId>"
+                + "<artifactId>kotlin-common-library</artifactId><version>"+version+"</version>"
+                + "<packaging>jar</packaging></project>";
+    }
+
+    private static String kotlinLibrarySourceV1() {
+        return """
+                package org.acme.kotlin
+                class Amount(val label: String) {
+                    fun convert(value: String): String = value
+                    fun convert(value: Int): String = value.toString()
+                }
+                fun String.decorate(): String = this + "!"
+                fun entryPoint(): String = "ok"
+                """;
+    }
+
+    private static String kotlinLibrarySourceV2() {
+        return """
+                package org.acme.kotlin
+                class Amount(val label: Int) {
+                    fun convert(value: java.math.BigDecimal): String = value.toString()
+                    fun convert(value: Int): String = value.toString()
+                }
+                """;
+    }
+
+    private static String amountJavaPeerSource() {
+        return "package org.acme.kotlin;\npublic class AmountJavaPeer {\n  public static String peer() { return \"peer\"; }\n}\n";
+    }
+
+    private static Map<String,String> kotlinLibraryFiles(String version, String kotlinSource) {
+        var files = new java.util.LinkedHashMap<String,String>();
+        files.put("pom.xml", kotlinLibraryPom(version));
+        files.put("src/main/kotlin/org/acme/kotlin/Amount.kt", kotlinSource);
+        files.put("src/main/java/org/acme/kotlin/AmountJavaPeer.java", amountJavaPeerSource());
+        return Map.copyOf(files);
+    }
+
+    private static Map<String,String> kotlinConsumerFiles(String version, boolean kotlin, String className, String body) {
+        var files = new java.util.LinkedHashMap<String,String>();
+        files.put("pom.xml", "<project><modelVersion>4.0.0</modelVersion><groupId>fixture</groupId>"
+                + "<artifactId>kotlin-consumer</artifactId><version>1.0</version>"
+                + "<dependencies><dependency><groupId>org.acme</groupId>"
+                + "<artifactId>kotlin-common-library</artifactId><version>"+version+"</version>"
+                + "</dependency></dependencies></project>");
+        if (kotlin) {
+            files.put("src/main/kotlin/app/"+className+".kt",
+                    "package app\nclass "+className+" { "+body+" }\n");
+        } else {
+            files.put("src/main/java/app/"+className+".java",
+                    "package app;\npublic class "+className+" {\n  public String call(org.acme.kotlin.Amount amount) {\n    "+body+"\n  }\n}\n");
+        }
+        return Map.copyOf(files);
+    }
+
+    private static void publishKotlinLibraryArtifact(Path repository, String version, String kotlinSource) throws Exception {
+        Path artifactDir = repository.resolve("org/acme/kotlin-common-library").resolve(version);
+        Files.createDirectories(artifactDir);
+        Path work = ROOT.resolve("compiled-kotlin-library").resolve(version);
+        Path classes = work.resolve("classes");
+        if (Files.exists(work)) try (var paths = Files.walk(work)) {
+            paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try { Files.deleteIfExists(path); } catch (Exception e) { throw new IllegalStateException(e); }
+            });
+        }
+        Files.createDirectories(classes);
+        Path kotlinFile = work.resolve("Amount.kt");
+        Path javaFile = work.resolve("AmountJavaPeer.java");
+        Files.writeString(kotlinFile, kotlinSource);
+        Files.writeString(javaFile, amountJavaPeerSource());
+        String compiler = System.getenv().getOrDefault("KOTLIN_COMPILER",
+                Path.of("target/kotlinc/bin/kotlinc").toAbsolutePath().toString());
+        var command = new ProcessBuilder(compiler, "-jvm-target", "21", "-d", classes.toString(),
+                kotlinFile.toAbsolutePath().toString());
+        // kotlinc's launcher treats KOTLIN_COMPILER as its Java main class; never inherit it.
+        command.environment().keySet().removeIf(key -> Set.of(
+                "KOTLIN_COMPILER","KOTLIN_OPTS","JAVA_TOOL_OPTIONS","JDK_JAVA_OPTIONS","BASH_ENV",
+                "DATABASE_PASSWORD","DATABASE_URL","GIT_ACCESS_TOKEN").contains(key));
+        command.redirectErrorStream(true);
+        Process process = command.start();
+        String diagnostic = new String(process.getInputStream().readAllBytes());
+        assertTrue(process.waitFor(120, java.util.concurrent.TimeUnit.SECONDS), "kotlinc timed out publishing "+version);
+        assertEquals(0, process.exitValue(), "kotlinc failed publishing kotlin-common-library:"+version+": "+diagnostic);
+        assertEquals(0, ToolProvider.getSystemJavaCompiler().run(null, null, null,
+                "-d", classes.toString(), javaFile.toAbsolutePath().toString()),
+                "javac failed publishing AmountJavaPeer for "+version);
+        Path jarFile = artifactDir.resolve("kotlin-common-library-"+version+".jar");
+        try (var jar = new java.util.jar.JarOutputStream(Files.newOutputStream(jarFile));
+             var paths = Files.walk(classes)) {
+            for (Path file : paths.filter(Files::isRegularFile).toList()) {
+                jar.putNextEntry(new java.util.jar.JarEntry(classes.relativize(file).toString().replace('\\','/')));
+                Files.copy(file, jar);
+                jar.closeEntry();
+            }
+        }
+        Path pomFile = artifactDir.resolve("kotlin-common-library-"+version+".pom");
+        Files.writeString(pomFile, kotlinLibraryPom(version));
+        writeChecksumSidecars(jarFile);
+        writeChecksumSidecars(pomFile);
+    }
+
+    private JsonNode mcpImpactAnalysisOnly(String repository) throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        URI endpoint = URI.create("http://localhost:"+port+"/mcp");
+        Object initialize = Map.of("jsonrpc","2.0","id",1,"method","initialize","params",Map.of(
+                "protocolVersion","2025-03-26","capabilities",Map.of(),
+                "clientInfo",Map.of("name","postgres-kotlin-impact-it","version","1.0")));
+        JsonNode initialized = post(client, endpoint, null, initialize);
+        assertTrue(initialized.path("result").has("serverInfo"), initialized.toString());
+        String session = lastResponse.headers().firstValue("Mcp-Session-Id").orElse(null);
+        assertNotNull(session, "Streamable HTTP initialize must return a session identifier");
+        post(client, endpoint, session, Map.of("jsonrpc","2.0","method","notifications/initialized"));
+        return post(client, endpoint, session, Map.of("jsonrpc","2.0","id",2,"method","tools/call","params",
+                Map.of("name","impact_analysis","arguments",Map.of("contract","","repository",repository))));
     }
 
     private static void writeChecksumSidecars(Path artifact) throws Exception {
