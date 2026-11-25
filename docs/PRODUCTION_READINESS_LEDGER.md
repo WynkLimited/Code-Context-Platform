@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `440a4ef903f59445ae55181447744143d467dfbe` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45650148978 |
+| Last green mandatory CI SHA | `f0a36adb320429a7752944f742de49a98567cc74` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45650821728 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -26,9 +26,8 @@ Status vocabulary (this ledger):
 **Next executable actions (priority):**
 
 1. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
-2. Webhook durable PG concurrency (SEC-WH).
-3. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
-4. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
+2. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
+3. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
 
 ---
 
@@ -96,7 +95,7 @@ Status vocabulary (this ledger):
 | SEC-ACL | Cross-team tool isolation | VERIFIED_PRODUCTION_READY | Shared IT all six tools |
 | SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Loopback/metadata Maven host rejection unit green; HTTP redirect residual needs NetworkPolicy |
 | SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | Env scrub + kotlinc allowlist; cgroup/seccomp BLOCKED pending OS |
-| SEC-WH | Webhook replay + timestamp freshness | PARTIALLY_IMPLEMENTED | Delivery-id replay + head_commit age gate @ ab3dcbb CI; durable PG concurrency open |
+| SEC-WH | Webhook replay + timestamp freshness | VERIFIED_PRODUCTION_READY | HMAC + delivery-id PG dedupe + head_commit age @ f0a36ad |
 
 ### Operations
 
