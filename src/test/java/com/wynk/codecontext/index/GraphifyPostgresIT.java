@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Exercises the pinned Graphify CLI and PostgreSQL graph import path against real source files. */
 @SpringBootTest(classes = CodeContextApplication.class)
 @ActiveProfiles("test")
+@org.springframework.test.annotation.DirtiesContext(classMode = org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 class GraphifyPostgresIT {
     private static final String ROOT = System.getProperty("java.io.tmpdir") + "/ccp-graphify-it";
 

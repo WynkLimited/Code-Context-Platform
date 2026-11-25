@@ -22,7 +22,7 @@ public class ZoektIndexer {
         String generationName=repository.key()+"@"+generation;
         json.writeValue(metadata.toFile(),new RepoMetadata(generationName,"Code Context indexed generation"));
         Path log=index.resolve("index-"+repository.id()+".log");
-        Process process=new ProcessBuilder(List.of(config.zoekt().indexer(),"-index",index.toString(),"-branches","HEAD","-incremental","-meta",metadata.toString(),checkout.toString()))
+        Process process=new ProcessBuilder(List.of(config.zoekt().indexer(),"-index",index.toString(),"-branches",repository.defaultBranch(),"-incremental","-meta",metadata.toString(),checkout.toString()))
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         boolean done=process.waitFor(Duration.ofMinutes(20).toMillis(),TimeUnit.MILLISECONDS);
         if(!done){process.destroyForcibly();throw new IOException("Zoekt indexing exceeded 20 minute limit");}
