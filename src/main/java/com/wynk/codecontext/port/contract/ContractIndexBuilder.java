@@ -90,6 +90,14 @@ public class ContractIndexBuilder {
                 .comparing(ContractImport::canonicalKey)
                 .thenComparing(i -> i.sourceFile() == null ? "" : i.sourceFile()));
 
+        // Gradle dependency resolution is not implemented. Record an explicit coverage gap so
+        // impact_analysis stays PARTIAL rather than silently treating Gradle repos as complete.
+        if (hasGradleBuild(repository) && !hasMavenPom(repository)) {
+            extractorVersions.putIfAbsent("gradle-dependencies", "unavailable:NOT_IMPLEMENTED");
+            LOG.warnf("contract.index.gradle_unsupported repo=%s — dependency resolution coverage reduced",
+                    repository.fullName());
+        }
+
         var index = new ContractIndex(
                 repository.owner(),
                 repository.repository(),
@@ -123,6 +131,17 @@ public class ContractIndexBuilder {
         }
         return enabledExtractorIds.stream()
                 .anyMatch(id -> id != null && id.strip().toLowerCase(Locale.ROOT).equals(extractor.id()));
+    }
+
+    private static boolean hasGradleBuild(RepositoryContext repository) {
+        return java.nio.file.Files.isRegularFile(repository.root().resolve("build.gradle"))
+                || java.nio.file.Files.isRegularFile(repository.root().resolve("build.gradle.kts"))
+                || java.nio.file.Files.isRegularFile(repository.root().resolve("settings.gradle"))
+                || java.nio.file.Files.isRegularFile(repository.root().resolve("settings.gradle.kts"));
+    }
+
+    private static boolean hasMavenPom(RepositoryContext repository) {
+        return java.nio.file.Files.isRegularFile(repository.root().resolve("pom.xml"));
     }
 
     private static String shortSha(String sha) {
