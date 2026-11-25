@@ -17,6 +17,7 @@
 ## Execution sandbox
 
 - App-level path/symlink guards and process timeouts exist.
+- `SubprocessHardening.scrubEnvironment` strips credential-bearing env vars; kotlinc uses an allowlist rebuild.
 - OS-level cgroup/seccomp sandbox for kotlinc/Maven/Graphify: **BLOCKED** pending host capability.
 
 ## Secrets

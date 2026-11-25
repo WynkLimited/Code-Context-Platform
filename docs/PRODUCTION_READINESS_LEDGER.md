@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `7b65acd2d4054ce265a6864c4f4b0c56f4370e9d` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45645936895 |
+| Last green mandatory CI SHA | `e65ddaa2261a3d4aa9e25b001ed00330dc0bc433` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45647208095 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
