@@ -14,7 +14,7 @@ Honest inventory of supported vs incomplete behaviour. Do not treat undocumented
 
 ## Partial
 
-- OpenAPI nested `$ref` flattening (same-document `#/` only; external file `$ref` not resolved)
+- OpenAPI nested `$ref` flattening + same-repo relative file `$ref` (remote URL `$ref` rejected)
 - Kafka Avro `fields{}` evolution (unit-level; multi-repo MCP fixture pending)
 - Contract ambiguity demotion (SQL refresher; contention PG proof pending)
 - Proposed-change classification (signatures only; no full PR diff)
