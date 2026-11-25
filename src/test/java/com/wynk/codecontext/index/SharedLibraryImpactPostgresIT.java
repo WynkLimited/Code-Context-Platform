@@ -310,6 +310,15 @@ class SharedLibraryImpactPostgresIT {
         assertTrue(contractCandidates.toString().contains("\"name\":\"consumer-service-b\"")
                         && contractCandidates.toString().contains("kafka:order-events"),
                 "Kafka consumer evidence must identify Consumer B: "+contractCandidates);
+        JsonNode changes = payload.path("changes");
+        assertTrue(changes.toString().contains("rest:GET:/catalog/{id}"),
+                "OpenAPI nested $ref schema evolution must appear in MCP changes: " + changes);
+        assertTrue(changes.toString().contains("kafka:inventory-events"),
+                "Avro fields{} evolution must appear in MCP changes: " + changes);
+        assertTrue(changes.toString().contains("BREAKING") || changes.toString().contains("breaking")
+                        || changes.toString().contains("ENDPOINT_SIGNATURE_CHANGED")
+                        || changes.toString().contains("SCHEMA"),
+                "schema evolution should classify a detectable contract change: " + changes);
 
         String persistedImpact = jdbc.queryForObject("SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1", String.class, TEAM, provider);
         assertNotNull(persistedImpact);
