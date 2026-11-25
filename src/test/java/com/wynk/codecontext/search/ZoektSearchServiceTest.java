@@ -45,7 +45,7 @@ class ZoektSearchServiceTest {
             assertTrue(query.contains("repo:^fixture/common\\.library@" + GENERATION_ID + "$"), query);
             assertEquals(50, requestBody.path("Opts").path("MaxDocDisplayCount").asInt());
             assertEquals(200, requestBody.path("Opts").path("MaxMatchDisplayCount").asInt());
-        }).andRespond(withSuccess("{\"Files\":[{\"FileName\":\"src/Main.java\"}]}", MediaType.APPLICATION_JSON));
+        }).andRespond(withSuccess("{\"Result\":{\"Files\":[{\"FileName\":\"src/Main.java\"}]}}", MediaType.APPLICATION_JSON));
 
         var service = new ZoektSearchService(properties(), repositories(), JsonMapper.builder().build(), builder);
         authenticate("team-a");
@@ -114,6 +114,26 @@ class ZoektSearchServiceTest {
             context.refresh();
             org.junit.jupiter.api.Assertions.assertNotNull(context.getBean(ZoektSearchService.class));
         }
+    }
+
+    @Test
+    void preventsQueryGroupEscapeFromAuthorizedRepositoryScope() {
+        var service=new ZoektSearchService(properties(),repositories(),JsonMapper.builder().build());
+        authenticate("team-a");
+        for(String query:List.of("Money) repo:foreign or (Money", "Money) or repo:foreign (", "\"unterminated", "trailing\\"))
+            assertThrows(IllegalArgumentException.class,()->service.search(query),query);
+    }
+
+    @Test
+    void preservesEscapedAndQuotedRegexParentheses() {
+        var builder=RestClient.builder().baseUrl("http://localhost:6070");
+        var server=MockRestServiceServer.bindTo(builder).build();
+        server.expect(request->assertEquals("POST",request.getMethod().name()))
+                .andRespond(withSuccess("{\"Result\":{}}",MediaType.APPLICATION_JSON));
+        var service=new ZoektSearchService(properties(),repositories(),JsonMapper.builder().build(),builder);
+        authenticate("team-a");
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(()->service.search("regex:money\\.convert\\( or regex:\"[(]quoted[)]\""));
+        server.verify();
     }
 
     private static void authenticate(String team) {

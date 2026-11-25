@@ -225,7 +225,7 @@ class SharedLibraryImpactPostgresIT {
         UUID providerV2Generation = repositories.currentGeneration(provider).orElseThrow();
         assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV2Generation),
                 "Zoekt must expose the indexed provider v2 generation after publication");
-        assertFalse(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
+        assertFalse(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation,false),
                 "obsolete Zoekt generation must be deleted after replacement publication");
         assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=?", Integer.class, provider));
         assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=? AND published", Integer.class, provider));
@@ -738,15 +738,29 @@ FROM semantic_call_sites WHERE id=?
     }
 
     private boolean zoektGenerationHasMatches(String repository,UUID generation)throws Exception {
+        return zoektGenerationHasMatches(repository,generation,true);
+    }
+
+    private boolean zoektGenerationHasMatches(String repository,UUID generation,boolean expected)throws Exception {
         String zoektUrl=System.getenv().getOrDefault("ZOEKT_WEB_SERVER","http://localhost:6070");
         String query="convert repo:^"+repository.replace(".","\\.")+"@"+generation+"$";
         String request=json.writeValueAsString(Map.of("Q",query,"Opts",Map.of("MaxDocDisplayCount",10)));
         HttpRequest httpRequest=HttpRequest.newBuilder(URI.create(zoektUrl+"/api/search"))
                 .header(HttpHeaders.CONTENT_TYPE,MediaType.APPLICATION_JSON_VALUE)
                 .POST(HttpRequest.BodyPublishers.ofString(request)).build();
-        HttpResponse<String> response=HttpClient.newHttpClient().send(httpRequest,HttpResponse.BodyHandlers.ofString());
-        assertEquals(200,response.statusCode(),"Zoekt generation verification failed: "+response.body());
-        return json.readTree(response.body()).path("Files").isArray()&&!json.readTree(response.body()).path("Files").isEmpty();
+        var client=HttpClient.newHttpClient();
+        boolean found=false;
+        // Shard publication/removal is observed asynchronously by the real Zoekt watcher.
+        for(int attempt=0;attempt<60;attempt++) {
+            HttpResponse<String> response=client.send(httpRequest,HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,response.statusCode(),"Zoekt generation verification failed: "+response.body());
+            JsonNode result=json.readTree(response.body()).path("Result");
+            assertTrue(result.isObject(),"Zoekt must return the pinned API Result envelope: "+response.body());
+            found=result.path("Files").isArray()&&!result.path("Files").isEmpty();
+            if(found==expected)return found;
+            Thread.sleep(250);
+        }
+        return found;
     }
 
     private void assertSearchResponse(JsonNode toolResponse,String description)throws Exception {

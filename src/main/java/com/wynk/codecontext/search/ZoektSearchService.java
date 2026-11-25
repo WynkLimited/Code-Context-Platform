@@ -70,7 +70,9 @@ public class ZoektSearchService {
                                 if (bytes.length > MAX_RESPONSE_BYTES) {
                                     throw new IllegalStateException("Zoekt response exceeded the 2 MiB limit");
                                 }
-                                return bytes.length == 0 ? json.createObjectNode() : json.readTree(bytes);
+                                JsonNode result = bytes.length == 0 ? json.createObjectNode() : json.readTree(bytes).path("Result");
+                                if(!result.isObject())throw new IllegalStateException("Zoekt response is missing Result object");
+                                return result;
                             }
                         });
                 var entry = results.addObject();
@@ -104,6 +106,21 @@ public class ZoektSearchService {
         if (query.chars().anyMatch(Character::isISOControl)) {
             throw new IllegalArgumentException("search query must not contain control characters");
         }
+        // User syntax must remain inside the group to which the authorized repo filter is added.
+        int depth=0;boolean quoted=false;
+        for(int i=0;i<query.length();i++) {
+            char c=query.charAt(i);
+            if(c=='\\') {
+                if(++i==query.length())throw new IllegalArgumentException("search query has a trailing escape");
+                continue;
+            }
+            if(c=='"'){quoted=!quoted;continue;}
+            if(!quoted) {
+                if(c=='(')depth++;
+                if(c==')'&&--depth<0)throw new IllegalArgumentException("search query has unbalanced groups");
+            }
+        }
+        if(quoted||depth!=0)throw new IllegalArgumentException("search query has unbalanced quotes or groups");
     }
 
     private static String regexLiteral(String value) {
