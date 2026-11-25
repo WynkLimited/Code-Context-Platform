@@ -28,6 +28,59 @@ public record KotlinAbiSurface(List<Member> members,boolean metadataComplete,Lis
         // Unchanged JVM signatures do not prove Kotlin source compatibility (nullability/inline/defaults).
         return new Difference(List.copyOf(removed),List.copyOf(reduced),false);
     }
+
+    /** Lines persisted on Maven contracts as {@code KOTLIN_BINARY owner#name+descriptor}. */
+    public static final String BINARY_SIGNATURE_PREFIX = "KOTLIN_BINARY ";
+
+    /** Maps a metadata binary key to the semantic symbol key used by V5 call edges. */
+    public static String toSemanticSymbolKey(String binaryKey) {
+        if(binaryKey==null||binaryKey.isBlank())return null;
+        int hash=binaryKey.indexOf('#');
+        if(hash<=0||hash>=binaryKey.length()-1)return null;
+        String owner=binaryKey.substring(0,hash);
+        String rest=binaryKey.substring(hash+1);
+        int paren=rest.indexOf('(');
+        if(paren<0)return null;
+        String name=rest.substring(0,paren);
+        String descriptor=rest.substring(paren);
+        try {
+            Type[] args=Type.getArgumentTypes(descriptor);
+            String params=String.join(",",Arrays.stream(args).map(Type::getClassName).toList());
+            if(name.equals("<init>")) {
+                int dot=owner.lastIndexOf('.');
+                name=dot<0?owner:owner.substring(dot+1);
+            }
+            return owner+"#"+name+"("+params+")";
+        } catch(RuntimeException invalid) { return null; }
+    }
+
+    /** Binary keys removed between two Maven signatures that embed {@link #BINARY_SIGNATURE_PREFIX} lines. */
+    public static List<String> removedBinaryKeys(String beforeSignature,String afterSignature) {
+        Set<String> after=binaryKeys(afterSignature);
+        var removed=new TreeSet<String>();
+        for(String key:binaryKeys(beforeSignature))if(!after.contains(key))removed.add(key);
+        return List.copyOf(removed);
+    }
+
+    /** Semantic symbol keys corresponding to removed Kotlin binary members. */
+    public static List<String> removedSemanticKeys(String beforeSignature,String afterSignature) {
+        var keys=new LinkedHashSet<String>();
+        for(String binary:removedBinaryKeys(beforeSignature,afterSignature)) {
+            String semantic=toSemanticSymbolKey(binary);
+            if(semantic!=null)keys.add(semantic);
+        }
+        return List.copyOf(keys);
+    }
+
+    static Set<String> binaryKeys(String signature) {
+        var keys=new LinkedHashSet<String>();
+        if(signature==null||signature.isBlank())return keys;
+        for(String line:signature.split("\\R")) {
+            String trimmed=line.strip();
+            if(trimmed.startsWith(BINARY_SIGNATURE_PREFIX))keys.add(trimmed.substring(BINARY_SIGNATURE_PREFIX.length()).strip());
+        }
+        return keys;
+    }
     public static KotlinAbiSurface read(Path jar) throws Exception {
         var members=new ArrayList<Member>();var complete=new boolean[]{true};
         try(var archive=new JarFile(jar.toFile())) {

@@ -14,6 +14,7 @@ import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.repo.GitRepositoryManager;
 import com.wynk.codecontext.repo.RepositoryStore;
 import com.wynk.codecontext.search.ZoektIndexer;
+import com.wynk.codecontext.security.AuditRedaction;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
@@ -87,7 +88,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             processLocked(jobId,job,lease);
         } finally {
             try { lease.close(); }
-            catch(RuntimeException releaseFailure) { LOGGER.warn("repository.index.lease.release.failed repo={} job={} reason={}",job.repositoryId,jobId,releaseFailure.toString()); }
+            catch(RuntimeException releaseFailure) { LOGGER.warn("repository.index.lease.release.failed repo={} job={} reason={}",job.repositoryId,jobId,AuditRedaction.redact(releaseFailure.toString())); }
         }
     }
     private void processLocked(UUID jobId,Job job,RepositoryIndexLeaseManager.Lease lease) {
@@ -135,12 +136,12 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             for(UUID obsolete:obsoleteZoektGenerations) {
                 try { zoekt.removeGeneration(repo,obsolete); }
                 catch(Exception cleanupFailure) {
-                    LOGGER.warn("Zoekt obsolete generation cleanup failed for repo={} generation={}: {}",repo.key(),obsolete,cleanupFailure.toString());
+                    LOGGER.warn("Zoekt obsolete generation cleanup failed for repo={} generation={}: {}",repo.key(),obsolete,AuditRedaction.redact(cleanupFailure.toString()));
                 }
             }
         } catch(Exception e) {
             String sqlDiagnostics = sqlDiagnosticChain(e);
-            if (!sqlDiagnostics.isBlank()) LOGGER.error("Database failure while indexing job {}: {}", jobId, sqlDiagnostics);
+            if (!sqlDiagnostics.isBlank()) LOGGER.error("Database failure while indexing job {}: {}", jobId, AuditRedaction.redact(sqlDiagnostics));
             retryJob(jobId,job,e);
         }
     }
@@ -153,7 +154,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     }
     void retryAttempt(UUID jobId,int attempt,Exception failure) {
         int retryDelay=Math.min(300,5*(1<<Math.max(0,attempt-1)));
-        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",truncate(failure.getMessage()),retryDelay,jobId,attempt);
+        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",truncate(AuditRedaction.redact(failure.getMessage())),retryDelay,jobId,attempt);
     }
     @PreDestroy public void stopWorkers(){workers.shutdownNow();}
     private void copyUnchangedFiles(UUID previous,UUID next) {

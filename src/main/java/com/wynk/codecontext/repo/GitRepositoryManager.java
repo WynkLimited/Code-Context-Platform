@@ -2,9 +2,12 @@ package com.wynk.codecontext.repo;
 
 import com.wynk.codecontext.config.CodeContextProperties;
 import com.wynk.codecontext.model.RepositoryRecord;
+import com.wynk.codecontext.security.OutboundUrlGuard;
+import com.wynk.codecontext.security.PathContainment;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.transport.HttpConfig;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.springframework.stereotype.Service;
@@ -13,31 +16,57 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Service
 public class GitRepositoryManager {
     private static final Set<String> IGNORED = Set.of(".git", "target", "build", "node_modules", "vendor", "dist", "out", ".gradle");
     private final CodeContextProperties properties;
     private final ConcurrentHashMap<Path,Object> locks = new ConcurrentHashMap<>();
-    public GitRepositoryManager(CodeContextProperties properties) { this.properties = properties; }
+    private final OutboundUrlGuard.NameResolver nameResolver;
+    public GitRepositoryManager(CodeContextProperties properties) { this(properties, InetAddressResolver.INSTANCE); }
+    GitRepositoryManager(CodeContextProperties properties, OutboundUrlGuard.NameResolver nameResolver) {
+        this.properties = properties;
+        this.nameResolver = nameResolver;
+    }
 
     public Path sync(RepositoryRecord repo) throws Exception {
         Path root = safeRoot().resolve(safeComponent(repo.owner())).resolve(safeComponent(repo.name())).normalize();
         if (!root.startsWith(safeRoot())) throw new IOException("repository path escaped configured root");
-        if (Files.isSymbolicLink(root) || Files.isSymbolicLink(root.getParent()) || Files.isSymbolicLink(root.getParent().getParent())) throw new IOException("symlinked repository path rejected");
+        PathContainment.rejectSymlinkAncestors(safeRoot(), root);
         validateUrl(repo.cloneUrl());
         synchronized (locks.computeIfAbsent(root, k -> new Object())) {
             if (!Files.exists(root.resolve(".git"))) {
                 validateUrl(repo.cloneUrl()); Files.createDirectories(root.getParent());
-                var clone=Git.cloneRepository().setURI(repo.cloneUrl()).setDirectory(root.toFile()).setBranch(repo.defaultBranch()).setTimeout(properties.gitTimeoutSeconds());
-                if(!properties.gitAccessToken().isBlank())clone.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",properties.gitAccessToken()));
-                clone.call().close();
+                PathContainment.rejectSymlinkAncestors(safeRoot(), root);
+                // Init + fetch (instead of cloneRepository) so http.followRedirects=false is set
+                // before the first HTTPS request and redirect-based SSRF cannot land on private IPs.
+                try (Git git = Git.init().setDirectory(root.toFile()).setInitialBranch(repo.defaultBranch()).call()) {
+                    disableHttpRedirects(git);
+                    var config = git.getRepository().getConfig();
+                    config.setString("remote", "origin", "url", repo.cloneUrl());
+                    config.setString("remote", "origin", "fetch", "+refs/heads/*:refs/remotes/origin/*");
+                    config.save();
+                    var fetch = git.fetch().setRemote("origin").setTimeout(properties.gitTimeoutSeconds());
+                    if (!properties.gitAccessToken().isBlank()) {
+                        fetch.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token", properties.gitAccessToken()));
+                    }
+                    fetch.call();
+                    String remoteBranch = "origin/" + repo.defaultBranch();
+                    if (git.getRepository().resolve(remoteBranch) == null) {
+                        throw new IOException("remote branch missing after fetch: " + repo.defaultBranch());
+                    }
+                    git.reset().setMode(org.eclipse.jgit.api.ResetCommand.ResetType.HARD).setRef(remoteBranch).call();
+                }
             }
             try (Git git = Git.open(root.toFile())) {
+                PathContainment.rejectSymlinkAncestors(safeRoot(), root);
+                disableHttpRedirects(git);
                 String[] origins=git.getRepository().getConfig().getStringList("remote","origin","url");
                 if(origins.length!=1||!repo.cloneUrl().equals(origins[0]))
                     throw new IOException("mirror origin does not match registered repository");
@@ -99,9 +128,27 @@ public class GitRepositoryManager {
                 Path allowed=Path.of(properties.localGitRoot()).toAbsolutePath().normalize().toRealPath();
                 Path local=Path.of(uri).toRealPath(); if(!local.startsWith(allowed)||!Files.isDirectory(local.resolve(".git")))throw new IllegalArgumentException("local repository must be inside LOCAL_GIT_ROOT"); return;
             }
-            boolean allowed=uri.getHost()!=null&&java.util.Arrays.stream(properties.gitAllowedHosts().split(",")).map(String::strip).anyMatch(h->h.equalsIgnoreCase(uri.getHost()));
-            if (!"https".equalsIgnoreCase(uri.getScheme()) || !allowed || uri.getUserInfo()!=null || uri.getPort()!=-1 || uri.getQuery()!=null || uri.getFragment()!=null || !uri.getPath().matches("/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?")) throw new IllegalArgumentException("clone URL host/scheme/path is not allowed");
-        } catch (RuntimeException ex) { throw new IllegalArgumentException("invalid or disallowed clone URL",ex); }
+            var allowedHosts=Arrays.stream(properties.gitAllowedHosts().split(",")).map(String::strip).filter(h->!h.isBlank()).collect(Collectors.toUnmodifiableSet());
+            OutboundUrlGuard.requireAllowlistedHttps(value, allowedHosts, nameResolver);
+            if (!uri.getPath().matches("/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\\.git)?")) {
+                throw new IllegalArgumentException("clone URL host/scheme/path is not allowed");
+            }
+        } catch (IllegalArgumentException ex) { throw ex; }
+        catch (RuntimeException ex) { throw new IllegalArgumentException("invalid or disallowed clone URL",ex); }
+    }
+    private static void disableHttpRedirects(Git git) throws IOException {
+        var config = git.getRepository().getConfig();
+        config.setEnum(HttpConfig.HTTP, null, HttpConfig.FOLLOW_REDIRECTS_KEY, HttpConfig.HttpRedirectMode.FALSE);
+        config.setInt(HttpConfig.HTTP, null, HttpConfig.MAX_REDIRECTS_KEY, 0);
+        config.save();
     }
     public record SourceFile(String path, String content, String blobSha) {}
+
+    /** Default DNS resolver; package-visible for adversarial tests. */
+    enum InetAddressResolver implements OutboundUrlGuard.NameResolver {
+        INSTANCE;
+        @Override public java.net.InetAddress[] resolve(String host) throws java.net.UnknownHostException {
+            return java.net.InetAddress.getAllByName(host);
+        }
+    }
 }

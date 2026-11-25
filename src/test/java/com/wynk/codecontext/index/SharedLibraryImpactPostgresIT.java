@@ -190,6 +190,8 @@ class SharedLibraryImpactPostgresIT {
         assertCrossRepositoryRestAndKafkaContracts(provider, consumerA, consumerB);
         assertCallPersisted(consumerA, consumerAGeneration, consumerACommit,
                 "org.acme.Money#convert(java.lang.String)", "src/main/java/app/ConsumerA.java");
+        assertCallPersisted(consumerA, consumerAGeneration, consumerACommit,
+                "org.acme.Money#convert(java.lang.String)", "src/main/kotlin/app/ConsumerAKotlin.kt");
         assertUnresolvedCallRemainsUnresolved(consumerA, consumerAGeneration, consumerACommit);
         assertCallPersisted(consumerB, consumerBGeneration, consumerBCommit,
                 "org.acme.Money#convert(java.math.BigDecimal)", "src/main/java/app/ConsumerB.java");
@@ -199,7 +201,9 @@ class SharedLibraryImpactPostgresIT {
                 "org.acme.Money#convert(java.lang.Integer)", "src/main/kotlin/app/ConsumerKotlinPeer.kt");
         assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
                 "app.ConsumerKotlinPeer#label()", "src/main/java/app/ConsumerJavaPeer.java");
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM semantic_call_sites WHERE generation_id=? AND file_path='src/main/kotlin/app/ConsumerAKotlin.kt' AND declaring_type='org.acme.Money' AND extractor_version='kotlin-compiler-jvm' AND resolution_status='RESOLVED'",Integer.class,consumerAGeneration));
         assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM semantic_call_sites WHERE generation_id=? AND file_path='src/main/kotlin/app/ConsumerKotlinPeer.kt' AND declaring_type='org.acme.Money' AND extractor_version='kotlin-compiler-jvm' AND resolution_status='RESOLVED'",Integer.class,consumerCGeneration));
+        assertTrue(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM contracts WHERE generation_id=? AND contract_type='MAVEN' AND role='EXPORT' AND metadata->'kotlinJvmAbi' @> '[\"app.ConsumerAKotlin#call(Lorg/acme/Money;)Ljava/lang/String;\"]'::jsonb AND metadata->>'kotlinSourceCompatibility'='UNKNOWN')",Boolean.class,consumerAGeneration),"Consumer A Kotlin ABI export must persist with UNKNOWN source compatibility");
         assertTrue(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM contracts WHERE generation_id=? AND contract_type='MAVEN' AND role='EXPORT' AND metadata->'kotlinJvmAbi' @> '[\"app.ConsumerKotlinPeer#label()Ljava/lang/String;\"]'::jsonb AND metadata->>'kotlinSourceCompatibility'='UNKNOWN')",Boolean.class,consumerCGeneration),"compiler-derived exported Kotlin ABI and source-compatibility limitation must persist with the Maven contract");
 
         verifyIncrementalAdditionChangeAndDeletion(consumerCSource, consumerC);
@@ -244,30 +248,42 @@ class SharedLibraryImpactPostgresIT {
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM contract_refresh_jobs WHERE origin_generation_id=?",Integer.class,providerGeneration)>=refreshScheduled,
                 "reported refresh work must be present in the durable PostgreSQL queue");
         JsonNode impacts=payload.path("semanticMethodImpacts");
-        assertEquals(1,impacts.size(),impacts.toString());
-        JsonNode impact=impacts.get(0);
-        assertEquals("fixture/common-library",impact.path("providerRepository").asText());
-        assertEquals("fixture/consumer-service-a",impact.path("consumerRepository").asText());
-        assertEquals("app.ConsumerA",impact.path("callerClass").asText());
-        assertEquals("call(org.acme.Money)",impact.path("callerMethod").asText());
-        assertEquals("src/main/java/app/ConsumerA.java",impact.path("filePath").asText());
-        assertEquals(5,impact.path("startLine").asInt());
-        assertEquals("org.acme:common-library:1.0",impact.path("dependencyArtifact").asText());
-        assertEquals("1.0",impact.path("dependencyVersion").asText());
-        assertEquals("POTENTIAL_UPGRADE_IMPACT",impact.path("classification").asText());
-        assertEquals("CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN",impact.path("currentCompatibility").asText());
-        assertEquals("DIRECT",impact.path("relationship").asText());
-        assertEquals("RESOLVED",impact.path("resolutionState").asText());
-        assertEquals("CURRENT",impact.path("freshness").asText());
-        assertEquals("PUBLISHED_V5_EDGE",impact.path("analysisCompleteness").asText());
-        assertTrue(impact.path("confidence").asDouble()>0.0);
-        assertFalse(impact.path("evidence").asText().isBlank());
-        assertTrue(impact.path("provenance").asText().contains("MAVEN_RESOLVER"));
-        assertFalse(impact.path("blocking").asBoolean(true));
-        assertTrue(impact.path("providerOldApiSignature").asText().contains("convert(String"));
-        assertTrue(impact.path("providerNewApiSignature").asText().contains("convert(java.math.BigDecimal"));
-        assertTrue(impact.path("providerCommit").asText().matches("[0-9a-f]{40}"));
-        assertTrue(impact.path("consumerCommit").asText().matches("[0-9a-f]{40}"));
+        assertEquals(2,impacts.size(),impacts.toString());
+        JsonNode javaImpact=null,kotlinImpact=null;
+        for(JsonNode impact:impacts) {
+            if("src/main/java/app/ConsumerA.java".equals(impact.path("filePath").asText()))javaImpact=impact;
+            if("src/main/kotlin/app/ConsumerAKotlin.kt".equals(impact.path("filePath").asText()))kotlinImpact=impact;
+        }
+        assertNotNull(javaImpact,"Java→Java impact missing: "+impacts);
+        assertNotNull(kotlinImpact,"Kotlin→Java impact missing: "+impacts);
+        for(JsonNode impact:List.of(javaImpact,kotlinImpact)) {
+            assertEquals("fixture/common-library",impact.path("providerRepository").asText());
+            assertEquals("fixture/consumer-service-a",impact.path("consumerRepository").asText());
+            assertEquals("org.acme:common-library:1.0",impact.path("dependencyArtifact").asText());
+            assertEquals("1.0",impact.path("dependencyVersion").asText());
+            assertEquals("POTENTIAL_UPGRADE_IMPACT",impact.path("classification").asText());
+            assertEquals("CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN",impact.path("currentCompatibility").asText());
+            assertEquals("DIRECT",impact.path("relationship").asText());
+            assertEquals("RESOLVED",impact.path("resolutionState").asText());
+            assertEquals("CURRENT",impact.path("freshness").asText());
+            assertTrue(impact.path("confidence").asDouble()>0.0);
+            assertFalse(impact.path("evidence").asText().isBlank());
+            assertTrue(impact.path("provenance").asText().contains("MAVEN_RESOLVER"));
+            assertFalse(impact.path("blocking").asBoolean(true));
+            assertTrue(impact.path("providerOldApiSignature").asText().contains("convert(String"));
+            assertTrue(impact.path("providerNewApiSignature").asText().contains("convert(java.math.BigDecimal"));
+            assertTrue(impact.path("providerCommit").asText().matches("[0-9a-f]{40}"));
+            assertTrue(impact.path("consumerCommit").asText().matches("[0-9a-f]{40}"));
+        }
+        assertEquals("app.ConsumerA",javaImpact.path("callerClass").asText());
+        assertEquals("call(org.acme.Money)",javaImpact.path("callerMethod").asText());
+        assertEquals(5,javaImpact.path("startLine").asInt());
+        assertEquals("PUBLISHED_V5_EDGE",javaImpact.path("analysisCompleteness").asText());
+        assertTrue(javaImpact.path("provenance").asText().contains("JAVAPARSER_SYMBOL_SOLVER"));
+        assertEquals("app.ConsumerAKotlin",kotlinImpact.path("callerClass").asText());
+        assertEquals("PUBLISHED_KOTLIN_JVM_EDGE",kotlinImpact.path("analysisCompleteness").asText());
+        assertTrue(kotlinImpact.path("provenance").asText().contains("KOTLIN_COMPILER_JVM"));
+        assertTrue(kotlinImpact.path("provenance").asText().contains("KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"));
         assertFalse(impacts.toString().contains("consumer-service-b"));
         assertFalse(impacts.toString().contains("consumer-service-c"));
         JsonNode contractCandidates=payload.path("impactCandidates");
@@ -280,11 +296,15 @@ class SharedLibraryImpactPostgresIT {
         assertNotNull(persistedImpact);
         JsonNode persistedImpactJson = json.readTree(persistedImpact);
         JsonNode persistedSemanticImpacts = persistedImpactJson.path("semanticMethodImpacts");
-        assertEquals(1, persistedSemanticImpacts.size(), persistedImpact);
-        JsonNode persistedSemanticImpact = persistedSemanticImpacts.get(0);
-        assertEquals("fixture/consumer-service-a", persistedSemanticImpact.path("consumerRepository").asText());
-        assertEquals("app.ConsumerA", persistedSemanticImpact.path("callerClass").asText());
-        assertEquals("src/main/java/app/ConsumerA.java", persistedSemanticImpact.path("filePath").asText());
+        assertEquals(2, persistedSemanticImpacts.size(), persistedImpact);
+        assertTrue(persistedImpact.contains("src/main/java/app/ConsumerA.java"));
+        assertTrue(persistedImpact.contains("src/main/kotlin/app/ConsumerAKotlin.kt"));
+        assertTrue(persistedImpact.contains("PUBLISHED_KOTLIN_JVM_EDGE"));
+        assertTrue(persistedImpact.contains("KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"));
+        for(JsonNode persistedSemanticImpact:persistedSemanticImpacts) {
+            assertEquals("fixture/consumer-service-a", persistedSemanticImpact.path("consumerRepository").asText());
+            assertFalse(persistedSemanticImpact.path("blocking").asBoolean(true));
+        }
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM semantic_call_edges e JOIN semantic_call_sites s ON s.id=e.call_site_id JOIN index_generations g ON g.id=e.generation_id AND g.published WHERE e.repository_id=? AND s.resolution_status='RESOLVED')", Boolean.class, consumerA)));
         assertTrue(jdbc.queryForObject("""
 SELECT count(*) FROM maven_module_dependencies d JOIN maven_module_classpaths cp
@@ -559,7 +579,11 @@ FROM semantic_call_sites WHERE id=?
         var files=new java.util.LinkedHashMap<String,String>();
         files.put("pom.xml", pom("1.0", "<dependencies><dependency><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>"+version+"</version></dependency></dependencies>"));
         files.put("src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n"+unresolvedMethod+"}\n");
-        if(className.equals("ConsumerA"))files.put("src/main/java/app/OrderClient.java", "package app;\nclass OrderClient { void load() { webClient.get().uri(\"/orders/{id}\"); } }\n");
+        if(className.equals("ConsumerA")) {
+            files.put("src/main/java/app/OrderClient.java", "package app;\nclass OrderClient { void load() { webClient.get().uri(\"/orders/{id}\"); } }\n");
+            // Kotlin→Java cross-repo caller of the same removed overload; must surface as a separate JVM edge.
+            files.put("src/main/kotlin/app/ConsumerAKotlin.kt", "package app\nclass ConsumerAKotlin { fun call(money: org.acme.Money)=money.convert(\"x\") }\n");
+        }
         if(className.equals("ConsumerB"))files.put("src/main/java/app/OrderListener.java", "package app;\nclass OrderListener { @KafkaListener(topics = \"order-events\") void listen(String value) {} }\n");
         if(className.equals("ConsumerC")) {
             files.put("src/main/kotlin/app/ConsumerKotlinPeer.kt", "package app\nclass ConsumerKotlinPeer { fun label()=\"witness\"; fun call(money: org.acme.Money)=money.convert(1) }\n");
@@ -710,9 +734,13 @@ FROM semantic_call_sites WHERE id=?
         assertEquals(repositories.currentCommit(repositories.id("Fixture","consumer-service-a")).orElseThrow(),fileEvidence.path("commit").asText());
         assertEquals("src/main/java/app/ConsumerA.java",fileEvidence.path("path").asText());
         assertTrue(fileEvidence.path("content").asText().contains("ConsumerA"));
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_nodes n JOIN index_generations g ON g.id=n.generation_id AND g.published WHERE n.symbol='ConsumerA' AND n.file_path LIKE '%ConsumerA.java'",Integer.class)>0,
+                "published ConsumerA code_nodes must exist before find_symbol");
         JsonNode symbolCall=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",6,"method","tools/call","params",Map.of("name","find_symbol","arguments",Map.of("symbol","ConsumerA","repository","Fixture/consumer-service-a"))));
+        assertFalse(symbolCall.path("result").path("isError").asBoolean(false),"find_symbol MCP call failed: "+symbolCall);
         assertTrue(structuredToolPayload(symbolCall).toString().contains("ConsumerA.java"),"find_symbol must return indexed definitions and source path");
         JsonNode neighborCall=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",7,"method","tools/call","params",Map.of("name","get_neighbors","arguments",Map.of("repository","Fixture/consumer-service-a","symbol","ConsumerA"))));
+        assertFalse(neighborCall.path("result").path("isError").asBoolean(false),"get_neighbors MCP call failed: "+neighborCall);
         JsonNode neighbors=structuredToolPayload(neighborCall);
         assertTrue(neighbors.toString().contains("SEMANTIC_RESOLVED"),"get_neighbors must expose the persisted resolved call edge: "+neighbors);
         assertTrue(neighbors.toString().contains(repositories.currentCommit(repositories.id("Fixture","consumer-service-a")).orElseThrow()),"get_neighbors must include commit evidence: "+neighbors);
@@ -842,11 +870,16 @@ FROM semantic_call_sites WHERE id=?
     }
 
     private JsonNode structuredToolPayload(JsonNode response)throws Exception {
+        assertFalse(response.path("result").path("isError").asBoolean(false)
+                ||response.path("isError").asBoolean(false),"MCP tool returned an error payload: "+response);
         JsonNode structured=response.path("result").path("structuredContent");
-        if(structured.isObject())return structured;
+        if(structured.isObject()||structured.isArray())return structured;
         String text=response.path("result").path("content").path(0).path("text").asText();
         assertFalse(text.isBlank(),"MCP tool returned neither structuredContent nor JSON text: "+response);
-        return json.readTree(text);
+        try { return json.readTree(text); }
+        catch(Exception parseFailure) {
+            throw new AssertionError("MCP tool text was not JSON: "+text+" from "+response,parseFailure);
+        }
     }
 
     private static void write(Path root,String path,String content) {

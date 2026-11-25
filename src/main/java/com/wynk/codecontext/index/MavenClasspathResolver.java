@@ -28,9 +28,13 @@ import org.eclipse.aether.connector.basic.BasicRepositoryConnectorFactory;
 import org.eclipse.aether.transport.file.FileTransporterFactory;
 import org.eclipse.aether.transport.http.HttpTransporterFactory;
 
+import com.wynk.codecontext.security.OutboundUrlGuard;
+import com.wynk.codecontext.security.PathContainment;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -62,8 +66,15 @@ public final class MavenClasspathResolver {
     public Result resolve(Path commitRoot, String commit, Path localRepository, List<RepositorySpec> approvedRepositories) {
         try {
             Path root=commitRoot.toRealPath();
+            PathContainment.rejectSymlinkAncestors(root, root);
             List<Path> poms;
-            try(var files=Files.walk(root)) { poms=files.filter(p->p.getFileName().toString().equals("pom.xml")).limit(MAX_POMS+1).toList(); }
+            // walkContained does not follow directory symlinks; explicit symlink leaves are skipped
+            // so a malicious checkout cannot pull POMs from outside the immutable snapshot.
+            try(var files=PathContainment.walkContained(root)) {
+                poms=files.filter(p->p.getFileName().toString().equals("pom.xml"))
+                        .filter(p->!PathContainment.isSymlink(p))
+                        .limit(MAX_POMS+1).toList();
+            }
             if(poms.size()>MAX_POMS) return Result.incomplete(commit,"POM_LIMIT_EXCEEDED",List.of());
             Set<Path> reactorPoms=Set.copyOf(poms); var modules=new ArrayList<ModuleClasspath>();
             for(Path pom:poms.stream().sorted().toList()) {
@@ -76,6 +87,9 @@ public final class MavenClasspathResolver {
                 session.setConfigProperty("aether.connector.requestTimeout",30000);
                 session.setConfigProperty("aether.transport.http.connectTimeout",10000);
                 session.setConfigProperty("aether.transport.http.requestTimeout",30000);
+                // Maven Resolver's HTTP transporter still follows redirects at the Apache HttpClient
+                // layer; approved HTTPS hosts are DNS/private-address checked below, and cluster
+                // NetworkPolicy must deny private egress as the remaining control.
                 session.setConfigProperty("aether.artifactResolver.snapshotNormalization",false);
                 var reactorCoordinates=new LinkedHashSet<String>();
                 for(Path reactorPom:reactorPoms) { try { var m=effectiveModel(reactorPom,reactorPoms,approvedRepositories); reactorCoordinates.add(coord(m.getGroupId(),m.getArtifactId(),m.getVersion())); } catch(Exception ignored) { } }
@@ -92,7 +106,9 @@ public final class MavenClasspathResolver {
                 collect.setDependencies(dependencies);
                 var resolved=system.resolveDependencies(session,new DependencyRequest(collect,null));
                 var jars=resolved.getArtifactResults().stream().filter(a->a.getArtifact().getFile()!=null)
-                        .map(a->a.getArtifact().getFile().toPath()).distinct().toList();
+                        .map(a->a.getArtifact().getFile().toPath())
+                        .filter(p->Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) && !PathContainment.isSymlink(p))
+                        .distinct().toList();
                 if(jars.size()>MAX_ARTIFACTS) return Result.incomplete(commit,"ARTIFACT_LIMIT_EXCEEDED",modules);
                 for(Path jar:jars) if(Files.size(jar)>512L*1024*1024) return Result.incomplete(commit,"ARTIFACT_SIZE_LIMIT_EXCEEDED",modules);
                 var artifactRows=new LinkedHashMap<String,ResolvedDependency>();
@@ -129,9 +145,27 @@ public final class MavenClasspathResolver {
     }
     public record RepositorySpec(String id,String url,Set<String> approvedHosts) {
         RemoteRepository remote(){
-            var uri=java.net.URI.create(url);String host=uri.getHost();
-            if(uri.getScheme()==null||!(uri.getScheme().equals("https")||uri.getScheme().equals("file"))||uri.getScheme().equals("https")&&(host==null||approvedHosts.stream().noneMatch(h->host.equalsIgnoreCase(h))))
-                throw new IllegalArgumentException("Maven repository is not approved: "+id);
+            return remote(java.net.InetAddress::getAllByName);
+        }
+        /** Visible for adversarial DNS/private-address tests. */
+        RemoteRepository remote(OutboundUrlGuard.NameResolver resolver){
+            var uri=java.net.URI.create(url);
+            if(uri.getScheme()==null) throw new IllegalArgumentException("Maven repository is not approved: "+id);
+            if(uri.getScheme().equals("file")) {
+                try {
+                    Path local=Path.of(uri).toRealPath();
+                    if(!Files.isDirectory(local)) throw new IllegalArgumentException("Maven file repository must be a directory: "+id);
+                } catch(IOException ex) {
+                    throw new IllegalArgumentException("Maven file repository is not readable: "+id, ex);
+                }
+                return new RemoteRepository.Builder(id,"default",url).build();
+            }
+            if(!"https".equals(uri.getScheme())) throw new IllegalArgumentException("Maven repository is not approved: "+id);
+            try {
+                OutboundUrlGuard.requireAllowlistedHttps(url, approvedHosts, resolver);
+            } catch(IllegalArgumentException ex) {
+                throw new IllegalArgumentException("Maven repository is not approved: "+id, ex);
+            }
             return new RemoteRepository.Builder(id,"default",url).build();
         }
     }

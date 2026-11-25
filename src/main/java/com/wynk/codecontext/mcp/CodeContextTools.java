@@ -49,34 +49,39 @@ public class CodeContextTools {
 
     @Tool(description="Find class, method, or symbol definitions with repository and exact line locations.")
     public String find_symbol(String symbol,String repository){
+        if(symbol==null||symbol.isBlank())throw new IllegalArgumentException("symbol is required");
+        String like="%"+symbol+"%";
+        var args=new java.util.ArrayList<Object>();
+        args.add(team()); args.add(like); args.add(like);
         String sql="""
 SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,n.node_type,n.symbol,n.qualified_name,n.file_path,n.start_line,n.end_line
-          FROM code_nodes n JOIN index_generations g ON g.id=n.generation_id AND g.published
+          FROM code_nodes n JOIN index_generations g ON g.id=n.generation_id AND g.published=true
           JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=?
-          WHERE (n.symbol ILIKE ? OR n.qualified_name ILIKE ?)""";
-        Object[] args=new Object[]{team(),"%"+symbol+"%","%"+symbol+"%"};
-        String filter=repository==null||repository.isBlank()?"":" AND r.owner||'/'||r.name=?";
-        if(!filter.isEmpty()){sql+=filter;args=new Object[]{team(),"%"+symbol+"%","%"+symbol+"%",repository};}
-        return objectMapper.writeValueAsString(jdbc.queryForList(sql+" ORDER BY repository,n.start_line LIMIT 100",args));
+          WHERE (n.symbol ILIKE ? OR coalesce(n.qualified_name,'') ILIKE ?)""";
+        if(repository!=null&&!repository.isBlank()){sql+=" AND r.owner||'/'||r.name=?";args.add(repository);}
+        sql+=" ORDER BY 1,n.start_line LIMIT 100";
+        return objectMapper.writeValueAsString(jdbc.queryForList(sql,args.toArray()));
     }
 
     @Tool(description="Return direct callers and callees of a symbol, including evidence and confidence.")
     public String get_neighbors(String repository,String symbol){
+        if(symbol==null||symbol.isBlank())throw new IllegalArgumentException("symbol is required");
         RepositoryRecord r=allowed(repository);
+        String like="%"+symbol+"%";
         var rows=jdbc.queryForList("""
 SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,source.symbol AS from_symbol,target.symbol AS to_symbol,e.edge_type,e.evidence,e.confidence,source.file_path,source.start_line
           FROM code_edges e JOIN code_nodes source ON source.id=e.source_node LEFT JOIN code_nodes target ON target.id=e.target_node
-          JOIN index_generations g ON g.id=e.generation_id AND g.published JOIN repositories r ON r.id=g.repository_id WHERE g.repository_id=? AND (source.qualified_name ILIKE ? OR target.qualified_name ILIKE ?)
+          JOIN index_generations g ON g.id=e.generation_id AND g.published=true JOIN repositories r ON r.id=g.repository_id WHERE g.repository_id=? AND (coalesce(source.qualified_name,'') ILIKE ? OR coalesce(target.qualified_name,'') ILIKE ?)
         UNION ALL
-        SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,caller.symbol_key AS from_symbol,target.symbol_key AS to_symbol,'SEMANTIC_'+edge.resolution_status AS edge_type,
+        SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,caller.symbol_key AS from_symbol,target.symbol_key AS to_symbol,'SEMANTIC_'||edge.resolution_status AS edge_type,
                edge.evidence,edge.confidence,site.file_path,site.start_line
           FROM semantic_call_edges edge
           JOIN semantic_symbols caller ON caller.id=edge.caller_symbol_id
           LEFT JOIN semantic_symbols target ON target.id=edge.target_symbol_id
           JOIN semantic_call_sites site ON site.id=edge.call_site_id
-          JOIN index_generations g ON g.id=edge.generation_id AND g.published JOIN repositories r ON r.id=g.repository_id
-         WHERE g.repository_id=? AND (caller.symbol_key ILIKE ? OR target.symbol_key ILIKE ?)
-        LIMIT 200""",r.id(),"%"+symbol+"%","%"+symbol+"%",r.id(),"%"+symbol+"%","%"+symbol+"%");
+          JOIN index_generations g ON g.id=edge.generation_id AND g.published=true JOIN repositories r ON r.id=g.repository_id
+         WHERE g.repository_id=? AND (caller.symbol_key ILIKE ? OR coalesce(target.symbol_key,'') ILIKE ?)
+        LIMIT 200""",r.id(),like,like,r.id(),like,like);
         return objectMapper.writeValueAsString(rows);
     }
 
@@ -166,9 +171,9 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
         result.put("unknownCompatibilityPresent",unknown);
         result.put("confirmedConsumerBreakage",false); result.put("consumerBehaviorAnalysis","NOT_RUN");
         result.put("safetyConclusion","NO_AUTOMATIC_SAFETY_CONCLUSION");
-        result.put("completenessScope","Contract generation comparison, team-scoped Maven dependency routing, and exact V5 semantic method references where dependency artifacts and provider symbols are available; results remain informational.");
+        result.put("completenessScope","Contract generation comparison, team-scoped Maven dependency routing, exact V5 Java semantic method references, and Kotlin compiler JVM call edges where dependency artifacts and provider symbols are available; Kotlin source compatibility stays UNKNOWN; results remain informational.");
         result.put("consumerRefreshScheduled",refreshRequest.scheduled()); result.put("consumerRefreshTruncated",refreshRequest.truncated());
-        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin and full indirect method-chain resolution remain unsupported.","Repositories outside the authenticated team's access scope are not searched."));
+        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin JVM binary edges from the compiler analyzer are reported when present; Kotlin source compatibility (inline, suspend, defaults, nullability, exact source mappings) remains UNKNOWN and never proves safety.","Full indirect method-chain resolution remains unsupported.","Repositories outside the authenticated team's access scope are not searched."));
         persistImpact(r,after,before,status,result);
         return result;
     }

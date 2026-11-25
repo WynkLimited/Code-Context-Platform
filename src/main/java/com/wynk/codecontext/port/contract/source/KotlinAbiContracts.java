@@ -23,7 +23,7 @@ public final class KotlinAbiContracts {
             metadata.put("kotlinSourceCompatibility","UNKNOWN");
             metadata.put("kotlinAbiLimitations",abi.limitations());
             String signature=String.valueOf(metadata.getOrDefault("signature",""));
-            signature=signature+(keys.isEmpty()?"":"\n"+String.join("\n",keys.stream().map(k->"KOTLIN_BINARY "+k).toList()));
+            signature=signature+(keys.isEmpty()?"":"\n"+String.join("\n",keys.stream().map(k->KotlinAbiSurface.BINARY_SIGNATURE_PREFIX+k).toList()));
             metadata.put("signature",signature);
             try {
                 String hash=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest((entry.contentHash()+"\n"+signature+"\n"+abi.metadataComplete()).getBytes(StandardCharsets.UTF_8)));
