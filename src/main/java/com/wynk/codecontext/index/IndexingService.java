@@ -14,8 +14,11 @@ import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.repo.GitRepositoryManager;
 import com.wynk.codecontext.repo.RepositoryStore;
 import com.wynk.codecontext.search.ZoektIndexer;
+import com.wynk.codecontext.ops.PlatformMetrics;
 import com.wynk.codecontext.security.AuditRedaction;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,17 +54,24 @@ public class IndexingService {
     private final ContractIndexBuilder contractIndexBuilder; private final JsonMapper objectMapper; private final GraphSymbolBinder graphSymbolBinder; private final ConsumerContractIndexRefresher contractRefresher; private final PostgresContractIndexStore contractIndexes;
     private final MavenClasspathResolver mavenClasspathResolver = new MavenClasspathResolver();
     private final RepositoryIndexLeaseManager repositoryLeases;
+    private final PlatformMetrics metrics;
     private final java.util.concurrent.ThreadPoolExecutor workers;private final java.util.concurrent.Semaphore slots;
-    public IndexingService(JdbcTemplate j, RepositoryStore r, GitRepositoryManager g, CodeContextProperties p, EmbeddingModel e, ZoektIndexer zoekt,GraphifyIndexer graphify,org.springframework.transaction.PlatformTransactionManager tx, ContractIndexBuilder contractIndexBuilder, JsonMapper objectMapper, GraphSymbolBinder graphSymbolBinder, ConsumerContractIndexRefresher contractRefresher, PostgresContractIndexStore contractIndexes, RepositoryIndexLeaseManager repositoryLeases) { jdbc=j;repos=r;git=g;props=p;embeddings=e;this.zoekt=zoekt;this.graphify=graphify;this.transactions=new TransactionTemplate(tx);this.contractIndexBuilder=contractIndexBuilder;this.objectMapper=objectMapper;this.graphSymbolBinder=graphSymbolBinder;this.contractRefresher=contractRefresher;this.contractIndexes=contractIndexes;this.repositoryLeases=repositoryLeases;int n=Math.max(1,Math.min(16,p.maxIndexConcurrency()));this.slots=new java.util.concurrent.Semaphore(n);this.workers=new java.util.concurrent.ThreadPoolExecutor(n,n,0,java.util.concurrent.TimeUnit.MILLISECONDS,new java.util.concurrent.ArrayBlockingQueue<>(n),workerFactory->{Thread t=new Thread(workerFactory,"code-context-indexer");t.setDaemon(true);return t;}); }
+    public IndexingService(JdbcTemplate j, RepositoryStore r, GitRepositoryManager g, CodeContextProperties p, EmbeddingModel e, ZoektIndexer zoekt,GraphifyIndexer graphify,org.springframework.transaction.PlatformTransactionManager tx, ContractIndexBuilder contractIndexBuilder, JsonMapper objectMapper, GraphSymbolBinder graphSymbolBinder, ConsumerContractIndexRefresher contractRefresher, PostgresContractIndexStore contractIndexes, RepositoryIndexLeaseManager repositoryLeases) {
+        this(j,r,g,p,e,zoekt,graphify,tx,contractIndexBuilder,objectMapper,graphSymbolBinder,contractRefresher,contractIndexes,repositoryLeases,new PlatformMetrics(new SimpleMeterRegistry()));
+    }
+    @Autowired
+    public IndexingService(JdbcTemplate j, RepositoryStore r, GitRepositoryManager g, CodeContextProperties p, EmbeddingModel e, ZoektIndexer zoekt,GraphifyIndexer graphify,org.springframework.transaction.PlatformTransactionManager tx, ContractIndexBuilder contractIndexBuilder, JsonMapper objectMapper, GraphSymbolBinder graphSymbolBinder, ConsumerContractIndexRefresher contractRefresher, PostgresContractIndexStore contractIndexes, RepositoryIndexLeaseManager repositoryLeases, PlatformMetrics metrics) { jdbc=j;repos=r;git=g;props=p;embeddings=e;this.zoekt=zoekt;this.graphify=graphify;this.transactions=new TransactionTemplate(tx);this.contractIndexBuilder=contractIndexBuilder;this.objectMapper=objectMapper;this.graphSymbolBinder=graphSymbolBinder;this.contractRefresher=contractRefresher;this.contractIndexes=contractIndexes;this.repositoryLeases=repositoryLeases;this.metrics=metrics;int n=Math.max(1,Math.min(16,p.maxIndexConcurrency()));this.slots=new java.util.concurrent.Semaphore(n);this.workers=new java.util.concurrent.ThreadPoolExecutor(n,n,0,java.util.concurrent.TimeUnit.MILLISECONDS,new java.util.concurrent.ArrayBlockingQueue<>(n),workerFactory->{Thread t=new Thread(workerFactory,"code-context-indexer");t.setDaemon(true);return t;}); }
 
     @Scheduled(fixedDelayString="${INDEX_POLL_MS:1500}")
     public void poll() {
-        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error='worker lease expired',updated_at=now() WHERE state='RUNNING' AND updated_at < now() - interval '10 minutes'");
+        int expired=jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error='worker lease expired',updated_at=now() WHERE state='RUNNING' AND updated_at < now() - interval '10 minutes'");
+        metrics.leaseExpired(expired);
         while(slots.tryAcquire()) {
             List<UUID> ids=jdbc.query("""
 WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_at<=now() ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
               UPDATE index_jobs SET state='RUNNING',attempt=attempt+1,updated_at=now() WHERE id=(SELECT id FROM candidate) RETURNING id""",(rs,n)->rs.getObject(1,UUID.class));
             if(ids.isEmpty()){slots.release();break;}
+            metrics.indexClaimed();
             try{workers.execute(()->{try{process(ids.get(0));}finally{slots.release();}});}catch(RuntimeException ex){slots.release();jdbc.update("UPDATE index_jobs SET state='QUEUED',error='worker queue unavailable',updated_at=now() WHERE id=?",ids.get(0));}
         }
     }
@@ -148,6 +158,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     void markSucceeded(UUID jobId,int attempt) {
         int changed=jdbc.update("UPDATE index_jobs SET state='SUCCEEDED',updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",jobId,attempt);
         if(changed!=1)throw new IllegalStateException("index job attempt ownership changed before publication");
+        metrics.indexSucceeded();
     }
     private void retryJob(UUID jobId,Job job,Exception failure) {
         retryAttempt(jobId,job.attempt,failure);
@@ -155,6 +166,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     void retryAttempt(UUID jobId,int attempt,Exception failure) {
         int retryDelay=Math.min(300,5*(1<<Math.max(0,attempt-1)));
         jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",truncate(AuditRedaction.redact(failure.getMessage())),retryDelay,jobId,attempt);
+        if(attempt>=3) metrics.indexFailed();
     }
     @PreDestroy public void stopWorkers(){workers.shutdownNow();}
     private void copyUnchangedFiles(UUID previous,UUID next) {

@@ -14,9 +14,13 @@ import com.wynk.codecontext.port.contract.graph.CrossRepoImpactResolver.Analysis
 import com.wynk.codecontext.port.contract.graph.MavenConsumerBridge;
 import com.wynk.codecontext.port.contract.source.JavaCallSiteAnalyzer;
 import com.wynk.codecontext.index.ConsumerContractIndexRefresher;
+import com.wynk.codecontext.ops.PlatformMetrics;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import tools.jackson.databind.json.JsonMapper;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -30,25 +34,44 @@ import java.util.UUID;
 public class CodeContextTools {
     private final ZoektSearchService search; private final RepositoryStore repos; private final JdbcTemplate jdbc; private final EmbeddingModel embeddings; private final GitRepositoryManager git; private final CodeContextProperties props;
     private final PostgresContractIndexStore contractIndexes; private final ContractCompatibilityEngine compatibility; private final CrossRepoImpactResolver impactResolver; private final JsonMapper objectMapper; private final ConsumerContractIndexRefresher contractRefresher;
-    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,JsonMapper objectMapper,ConsumerContractIndexRefresher contractRefresher){search=s;repos=r;jdbc=j;embeddings=e;git=g;props=p;this.contractIndexes=contractIndexes;this.compatibility=compatibility;this.impactResolver=impactResolver;this.objectMapper=objectMapper;this.contractRefresher=contractRefresher;}
+    private final PlatformMetrics metrics;
+    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,JsonMapper objectMapper,ConsumerContractIndexRefresher contractRefresher){
+        this(s,r,j,e,g,p,contractIndexes,compatibility,impactResolver,objectMapper,contractRefresher,new PlatformMetrics(new SimpleMeterRegistry()));
+    }
+    @Autowired
+    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,JsonMapper objectMapper,ConsumerContractIndexRefresher contractRefresher,PlatformMetrics metrics){search=s;repos=r;jdbc=j;embeddings=e;git=g;props=p;this.contractIndexes=contractIndexes;this.compatibility=compatibility;this.impactResolver=impactResolver;this.objectMapper=objectMapper;this.contractRefresher=contractRefresher;this.metrics=metrics;}
     private String team(){return String.valueOf(SecurityContextHolder.getContext().getAuthentication().getPrincipal());}
     private RepositoryRecord allowed(String key){String[] p=key.split("/",2);if(p.length!=2)throw new IllegalArgumentException("repository must be owner/name");return repos.find(p[0],p[1]).filter(r->repos.findAccessible(team()).stream().anyMatch(x->x.id().equals(r.id()))).orElseThrow(()->new SecurityException("repository not found or access denied"));}
 
     @Tool(description="Search exact text or regular expressions across repositories the authenticated team may access.")
-    public String search_code(String query){return search.search(query);}
+    public String search_code(String query){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try { return search.search(query); }
+        catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
+    }
 
     @Tool(description="Read a UTF-8 source file from a Git repository, optionally limited to a one-based line range.")
     public String read_file(String repository,String path,Integer startLine,Integer endLine) throws Exception {
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
         RepositoryRecord repo=allowed(repository); if(path==null||path.isBlank()||Path.of(path).isAbsolute())throw new IllegalArgumentException("relative source path required");
         String commit=repos.currentCommit(repo.id()).orElseThrow(()->new IllegalStateException("repository has no published generation"));
         String content=git.readFileAtRevision(Path.of(repo.mirrorPath()),commit,path,1_048_576);List<String> lines=content.lines().toList();int start=startLine==null?1:Math.max(1,startLine);int end=endLine==null?lines.size():Math.min(lines.size(),endLine);
         if(start>end||end-start>2000)throw new IllegalArgumentException("invalid line range");
         StringBuilder out=new StringBuilder();for(int i=start;i<=end;i++)out.append(i).append(": ").append(lines.get(i-1)).append('\n');
         return objectMapper.writeValueAsString(java.util.Map.of("repository",repo.key(),"commit",commit,"path",path,"startLine",start,"endLine",end,"content",out.toString()));
+        } catch(Exception e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     @Tool(description="Find class, method, or symbol definitions with repository and exact line locations.")
     public String find_symbol(String symbol,String repository){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
         if(symbol==null||symbol.isBlank())throw new IllegalArgumentException("symbol is required");
         String like="%"+symbol+"%";
         var args=new java.util.ArrayList<Object>();
@@ -61,10 +84,15 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,n.node_type,n.s
         if(repository!=null&&!repository.isBlank()){sql+=" AND r.owner||'/'||r.name=?";args.add(repository);}
         sql+=" ORDER BY 1,n.start_line LIMIT 100";
         return objectMapper.writeValueAsString(jdbc.queryForList(sql,args.toArray()));
+        } catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     @Tool(description="Return direct callers and callees of a symbol, including evidence and confidence.")
     public String get_neighbors(String repository,String symbol){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
         if(symbol==null||symbol.isBlank())throw new IllegalArgumentException("symbol is required");
         RepositoryRecord r=allowed(repository);
         String like="%"+symbol+"%";
@@ -83,10 +111,15 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,source.symbol A
          WHERE g.repository_id=? AND (caller.symbol_key ILIKE ? OR coalesce(target.symbol_key,'') ILIKE ?)
         LIMIT 200""",r.id(),like,like,r.id(),like,like);
         return objectMapper.writeValueAsString(rows);
+        } catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     @Tool(description="Find code chunks by natural language using the self-hosted embedding model and pgvector cosine distance.")
     public String semantic_search(String query,String repository,Integer limit){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
         if(query==null||query.isBlank())throw new IllegalArgumentException("semantic search query is required");
         if(query.length()>1024)throw new IllegalArgumentException("semantic search query exceeds 1024 characters");
         String owner=null,name=null;if(repository!=null&&!repository.isBlank()){RepositoryRecord r=allowed(repository);owner=r.owner();name=r.name();}
@@ -103,14 +136,19 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
         sql+=" ORDER BY c.embedding <=> ?::vector LIMIT "+n;
         List<?> rows=owner==null?jdbc.queryForList(sql,vec,team(),vec):jdbc.queryForList(sql,vec,team(),owner,name,vec);
         return objectMapper.writeValueAsString(rows);
+        } catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
 
     @Tool(description="Compare published contract generations, classify supported changes, and return fresh, evidence-backed candidate consumers with completeness status. Method-level consumer behavior is not inferred; results never block a review.")
     public java.util.Map<String,Object> impact_analysis(String contract,String repository){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
         try { return computeImpactAnalysis(contract,repository); }
-        catch(SecurityException e) { throw e; }
-        catch(Exception e) { return java.util.Map.of("status","FAILED","blocking",false,"reason","Impact analysis could not be completed; consult platform logs.","results",List.of()); }
+        catch(SecurityException e) { error=true; throw e; }
+        catch(Exception e) { error=true; return java.util.Map.of("status","FAILED","blocking",false,"reason","Impact analysis could not be completed; consult platform logs.","results",List.of()); }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     private java.util.Map<String,Object> computeImpactAnalysis(String contract,String repository){

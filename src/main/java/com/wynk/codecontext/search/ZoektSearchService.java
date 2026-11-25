@@ -2,7 +2,9 @@ package com.wynk.codecontext.search;
 
 import com.wynk.codecontext.config.CodeContextProperties;
 import com.wynk.codecontext.model.RepositoryRecord;
+import com.wynk.codecontext.ops.PlatformMetrics;
 import com.wynk.codecontext.repo.RepositoryStore;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -25,20 +27,33 @@ public class ZoektSearchService {
     private final RestClient zoekt;
     private final RepositoryStore repositories;
     private final JsonMapper json;
+    private final PlatformMetrics metrics;
 
     @org.springframework.beans.factory.annotation.Autowired
+    public ZoektSearchService(CodeContextProperties props, RepositoryStore repositories, JsonMapper json,
+                              PlatformMetrics metrics) {
+        this(props, repositories, json, defaultBuilder(), metrics);
+    }
+
     public ZoektSearchService(CodeContextProperties props, RepositoryStore repositories, JsonMapper json) {
-        this(props, repositories, json, defaultBuilder());
+        this(props, repositories, json, defaultBuilder(), new PlatformMetrics(new SimpleMeterRegistry()));
     }
 
     ZoektSearchService(CodeContextProperties props, RepositoryStore repositories, JsonMapper json,
                        RestClient.Builder builder) {
+        this(props, repositories, json, builder, new PlatformMetrics(new SimpleMeterRegistry()));
+    }
+
+    ZoektSearchService(CodeContextProperties props, RepositoryStore repositories, JsonMapper json,
+                       RestClient.Builder builder, PlatformMetrics metrics) {
         this.zoekt = builder.baseUrl(props.zoekt().webserver()).build();
         this.repositories = repositories;
         this.json = json;
+        this.metrics = metrics;
     }
 
     public String search(String query) {
+        metrics.searchRequest();
         validateQuery(query);
         String team = authenticatedTeam();
         List<RepositoryRecord> allowed = repositories.findAccessible(team);

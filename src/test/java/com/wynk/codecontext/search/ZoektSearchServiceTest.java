@@ -110,6 +110,8 @@ class ZoektSearchServiceTest {
             context.registerBean(CodeContextProperties.class,ZoektSearchServiceTest::properties);
             context.registerBean(RepositoryStore.class,ZoektSearchServiceTest::repositories);
             context.registerBean(JsonMapper.class,()->JsonMapper.builder().build());
+            context.registerBean(com.wynk.codecontext.ops.PlatformMetrics.class,
+                    ()->new com.wynk.codecontext.ops.PlatformMetrics(new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
             context.register(ZoektSearchService.class);
             context.refresh();
             org.junit.jupiter.api.Assertions.assertNotNull(context.getBean(ZoektSearchService.class));
