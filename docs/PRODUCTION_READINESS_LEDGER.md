@@ -21,12 +21,14 @@ Status vocabulary (this ledger):
 
 ## Resume checkpoint
 
-**Session progress (this closure):** Ledger + MultiRepo parity docs; proposed-change MCP params; independence gate; webhook freshness; nested+cross-file OpenAPI `$ref`; Avro/OpenAPI MCP evolution in shared IT; hop incompleteness flags; admin API-key status; mandatory CI green @ `7b65acd`.
+**Session progress (this closure):** Ledger + MultiRepo parity; proposed-change MCP; independence gate; webhook freshness+PG dedupe; nested+cross-file OpenAPI; Avro/OpenAPI MCP evolution; hop incompleteness flags; admin key status; REST ambiguity PG; subprocess env scrub; mandatory CI green @ `f0a36ad`.
+
+**Overall:** **NOT READY FOR PRODUCTION** — external blockers remain (OS sandbox, DR/PITR, k8s, Gradle, representative perf, multi-JVM crash drills).
 
 **Next executable actions (priority):**
 
 1. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
-2. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
+2. Multi-JVM crash/heartbeat drills (IDX-1/2) beyond single-process lease fencing.
 3. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
 
 ---
@@ -66,8 +68,8 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Next |
 |---|---|---|---|
-| IDX-1 | Lease fencing / publication | PARTIALLY_IMPLEMENTED | Crash/heartbeat two-process drills |
-| IDX-2 | Durable jobs / permanent failure | PARTIALLY_IMPLEMENTED | Expand stale-worker PG cases |
+| IDX-1 | Lease fencing / publication | PARTIALLY_IMPLEMENTED | GenerationRetentionPostgresIT lease expiry + fence; multi-JVM crash drill still open |
+| IDX-2 | Durable jobs / permanent failure | PARTIALLY_IMPLEMENTED | Shared IT failure-boundary; expand stale-worker cases |
 | IDX-3 | Incremental ≡ full rebuild | PARTIALLY_IMPLEMENTED | Rename+dependency markers added to shared IT; await next CI |
 | IDX-4 | Zoekt orphan reconcile | VERIFIED_PRODUCTION_READY | Retention PG + unit |
 
