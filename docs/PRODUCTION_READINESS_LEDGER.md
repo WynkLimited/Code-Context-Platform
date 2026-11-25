@@ -7,9 +7,9 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `19aa954e3e8e9747ca1b94f596565f024575239c` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45635577388 |
-| Prior failed CI | a374923/08c449c run 45636811199 — IndexWebhookController dual-ctor Spring wiring; Autowired fix pending |
+| Last green mandatory CI SHA | `ab3dcbb9b6ddf97fc49f3b3231bbc2a8926eb3b2` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45637541943 |
+| Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
 | Reference repo (read-only) | `WynkLimited/MultiRepo-Code-Review-Agent` @ `main` / `65144c6060e97c491546674586ea8ae5020588c7` |
@@ -81,7 +81,7 @@ Status vocabulary (this ledger):
 | XRI-K2K | Kotlin→Kotlin | VERIFIED_PRODUCTION_READY | CI Kotlin provider IT |
 | XRI-VER | Version-pinned vs upgraded consumers | VERIFIED_PRODUCTION_READY | CI excludes upgraded consumer from semantic impacts |
 | XRI-PROP | Proposed-change classification inputs | VERIFIED_PRODUCTION_READY | Optional @ToolParam; schema + MCP proposedChange through Streamable HTTP @ 19aa954 |
-| XRI-HOP | Multi-hop / indirect callers | PARTIALLY_IMPLEMENTED | Direct edges only; bounded hops open |
+| XRI-HOP | Multi-hop / indirect callers | PARTIALLY_IMPLEMENTED | Re-export contract hops ≤3; method-chain unsupported flags on MCP |
 | XRI-GRADLE | Gradle dependency resolution | NOT_IMPLEMENTED | Maven-first; Gradle TBD |
 | REF-IND | No MultiRepo coupling | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` unit gate |
 | REF-PARITY | Functional parity matrix | PARTIALLY_IMPLEMENTED | See `docs/CROSS_REPO_IMPACT_PARITY_MATRIX.md` |
@@ -94,7 +94,7 @@ Status vocabulary (this ledger):
 | SEC-ACL | Cross-team tool isolation | VERIFIED_PRODUCTION_READY | Shared IT all six tools |
 | SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Loopback/metadata Maven host rejection unit green; HTTP redirect residual needs NetworkPolicy |
 | SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | App isolation only; cgroup/seccomp BLOCKED pending OS |
-| SEC-WH | Webhook replay + timestamp freshness | PARTIALLY_IMPLEMENTED | Delivery-id replay + head_commit age gate; durable PG concurrency open |
+| SEC-WH | Webhook replay + timestamp freshness | PARTIALLY_IMPLEMENTED | Delivery-id replay + head_commit age gate @ ab3dcbb CI; durable PG concurrency open |
 
 ### Operations
 

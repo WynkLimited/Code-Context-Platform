@@ -218,6 +218,14 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
         result.put("unknownCompatibilityPresent",unknown);
         result.put("confirmedConsumerBreakage",false); result.put("consumerBehaviorAnalysis","NOT_RUN");
         result.put("safetyConclusion","NO_AUTOMATIC_SAFETY_CONCLUSION");
+        boolean hasIndirectContractCandidates=resolution.impacted().stream().anyMatch(i->"INDIRECT_CANDIDATE".equals(i.relationship()));
+        result.put("contractHopBound",3);
+        result.put("methodChainMultiHopSupported",false);
+        result.put("indirectContractCandidatesPresent",hasIndirectContractCandidates);
+        result.put("analysisCompletenessFlags",java.util.List.of(
+                hasIndirectContractCandidates?"INDIRECT_CONTRACT_REEXPORT_CANDIDATES":"DIRECT_CONTRACT_MATCHES_ONLY",
+                "METHOD_LEVEL_DIRECT_EDGES_ONLY",
+                "METHOD_CHAIN_MULTI_HOP_UNSUPPORTED"));
         if(oldSignature!=null&&!oldSignature.isBlank()||newSignature!=null&&!newSignature.isBlank()) {
             var proposed=com.wynk.codecontext.port.contract.graph.ProposedChangeClassifier.classify(oldSignature,newSignature);
             result.put("proposedChange",java.util.Map.of(
