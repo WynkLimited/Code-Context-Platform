@@ -252,6 +252,10 @@ class SharedLibraryImpactPostgresIT {
         assertFalse(proposedPayload.path("proposedChange").path("confirmedBreakage").asBoolean(true));
         assertTrue(payload.has("semanticMethodImpacts"),payload.toString());
         assertFalse(payload.path("blocking").asBoolean(true),payload.toString());
+        assertFalse(payload.path("methodChainMultiHopSupported").asBoolean(true), payload.toString());
+        assertEquals(3, payload.path("contractHopBound").asInt(), payload.toString());
+        assertTrue(payload.path("analysisCompletenessFlags").toString().contains("METHOD_CHAIN_MULTI_HOP_UNSUPPORTED"),
+                payload.toString());
         int refreshScheduled=payload.path("consumerRefreshScheduled").asInt();
         assertTrue(refreshScheduled>0,"provider change should durably schedule relevant consumer refreshes: "+payload);
         UUID providerGeneration=repositories.currentGeneration(provider).orElseThrow();
@@ -757,10 +761,48 @@ FROM semantic_call_sites WHERE id=?
     private static Map<String,String> libraryFiles(String version, String api) {
         String route=version.equals("1.0")?"/orders/{id}":"/orders/v2/{id}";
         String topic=version.equals("1.0")?"order-events":"order-events-v2";
-        return Map.of("pom.xml", pom(version, null).replace("fixture","org.acme"),
-                "src/main/java/org/acme/Money.java", librarySource(api),
-                "src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\""+route+"\") Object find(String id) { return null; } }\n",
-                "src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\""+topic+"\", \"payload\"); } }\n");
+        String openApiRequired = version.equals("1.0") ? "[id]" : "[id, owner]";
+        String openApiOwnerProp = version.equals("1.0") ? "" : "                        owner: { type: string }\n";
+        String avroFields = version.equals("1.0")
+                ? "[{\"name\":\"id\",\"type\":\"string\"}]"
+                : "[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"owner\",\"type\":\"string\"}]";
+        var files = new java.util.LinkedHashMap<String,String>();
+        files.put("pom.xml", pom(version, null).replace("fixture","org.acme"));
+        files.put("src/main/java/org/acme/Money.java", librarySource(api));
+        files.put("src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\""+route+"\") Object find(String id) { return null; } }\n");
+        files.put("src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\""+topic+"\", \"payload\"); } }\n");
+        files.put("openapi.yaml", """
+                openapi: 3.0.3
+                paths:
+                  /catalog/{id}:
+                    get:
+                      parameters:
+                        - name: id
+                          in: path
+                          required: true
+                          schema: { type: string }
+                      responses:
+                        "200":
+                          content:
+                            application/json:
+                              schema:
+                                $ref: "#/components/schemas/CatalogItem"
+                components:
+                  schemas:
+                    CatalogItem:
+                      type: object
+                      required: %s
+                      properties:
+                        id: { type: string }
+%s                        tag: { type: string }
+                """.formatted(openApiRequired, openApiOwnerProp));
+        files.put("schemas/order-event.avsc",
+                "{\"type\":\"record\",\"name\":\"OrderEvent\",\"fields\":" + avroFields + "}");
+        files.put("src/main/resources/application.properties", """
+                mp.messaging.outgoing.orders.topic=%s
+                mp.messaging.outgoing.orders.schema=schemas/order-event.avsc
+                """.formatted(topic));
+        return Map.copyOf(files);
     }
 
     private static Map<String,String> consumerFiles(String version, String className, String returnType, String invocation) {
@@ -809,6 +851,20 @@ FROM semantic_call_sites WHERE id=?
                 WHERE pg.repository_id=? AND p.contract_type IN ('REST','KAFKA')
                 """,Boolean.class,provider),
                 "persisted REST/Kafka links must retain provider and consumer file/commit evidence");
+        assertTrue(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM contracts c JOIN index_generations g ON g.id=c.generation_id AND g.published
+                  WHERE g.repository_id=? AND c.contract_type='REST' AND c.role='EXPORT'
+                    AND c.canonical_key='rest:GET:/catalog/{id}'
+                    AND c.metadata->>'signature' LIKE 'restOp{%%}')
+                """, Boolean.class, provider),
+                "OpenAPI YAML nested $ref export must persist on the published provider generation");
+        assertTrue(jdbc.queryForObject("""
+                SELECT EXISTS(SELECT 1 FROM contracts c JOIN index_generations g ON g.id=c.generation_id AND g.published
+                  WHERE g.repository_id=? AND c.contract_type='KAFKA' AND c.role='EXPORT'
+                    AND c.canonical_key='kafka:order-events'
+                    AND c.metadata->>'signature' LIKE 'fields{%%}')
+                """, Boolean.class, provider),
+                "Avro fields{} Kafka export must persist on the published provider generation");
     }
 
     private void verifyIncrementalAdditionChangeAndDeletion(Path consumerSource,UUID consumer)throws Exception {

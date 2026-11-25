@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `ab3dcbb9b6ddf97fc49f3b3231bbc2a8926eb3b2` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45637541943 |
+| Last green mandatory CI SHA | `d8fda609e4e6b8565b02eba4b59d0a8b4e95bb1d` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45638905522 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -39,7 +39,7 @@ Status vocabulary (this ledger):
 |---|---|---|---|---|---|
 | CTX-1 | Text index | Zoekt exact/regex search with evidence | VERIFIED_PRODUCTION_READY | `ZoektSearchService`, `ZoektIndexer` | CI b2346ee SharedLibrary IT |
 | CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | CI b2346ee |
-| CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested YAML `$ref` flatten + evolution unit green; multi-repo OpenAPI/Avro PG pending |
+| CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested YAML `$ref` + Avro fields persist in shared IT (await CI) |
 | CTX-4 | Semantic index | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama |
 
 ### MCP tools
