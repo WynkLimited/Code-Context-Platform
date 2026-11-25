@@ -48,6 +48,7 @@ import java.util.Set;
 
 /** Effective-model + Maven Resolver classpath construction for an immutable repository snapshot. */
 public final class MavenClasspathResolver {
+    public static final String VERSION = "maven-resolver-1.9.26-policy-3";
     private static final int MAX_POMS = 256;
     private static final int MAX_ARTIFACTS = 1000;
     private final RepositorySystem system;
@@ -79,36 +80,30 @@ public final class MavenClasspathResolver {
             Set<Path> reactorPoms=Set.copyOf(poms); var modules=new ArrayList<ModuleClasspath>();
             // Build each effective model once per immutable snapshot, rather than rebuilding
             // the entire reactor for every module. Never retain models across commits/repositories.
+            Path cache=policyCache(localRepository,approvedRepositories);
+            var importedModels=new LinkedHashMap<String,ModelSource>();
+            var modelBudget=new java.util.concurrent.atomic.AtomicInteger();
             var models=new LinkedHashMap<Path,Model>();
             var reactorCoordinates=new LinkedHashSet<String>();
             for(Path pom:poms.stream().sorted().toList()) {
-                Model model=effectiveModel(pom,root,reactorPoms,approvedRepositories);
+                Model model=effectiveModel(pom,root,reactorPoms,approvedRepositories,cache,importedModels,modelBudget);
+                requireCoordinate(model.getGroupId(),model.getArtifactId(),model.getVersion());
                 models.put(pom,model);
                 reactorCoordinates.add(coord(model.getGroupId(),model.getArtifactId(),model.getVersion()));
             }
-            Path cache=policyCache(localRepository,approvedRepositories);
             for(var entry:models.entrySet()) {
                 Path pom=entry.getKey(); Model model=entry.getValue();
                 String module=root.relativize(pom.getParent()).toString().replace(File.separatorChar,'/');
                 var repositories=approvedRepositories.stream().map(RepositorySpec::remote).toList();
-                var session=(DefaultRepositorySystemSession)MavenRepositorySystemUtils.newSession();
-                session.setLocalRepositoryManager(system.newLocalRepositoryManager(session,new LocalRepository(cache.toFile())));
-                // Dependency POMs are untrusted too; they cannot extend the operator's repository allowlist.
-                session.setIgnoreArtifactDescriptorRepositories(true);
-                session.setConfigProperty("aether.connector.connectTimeout",10000);
-                session.setConfigProperty("aether.connector.requestTimeout",30000);
-                session.setConfigProperty("aether.transport.http.connectTimeout",10000);
-                session.setConfigProperty("aether.transport.http.requestTimeout",30000);
-                // Maven Resolver's HTTP transporter still follows redirects at the Apache HttpClient
-                // layer; approved HTTPS hosts are DNS/private-address checked below, and cluster
-                // NetworkPolicy must deny private egress as the remaining control.
-                session.setConfigProperty("aether.artifactResolver.snapshotNormalization",false);
+                var session=newSession(cache);
                 var collect=new CollectRequest(); collect.setRepositories(repositories);
                 var dependencies=new ArrayList<org.eclipse.aether.graph.Dependency>();
                 for(Dependency d:model.getDependencies()) {
                     String scope=normalizeScope(d.getScope());
                     if(scope.equals("test")||scope.equals("system")) continue;
                     if(reactorCoordinates.contains(coord(d.getGroupId(),d.getArtifactId(),d.getVersion()))) continue;
+                    requireCoordinate(d.getGroupId(),d.getArtifactId(),d.getVersion());
+                    requireSegment(d.getType());if(d.getClassifier()!=null&&!d.getClassifier().isBlank())requireSegment(d.getClassifier());
                     var artifact=new DefaultArtifact(d.getGroupId(),d.getArtifactId(),d.getClassifier(),d.getType(),d.getVersion());
                     var exclusions=d.getExclusions().stream().map(e->new Exclusion(e.getGroupId(),e.getArtifactId(),"*","*")).toList();
                     dependencies.add(new org.eclipse.aether.graph.Dependency(artifact,scope,d.isOptional(),exclusions));
@@ -129,10 +124,32 @@ public final class MavenClasspathResolver {
         } catch(Exception ex) { String detail=String.valueOf(ex.getMessage()).replaceAll("[\\r\\n]+"," ");return Result.incomplete(commit,"MAVEN_RESOLUTION_FAILED:"+ex.getClass().getSimpleName()+":"+detail.substring(0,Math.min(250,detail.length())),List.of()); }
     }
 
+    DefaultRepositorySystemSession newSession(Path cache) {
+        var session=(DefaultRepositorySystemSession)MavenRepositorySystemUtils.newSession();
+        session.setLocalRepositoryManager(system.newLocalRepositoryManager(session,new LocalRepository(cache.toFile())));
+        session.setIgnoreArtifactDescriptorRepositories(true);
+        session.setChecksumPolicy(org.eclipse.aether.repository.RepositoryPolicy.CHECKSUM_POLICY_FAIL);
+        session.setSystemProperties(safeBuildProperties());
+        session.setUserProperties(Map.of());
+        session.setConfigProperty("aether.connector.connectTimeout",10000);
+        session.setConfigProperty("aether.connector.requestTimeout",30000);
+        session.setConfigProperty("aether.connector.http.followRedirects",false);
+        session.setConfigProperty("aether.artifactResolver.snapshotNormalization",false);
+        return session;
+    }
+
+    private static Map<String,String> safeBuildProperties() {
+        var properties=new LinkedHashMap<String,String>();
+        for(String key:List.of("java.version","java.specification.version","os.name","os.arch","os.version")) {
+            String value=System.getProperty(key);if(value!=null)properties.put(key,value);
+        }
+        return Map.copyOf(properties);
+    }
+
     /** Cache trust includes the ordered repository policy, not merely Maven's repository id. */
     private static Path policyCache(Path base,List<RepositorySpec> approved) throws Exception {
         var digest=MessageDigest.getInstance("SHA-256");
-        digest.update("operator-repositories-only-policy-2".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        digest.update("operator-repositories-only-policy-3".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         for(var repository:approved) {
             var uri=java.net.URI.create(repository.url());
             String location="file".equals(uri.getScheme())?Path.of(uri).toRealPath().toUri().toString():uri.normalize().toString();
@@ -142,15 +159,17 @@ public final class MavenClasspathResolver {
             }
         }
         Path root=base.toAbsolutePath().normalize();
-        Path scoped=root.resolve("policy-2-"+java.util.HexFormat.of().formatHex(digest.digest()));
+        Path scoped=root.resolve("policy-3-"+java.util.HexFormat.of().formatHex(digest.digest()));
         PathContainment.rejectSymlinkAncestors(root,scoped);
         return scoped;
     }
 
-    private Model effectiveModel(Path pom,Path root,Set<Path> reactor,List<RepositorySpec> approved) throws ModelBuildingException {
-        var request=new DefaultModelBuildingRequest().setPomFile(pom.toFile())
+    private Model effectiveModel(Path pom,Path root,Set<Path> reactor,List<RepositorySpec> approved,Path cache,
+                                 Map<String,ModelSource> importedModels,java.util.concurrent.atomic.AtomicInteger modelBudget) throws ModelBuildingException {
+        var properties=new java.util.Properties();properties.putAll(safeBuildProperties());
+        var request=new DefaultModelBuildingRequest().setPomFile(pom.toFile()).setSystemProperties(properties)
                 .setModelSource(new ContainedModelSource(pom,root)).setProcessPlugins(false).setValidationLevel(0)
-                .setModelResolver(new SnapshotModelResolver(root,reactor,approved));
+                .setModelResolver(new SnapshotModelResolver(root,reactor,approved,cache,importedModels,modelBudget));
         return new DefaultModelBuilderFactory().newInstance().build(request).getEffectiveModel();
     }
     private static String normalizeScope(String scope) { return scope==null||scope.isBlank()?"compile":scope.toLowerCase(Locale.ROOT); }
@@ -217,6 +236,15 @@ public final class MavenClasspathResolver {
     public record Result(String commit,List<ModuleClasspath> modules,boolean complete,String reason) {
         static Result incomplete(String commit,String reason,List<ModuleClasspath> modules){return new Result(commit,List.copyOf(modules),false,reason);}
     }
+    private static void requireCoordinate(String group,String artifact,String version) {
+        requireSegment(group);requireSegment(artifact);requireSegment(version);
+        if(group.startsWith("."))throw new IllegalArgumentException("unsafe Maven group path");
+    }
+    private static void requireSegment(String value) {
+        if(value==null||value.isBlank()||value.equals(".")||value.equals("..")||value.contains("${")||value.contains("/")||value.contains("\\")||value.indexOf(0)>=0)
+            throw new IllegalArgumentException("unsafe Maven coordinate path");
+    }
+
     /** Maven parent traversal must obey the same containment as the captured source snapshot. */
     private static final class ContainedModelSource extends FileModelSource {
         private static final int MAX_MODEL_BYTES=16*1024*1024;
@@ -255,16 +283,28 @@ public final class MavenClasspathResolver {
         }
     }
 
-    private static final class SnapshotModelResolver implements ModelResolver {
-        private final Path root; private final Set<Path> reactor; private final List<RepositorySpec> approved;
-        SnapshotModelResolver(Path root,Set<Path> reactor,List<RepositorySpec> approved){this.root=root;this.reactor=reactor;this.approved=approved;}
+    private final class SnapshotModelResolver implements ModelResolver {
+        private final Path root,cache; private final Set<Path> reactor; private final List<RepositorySpec> approved;
+        private final Map<String,ModelSource> importedModels;
+        private final java.util.concurrent.atomic.AtomicInteger modelBudget;
+        SnapshotModelResolver(Path root,Set<Path> reactor,List<RepositorySpec> approved,Path cache,
+                              Map<String,ModelSource> importedModels,java.util.concurrent.atomic.AtomicInteger modelBudget){
+            this.root=root;this.reactor=reactor;this.approved=approved;this.cache=cache;this.importedModels=importedModels;this.modelBudget=modelBudget;
+        }
         private ModelSource resolve(String g,String a,String v) throws UnresolvableModelException {
+            try { requireCoordinate(g,a,v); }
+            catch(IllegalArgumentException invalid){throw new UnresolvableModelException("Unsafe parent/BOM coordinates",g,a,v);}
+            String key=g+":"+a+":"+v;
+            if(importedModels.containsKey(key))return importedModels.get(key);
+            if(modelBudget.incrementAndGet()>MAX_POMS)throw new UnresolvableModelException("Imported model budget exceeded",g,a,v);
             String rel=g.replace('.','/')+"/"+a+"/"+v+"/"+a+"-"+v+".pom";
             for(RepositorySpec spec:approved){
                 try {var uri=java.net.URI.create(spec.url());if(uri.getScheme().equals("file")){
                     Path approvedRoot=Path.of(uri).toRealPath();Path file=approvedRoot.resolve(rel).normalize();
                     PathContainment.rejectSymlinkAncestors(approvedRoot,file);
-                    if(Files.isRegularFile(file,LinkOption.NOFOLLOW_LINKS))return new ContainedModelSource(file,approvedRoot);
+                    if(Files.isRegularFile(file,LinkOption.NOFOLLOW_LINKS)) {
+                        ModelSource source=new ContainedModelSource(file,approvedRoot);importedModels.put(key,source);return source;
+                    }
                 }}
                 catch(Exception ignored) { }
             }
@@ -274,10 +314,21 @@ public final class MavenClasspathResolver {
                     String group=model.getGroupId()!=null?model.getGroupId():model.getParent()==null?null:model.getParent().getGroupId();
                     String version=model.getVersion()!=null?model.getVersion():model.getParent()==null?null:model.getParent().getVersion();
                     if(java.util.Objects.equals(g,group)&&java.util.Objects.equals(a,model.getArtifactId())&&java.util.Objects.equals(v,version))
-                        return new ContainedModelSource(pom,root);
+                    { ModelSource source=new ContainedModelSource(pom,root);importedModels.put(key,source);return source; }
                 }catch(Exception ignored){}
             }
-            throw new UnresolvableModelException("Parent/BOM not available in exact snapshot or approved file repositories",g,a,v);
+            try {
+                var remotes=approved.stream().filter(spec->"https".equals(java.net.URI.create(spec.url()).getScheme()))
+                        .map(RepositorySpec::remote).toList();
+                if(!remotes.isEmpty()) {
+                    var artifact=new DefaultArtifact(g,a,"pom",v);
+                    var request=new org.eclipse.aether.resolution.ArtifactRequest().setArtifact(artifact).setRepositories(remotes);
+                    var resolved=system.resolveArtifact(newSession(cache),request);
+                    Path file=resolved.getArtifact().getFile().toPath();PathContainment.rejectSymlinkAncestors(cache,file);
+                    ModelSource source=new ContainedModelSource(file,cache);importedModels.put(key,source);return source;
+                }
+            }catch(Exception failed){throw new UnresolvableModelException("Parent/BOM unavailable from approved HTTPS repositories",g,a,v,failed);}
+            throw new UnresolvableModelException("Parent/BOM not available in exact snapshot or approved repositories",g,a,v);
         }
         public ModelSource resolveModel(String g,String a,String v)throws UnresolvableModelException{return resolve(g,a,v);}
         public ModelSource resolveModel(org.apache.maven.model.Parent p)throws UnresolvableModelException{return resolve(p.getGroupId(),p.getArtifactId(),p.getVersion());}
@@ -287,6 +338,6 @@ public final class MavenClasspathResolver {
             // Model building may announce Central from Maven's super-POM. Repository use is
             // controlled separately by the approved list passed to Resolver, so never accept POM URLs here.
         }
-        public ModelResolver newCopy(){return new SnapshotModelResolver(root,reactor,approved);}
+        public ModelResolver newCopy(){return new SnapshotModelResolver(root,reactor,approved,cache,importedModels,modelBudget);}
     }
 }

@@ -15,8 +15,8 @@ import java.util.stream.Collectors;
  * <p>Host allowlists alone are insufficient: an allowlisted name can resolve to loopback,
  * link-local, RFC1918, unique-local IPv6, or cloud metadata addresses, and HTTP clients may
  * follow redirects to those targets. Callers must also disable redirects where the client
- * supports it (JGit {@code http.followRedirects=false}) and rely on cluster egress policy for
- * clients that cannot disable redirects (Maven Resolver HTTP transport).
+ * supports it (JGit {@code http.followRedirects=false}, Resolver {@code aether.connector.http.followRedirects=false})
+ * and retain cluster egress controls for DNS-to-connect races.
  */
 public final class OutboundUrlGuard {
     @FunctionalInterface

@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `df26d13493d8378776f888b1546f7c8cb0090a12` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45680364704 |
+| Last green mandatory CI SHA | `78f033922af1b8f955bb36a4794886372bf19be9` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45682228272 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -229,3 +229,15 @@ Reproduced four Maven trust-boundary failures with controlled temporary fixtures
 Fixes: ignore artifact-descriptor repositories on the actual Aether session; contain Maven ModelSource2 related-parent reads; require symlink-free approved model files and exact reactor GAV matching; bounded secure XML validation (16 MiB, 128 levels, no DOCTYPE/entities/XInclude); isolate local artifact caches by policy epoch plus ordered operator repository URLs/IDs/host sets. Previously unscoped cache content is not reused. Generator 1.7.0 makes old persisted contract evidence stale until reindexing. Existing approved local artifact resolution, 12-module parent/BOM inheritance, version changes across commits and exact Money signatures still pass. Nine focused Maven tests passed, including actual Aether downloads and cache reuse/revocation rather than mocks. These fixes do not establish OS containment, private-egress enforcement or support for HTTPS parent/BOM model fetching; those remain open.
 
 Full Java21 suite after Maven policy/model/cache corrections: **262 passed**, zero failures/errors/skips, 39.057s. `git diff --check` passed. PostgreSQL acceptance for these changes remains pending automatic PR CI after publication of the scoped model-cache and security commits. Continue with exact-SHA CI validation, then HTTPS parent/BOM model support and correct declared reactor source visibility, without relaxing the repository allowlist or running untrusted Maven/Gradle build lifecycles.
+
+### Secure HTTPS parent/BOM support — 2026-11-26
+
+`78f033922af1b8f955bb36a4794886372bf19be9` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45682228272. Downloaded XML: **262 unit + seven PostgreSQL cases passed**, zero failures/errors/skips; script and actual logical restore gates passed. Thus the prior model/cache/policy regressions and core HTTP MCP/rollback scenarios are accepted at this SHA.
+
+Implemented approved HTTPS parent/BOM fetching using the actual RepositorySystem, contained cached models and a per-resolution model budget/cache. Actual network testing against Maven Central resolves Apache parent 35, JUnit BOM 5.11.4, commons-lang3 3.17.0 and transitive jars, then binds exact StringUtils/Assertions calls. The first real run exposed missing JDK-profile activation input (`Failed to determine Java version for profile jdk9+`); corrected using only five nonsecret JDK/OS properties. Private JVM/environment properties and host Maven settings are not imported; unresolved coordinates fail closed.
+
+Maven Resolver modules upgraded together from 1.9.22 to 1.9.26 because the supported HTTP redirect-denial switch is available in the patch line. `dependency:tree` confirms all eight Resolver modules at 1.9.26, with existing Maven provider/model-builder 3.9.9 unchanged. Actual HTTP transport test proves 302 refusal and zero requests to the target; production HTTPS/host/private-address checks are preserved. Supported switch documented at https://maven.apache.org/resolver-archives/resolver-1.9.26/configuration.html. DNS-to-connect race/egress enforcement remains a separate platform boundary.
+
+A new controlled corruption test reproduced warning-only checksum acceptance before the policy change (`/tmp/ccp-checksum-before.log`). Downloads now use FAIL checksum policy. Both mismatched and absent checksum variants fail, including retries against the same cache. Policy epoch 3 avoids reusing earlier transport-policy caches; generator 1.8.0 invalidates older persisted evidence, and V6 metadata names the actual resolver/policy version. No applied migrations were changed.
+
+Final focused validation: **13 passed** (11 Maven classpath/policy tests, one actual redirect transport test, one actual HTTPS integration). Complete default Java21 suite: **265 passed**, zero failures/errors/skips, 41.807s. POM parsed, dependency tree inspected, CI YAML parsed and `git diff --check` passed. CI now requires exactly one successful/unskipped MavenRemoteModelIT in addition to all existing gates. This new gate is IMPLEMENTED_UNVERIFIED in CI until the next pushed SHA passes; local real HTTPS execution has passed. Full private-repository authentication, declared reactor sibling-source visibility, transitive scope correctness, bounded aggregate transfers, Gradle and arbitrary cross-repository caller propagation remain actionable; no overall readiness claim.

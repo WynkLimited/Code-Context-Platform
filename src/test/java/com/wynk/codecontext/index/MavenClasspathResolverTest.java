@@ -188,6 +188,41 @@ class MavenClasspathResolverTest {
         assertFalse(revoked.complete(), "an artifact from the revoked URL must not be trusted merely because repository id matches");
     }
 
+    @Test void doesNotInterpolatePrivateJvmPropertiesIntoUntrustedModels() throws Exception {
+        String key="ccp.synthetic.secret";String previous=System.getProperty(key);
+        try {
+            System.setProperty(key,"PRIVATE_PROPERTY_MUST_NOT_BE_EXPOSED");
+            Path snapshot=temp.resolve("property-snapshot");Files.createDirectories(snapshot);
+            Files.writeString(snapshot.resolve("pom.xml"),"<project><modelVersion>4.0.0</modelVersion><groupId>app</groupId><artifactId>consumer</artifactId><version>${ccp.synthetic.secret}</version></project>");
+            var result=new MavenClasspathResolver().resolve(snapshot,"commit-property",temp.resolve("property-cache"),List.of());
+            assertFalse(result.complete(),"unresolved module coordinates must remain incomplete");
+            assertFalse(result.toString().contains("PRIVATE_PROPERTY_MUST_NOT_BE_EXPOSED"));
+        } finally {if(previous==null)System.clearProperty(key);else System.setProperty(key,previous);}
+    }
+
+    @Test void rejectsCorruptOrMissingArtifactChecksums() throws Exception {
+        for(String mode:List.of("corrupt","missing")) {
+            Path repository=temp.resolve("checksum-"+mode);Files.createDirectories(repository);
+            installDescriptorArtifact(repository,"entry","<project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId><artifactId>entry</artifactId><version>1</version></project>");
+            Path jar=repository.resolve("org/acme/entry/1/entry-1.jar");
+            for(String algorithm:List.of("sha1","md5")) {
+                Path sidecar=Path.of(jar+"."+algorithm);
+                if(mode.equals("missing"))Files.delete(sidecar);else Files.writeString(sidecar,"0".repeat(algorithm.equals("sha1")?40:32));
+            }
+            Path snapshot=temp.resolve("checksum-snapshot-"+mode);Files.createDirectories(snapshot);
+            Files.writeString(snapshot.resolve("pom.xml"),"""
+                    <project><modelVersion>4.0.0</modelVersion><groupId>app</groupId><artifactId>consumer</artifactId><version>1</version>
+                    <dependencies><dependency><groupId>org.acme</groupId><artifactId>entry</artifactId><version>1</version></dependency></dependencies></project>
+                    """);
+            var result=new MavenClasspathResolver().resolve(snapshot,"commit-checksum",temp.resolve("checksum-cache-"+mode),
+                    List.of(new MavenClasspathResolver.RepositorySpec("fixture",repository.toUri().toString(),Set.of())));
+            assertFalse(result.complete(), mode+" checksum must fail resolution rather than warn and accept the artifact");
+            var retry=new MavenClasspathResolver().resolve(snapshot,"commit-checksum-retry",temp.resolve("checksum-cache-"+mode),
+                    List.of(new MavenClasspathResolver.RepositorySpec("fixture",repository.toUri().toString(),Set.of())));
+            assertFalse(retry.complete(),"failed checksum must not become trusted cache evidence on retry");
+        }
+    }
+
     @Test void rejectsHttpsMavenRepositoryThatResolvesToLoopbackOrMetadataAddress() {
         // RFC1918 targets remain allowed for corporate Maven hosts; NetworkPolicy is the
         // remaining private-egress control. Loopback and link-local/metadata must still fail.

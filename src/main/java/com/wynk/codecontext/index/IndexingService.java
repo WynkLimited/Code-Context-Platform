@@ -325,12 +325,12 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
     private void persistMavenResolution(RepositoryRecord repo,UUID generation,String commit,MavenClasspathResolver.Result result) throws Exception {
         if(result.modules().isEmpty()) {
             if(!result.complete()) jdbc.update("INSERT INTO maven_module_classpaths(repository_id,generation_id,commit_sha,module_path,resolver_version,resolution_status,reason) VALUES(?,?,?,'',?,'INCOMPLETE',?) ON CONFLICT(generation_id,module_path) DO UPDATE SET resolution_status='INCOMPLETE',reason=excluded.reason,resolved_at=now()",
-                    repo.id(),generation,commit,"maven-resolver-1.9.22",result.reason());
+                    repo.id(),generation,commit,MavenClasspathResolver.VERSION,result.reason());
             return;
         }
         for(var module:result.modules()) {
             jdbc.update("INSERT INTO maven_module_classpaths(repository_id,generation_id,commit_sha,module_path,group_id,artifact_id,version,packaging,classpath_fingerprint,resolver_version,resolution_status,reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(generation_id,module_path) DO UPDATE SET group_id=excluded.group_id,artifact_id=excluded.artifact_id,version=excluded.version,packaging=excluded.packaging,classpath_fingerprint=excluded.classpath_fingerprint,resolver_version=excluded.resolver_version,resolution_status=excluded.resolution_status,reason=excluded.reason,resolved_at=now()",
-                    repo.id(),generation,commit,module.modulePath(),module.groupId(),module.artifactId(),module.version(),module.packaging(),module.fingerprint(),"maven-resolver-1.9.22",module.status(),module.reason());
+                    repo.id(),generation,commit,module.modulePath(),module.groupId(),module.artifactId(),module.version(),module.packaging(),module.fingerprint(),MavenClasspathResolver.VERSION,module.status(),module.reason());
             jdbc.update("DELETE FROM maven_module_dependencies WHERE generation_id=? AND module_path=?",generation,module.modulePath());
             for(var dependency:module.dependencies()) jdbc.update("INSERT INTO maven_module_dependencies(generation_id,module_path,group_id,artifact_id,version,classifier,scope,transitive,optional,artifact_path,artifact_sha256,exclusions) VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb) ON CONFLICT DO NOTHING",
                     generation,module.modulePath(),dependency.groupId(),dependency.artifactId(),dependency.version(),dependency.classifier(),dependency.scope(),dependency.transitive(),dependency.optional(),dependency.artifact().toString(),dependency.sha256(),"[]");

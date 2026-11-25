@@ -252,6 +252,18 @@ jobs:
               raise SystemExit("Separate-JVM recovery gate requires exactly one successful, unskipped test")
           print("RepositoryLeaseProcessPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
           PYCODE
+      - name: Verify allowlisted HTTPS Maven model report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("MavenRemoteModelIT")]
+          if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("HTTPS Maven model gate requires exactly one successful, unskipped test")
+          print("MavenRemoteModelIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
       - name: Record CI run metadata
         if: always()
         run: |
