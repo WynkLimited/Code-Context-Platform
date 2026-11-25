@@ -141,17 +141,21 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
     }
 
 
-    @Tool(description="Compare published contract generations, classify supported changes, and return fresh, evidence-backed candidate consumers with completeness status. Method-level consumer behavior is not inferred; results never block a review.")
-    public java.util.Map<String,Object> impact_analysis(String contract,String repository){
+    @Tool(description="Compare published contract generations, classify supported changes, and return fresh, evidence-backed candidate consumers with completeness status. Optional oldSignature/newSignature classify a proposed method change without claiming definite breakage. Method-level consumer behavior is not inferred; results never block a review.")
+    public java.util.Map<String,Object> impact_analysis(String contract,String repository,String oldSignature,String newSignature){
         Timer.Sample sample=metrics.startMcp();
         boolean error=false;
-        try { return computeImpactAnalysis(contract,repository); }
+        try { return computeImpactAnalysis(contract,repository,oldSignature,newSignature); }
         catch(SecurityException e) { error=true; throw e; }
         catch(Exception e) { error=true; return java.util.Map.of("status","FAILED","blocking",false,"reason","Impact analysis could not be completed; consult platform logs.","results",List.of()); }
         finally { metrics.recordMcp(sample,error); }
     }
 
     private java.util.Map<String,Object> computeImpactAnalysis(String contract,String repository){
+        return computeImpactAnalysis(contract,repository,null,null);
+    }
+
+    private java.util.Map<String,Object> computeImpactAnalysis(String contract,String repository,String oldSignature,String newSignature){
         RepositoryRecord r=allowed(repository);
         StoredIndex after=contractIndexes.published(r.id()).orElse(null);
         if(after==null) return java.util.Map.of("status","INCOMPLETE","blocking",false,"reason","No published contract index is available for the requested repository.","results",List.of());
@@ -209,9 +213,19 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
         result.put("unknownCompatibilityPresent",unknown);
         result.put("confirmedConsumerBreakage",false); result.put("consumerBehaviorAnalysis","NOT_RUN");
         result.put("safetyConclusion","NO_AUTOMATIC_SAFETY_CONCLUSION");
+        if(oldSignature!=null&&!oldSignature.isBlank()||newSignature!=null&&!newSignature.isBlank()) {
+            var proposed=com.wynk.codecontext.port.contract.graph.ProposedChangeClassifier.classify(oldSignature,newSignature);
+            result.put("proposedChange",java.util.Map.of(
+                    "oldSignature",oldSignature==null?"":oldSignature,
+                    "newSignature",newSignature==null?"":newSignature,
+                    "kind",proposed.kind().name(),
+                    "impactClass",proposed.impactClass(),
+                    "explanation",proposed.explanation(),
+                    "confirmedBreakage",false));
+        }
         result.put("completenessScope","Contract generation comparison, team-scoped Maven dependency routing, exact V5 Java semantic method references, and Kotlin compiler JVM call edges where dependency artifacts and provider symbols are available; Kotlin source compatibility stays UNKNOWN; results remain informational.");
         result.put("consumerRefreshScheduled",refreshRequest.scheduled()); result.put("consumerRefreshTruncated",refreshRequest.truncated());
-        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin JVM binary edges from the compiler analyzer are reported when present; Kotlin source compatibility (inline, suspend, defaults, nullability, exact source mappings) remains UNKNOWN and never proves safety.","Full indirect method-chain resolution remains unsupported.","Repositories outside the authenticated team's access scope are not searched."));
+        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin JVM binary edges from the compiler analyzer are reported when present; Kotlin source compatibility (inline, suspend, defaults, nullability, exact source mappings) remains UNKNOWN and never proves safety.","Full indirect method-chain resolution remains unsupported.","Repositories outside the authenticated team's access scope are not searched.","Proposed-change classification distinguishes potential binary incompatibility from behavioural unknowns; it never claims definite runtime breakage."));
         persistImpact(r,after,before,status,result);
         return result;
     }

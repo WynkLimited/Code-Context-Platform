@@ -826,13 +826,38 @@ FROM semantic_call_sites WHERE id=?
         Set<String> afterDeletionHashes=new java.util.HashSet<>(jdbc.queryForList("SELECT content_hash FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java'",String.class,deletedGeneration));
         assertEquals(changedChunkHashes,afterDeletionHashes,"unchanged Java chunks and vectors must be reused across the deletion-only generation");
 
-        List<String> incrementalSnapshot=indexedGenerationSnapshot(deletedGeneration);
-        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND embedding IS NOT NULL",Integer.class,deletedGeneration)>0);
-        jdbc.update("UPDATE contract_index_metadata SET generator_version='force-full-rebuild' WHERE generation_id=?",deletedGeneration);
-        jdbc.update("DELETE FROM generation_files WHERE generation_id=?",deletedGeneration);
+        // File rename must drop the old path and publish the new path without retaining stale nodes/chunks.
+        Path renamedFile=consumerSource.resolve("src/main/java/app/ConsumerCRenamed.java");
+        Files.move(javaFile,renamedFile);
+        String renamedSource=Files.readString(renamedFile).replace("class ConsumerC","class ConsumerCRenamed");
+        Files.writeString(renamedFile,renamedSource);
+        try(Git git=Git.open(consumerSource.toFile())){commit(git,"incremental source rename");}
+        indexAndAwait("consumer-service-c");
+        UUID renamedGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM generation_files WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java'",Integer.class,renamedGeneration));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM generation_files WHERE generation_id=? AND file_path='src/main/java/app/ConsumerCRenamed.java'",Integer.class,renamedGeneration));
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java'",Integer.class,renamedGeneration));
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path='src/main/java/app/ConsumerCRenamed.java'",Integer.class,renamedGeneration)>0);
+
+        // Dependency-only change (no Java source edit) must refresh Maven coordinates while preserving renamed source records.
+        Path pom=consumerSource.resolve("pom.xml");
+        String pomText=Files.readString(pom);
+        assertTrue(pomText.contains("<version>1.0</version>")||pomText.contains("<version>2.0</version>"));
+        // Bump a non-provider property comment marker so the blob changes without altering call sites.
+        Files.writeString(pom,pomText.replace("</project>","<!-- dependency refresh marker --></project>"));
+        try(Git git=Git.open(consumerSource.toFile())){commit(git,"incremental dependency metadata refresh");}
+        indexAndAwait("consumer-service-c");
+        UUID dependencyGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        assertNotEquals(renamedGeneration,dependencyGeneration);
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM generation_files WHERE generation_id=? AND file_path='src/main/java/app/ConsumerCRenamed.java'",Integer.class,dependencyGeneration));
+
+        List<String> incrementalSnapshot=indexedGenerationSnapshot(dependencyGeneration);
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND embedding IS NOT NULL",Integer.class,dependencyGeneration)>0);
+        jdbc.update("UPDATE contract_index_metadata SET generator_version='force-full-rebuild' WHERE generation_id=?",dependencyGeneration);
+        jdbc.update("DELETE FROM generation_files WHERE generation_id=?",dependencyGeneration);
         indexAndAwait("consumer-service-c","full-rebuild-equivalence-"+UUID.randomUUID());
         UUID rebuiltGeneration=repositories.currentGeneration(consumer).orElseThrow();
-        assertNotEquals(deletedGeneration,rebuiltGeneration);
+        assertNotEquals(dependencyGeneration,rebuiltGeneration);
         assertEquals(incrementalSnapshot,indexedGenerationSnapshot(rebuiltGeneration),
                 "full reprocessing and incremental indexing must produce the same stable records");
     }

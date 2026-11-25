@@ -23,7 +23,7 @@ class CodeContextToolsIsolationTest {
             assertThrows(SecurityException.class,()->tools.semantic_search("query","foreign/library",10));
             assertThrows(SecurityException.class,()->tools.get_neighbors("foreign/library","Secret"));
             assertThrows(SecurityException.class,()->tools.read_file("foreign/library","Secret.java",1,10));
-            assertThrows(SecurityException.class,()->tools.impact_analysis("","foreign/library"));
+            assertThrows(SecurityException.class,()->tools.impact_analysis("","foreign/library",null,null));
         } finally {SecurityContextHolder.clearContext();}
     }
 }
