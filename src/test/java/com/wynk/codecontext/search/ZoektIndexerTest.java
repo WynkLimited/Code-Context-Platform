@@ -35,6 +35,18 @@ class ZoektIndexerTest {
         assertEquals("Fixture/repo@"+generation,metadata.path("name").asText());
     }
 
+    @Test void treatsAbsentGenerationRemovalAsSuccessfulCleanup() throws Exception {
+        Path cleaner=root.resolve("capture-cleaner");
+        Files.writeString(cleaner,"#!/bin/sh\necho 'repository \"Fixture/repo@deadbeef\" not found' >&2\nexit 1\n");
+        assertTrue(cleaner.toFile().setExecutable(true));
+        Path index=Files.createDirectory(root.resolve("index"));
+        var config=new CodeContextProperties(root.toString(),root.toString(),index.toString(),"","","","","github.com","http://localhost",1024,1048576,6000,2,300,
+                new CodeContextProperties.Zoekt("zoekt-git-index",cleaner.toString(),"http://localhost:6070"),new CodeContextProperties.Graphify("graphify",false));
+        UUID repository=UUID.randomUUID(),generation=UUID.randomUUID();
+        var record=new RepositoryRecord(repository,"Fixture","repo","file:///fixture","team","main","LIBRARY",root.toString());
+        assertDoesNotThrow(()->new ZoektIndexer(config,JsonMapper.builder().build()).removeGeneration(record,generation));
+    }
+
     @Test void normalizesRealJGitClonePackNamesWithoutChangingRevisionOrFiles() throws Exception {
         Path source=root.resolve("source"),clone=root.resolve("clone");
         String commit;

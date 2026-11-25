@@ -67,7 +67,12 @@ public class ZoektIndexer {
                 throw new IOException("Zoekt obsolete-generation removal exceeded 30 second limit");
             }
             String output=Files.exists(log)?Files.readString(log):"";
-            if(process.exitValue()!=0)throw new IOException("Zoekt obsolete-generation removal failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1000,output.length())));
+            if(process.exitValue()!=0) {
+                String detail=output.substring(0,Math.min(1000,output.length()));
+                // Already-absent shards are a successful cleanup outcome for durable retries.
+                if(detail.toLowerCase(java.util.Locale.ROOT).contains("not found"))return;
+                throw new IOException("Zoekt obsolete-generation removal failed with exit "+process.exitValue()+": "+detail);
+            }
         } finally {
             if(process!=null&&process.isAlive())process.destroyForcibly();
             Files.deleteIfExists(log);

@@ -798,10 +798,18 @@ FROM semantic_call_sites WHERE id=?
         assertTrue(results.contains("Fixture/consumer-service-a"),description+" omitted authorized repository results: "+payload);
         assertTrue(results.contains("ConsumerA.java"),description+" omitted exact file evidence: "+payload);
         assertTrue(results.contains(consumerCommit),description+" omitted exact generation commit evidence: "+payload);
-        JsonNode files=payload.path("results").get(0).path("matches").path("Files");
-        assertTrue(files.isArray()&&!files.isEmpty(),description+" omitted Zoekt file matches: "+payload);
         JsonNode consumerFile=null;
-        for(JsonNode file:files)if(file.path("FileName").asText().endsWith("ConsumerA.java")){consumerFile=file;break;}
+        for(JsonNode result:payload.path("results")) {
+            JsonNode files=result.path("matches").path("Files");
+            if(!files.isArray())continue;
+            for(JsonNode file:files) {
+                if(file.path("FileName").asText().endsWith("ConsumerA.java")) {
+                    consumerFile=file;
+                    break;
+                }
+            }
+            if(consumerFile!=null)break;
+        }
         assertNotNull(consumerFile,description+" omitted ConsumerA.java line evidence: "+payload);
         assertTrue(consumerFile.path("LineMatches").isArray()&&!consumerFile.path("LineMatches").isEmpty(),
                 description+" omitted matching source lines: "+consumerFile);
