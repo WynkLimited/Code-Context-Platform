@@ -51,12 +51,23 @@ ORDER BY g.generation DESC LIMIT 1
         if (!ContractModels.INDEX_SCHEMA_VERSION.equals(index.indexSchemaVersion())
                 || !ContractModels.GENERATOR_VERSION.equals(index.generatorVersion())
                 || !ContractModels.COMPATIBILITY_RULES_VERSION.equals(index.compatibilityRulesVersion())) return IndexFreshness.STALE;
-        if (!index.extractorVersions().keySet().equals(currentExtractorVersions.keySet())) return IndexFreshness.STALE;
+        // Repository-specific unsupported build coverage is not an installed extractor version.
+        // Keep it visible via hasCoverageGaps without making every subsequent reindex stale.
+        var installedKeys=new HashSet<>(index.extractorVersions().keySet());
+        index.extractorVersions().forEach((key,value)->{
+            if(isRepositoryCoverageGap(key,value))installedKeys.remove(key);
+        });
+        if (!installedKeys.equals(currentExtractorVersions.keySet())) return IndexFreshness.STALE;
         for (var recorded : index.extractorVersions().entrySet()) {
+            if(isRepositoryCoverageGap(recorded.getKey(),recorded.getValue()))continue;
             String current=currentExtractorVersions.get(recorded.getKey());
             if (current==null || !Objects.equals(current,recorded.getValue()) || recorded.getValue().startsWith("failed:")) return IndexFreshness.STALE;
         }
         return IndexFreshness.CURRENT;
+    }
+
+    private static boolean isRepositoryCoverageGap(String key,String version) {
+        return "gradle-dependencies".equals(key) && "unavailable:NOT_IMPLEMENTED".equals(version);
     }
 
     public boolean hasCoverageGaps(StoredIndex stored) {

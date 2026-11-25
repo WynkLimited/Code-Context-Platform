@@ -228,6 +228,18 @@ jobs:
               raise SystemExit("Generation retention gate requires exactly one successful, unskipped test")
           print("GenerationRetentionPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
           PYCODE
+      - name: Verify separate-JVM lease recovery report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("RepositoryLeaseProcessPostgresIT")]
+          if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Separate-JVM recovery gate requires exactly one successful, unskipped test")
+          print("RepositoryLeaseProcessPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
       - name: Record CI run metadata
         if: always()
         run: |
@@ -251,4 +263,5 @@ jobs:
             target/failsafe-reports/**
             target/*-maven.log
             target/acceptance-run-metadata.txt
+            target/lease-process-logs/**
           if-no-files-found: warn

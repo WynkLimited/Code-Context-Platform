@@ -23,14 +23,27 @@ public final class RepositoryIndexLeaseManager {
     private static final Duration HEARTBEAT_INTERVAL = Duration.ofSeconds(30);
 
     private final JdbcTemplate jdbc;
+    private final Duration leaseDuration;
+    private final Duration heartbeatInterval;
     private final ScheduledExecutorService heartbeats = Executors.newScheduledThreadPool(1, task -> {
         Thread thread = new Thread(task, "repository-index-lease-heartbeat");
         thread.setDaemon(true);
         return thread;
     });
 
+    @org.springframework.beans.factory.annotation.Autowired
     public RepositoryIndexLeaseManager(JdbcTemplate jdbc) {
+        this(jdbc,LEASE_DURATION,HEARTBEAT_INTERVAL);
+    }
+
+    /** Short durations are used only by isolated multi-process failure-recovery fixtures. */
+    RepositoryIndexLeaseManager(JdbcTemplate jdbc,Duration leaseDuration,Duration heartbeatInterval) {
+        if(leaseDuration.isNegative()||leaseDuration.isZero()||heartbeatInterval.isNegative()
+                ||heartbeatInterval.isZero()||heartbeatInterval.multipliedBy(2).compareTo(leaseDuration)>=0)
+            throw new IllegalArgumentException("heartbeat must be positive and less than half the lease duration");
         this.jdbc = jdbc;
+        this.leaseDuration=leaseDuration;
+        this.heartbeatInterval=heartbeatInterval;
     }
 
     public Optional<Lease> tryAcquire(UUID repositoryId, UUID jobId) {
@@ -41,12 +54,12 @@ public final class RepositoryIndexLeaseManager {
                 ON CONFLICT(repository_id) DO UPDATE SET lease_token=excluded.lease_token,
                   lease_expires_at=excluded.lease_expires_at,updated_at=now()
                 WHERE repository_index_leases.lease_expires_at < now()
-                """, repositoryId, token, LEASE_DURATION.toMillis());
+                """, repositoryId, token, leaseDuration.toMillis());
         if (claimed == 0) return Optional.empty();
 
         Lease lease = new Lease(repositoryId, jobId, token);
         lease.heartbeat = heartbeats.scheduleAtFixedRate(lease::renew,
-                HEARTBEAT_INTERVAL.toMillis(), HEARTBEAT_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+                heartbeatInterval.toMillis(), heartbeatInterval.toMillis(), TimeUnit.MILLISECONDS);
         return Optional.of(lease);
     }
 
@@ -75,7 +88,7 @@ public final class RepositoryIndexLeaseManager {
                         UPDATE repository_index_leases
                         SET lease_expires_at=now()+(? * interval '1 millisecond'),updated_at=now()
                         WHERE repository_id=? AND lease_token=? AND lease_expires_at>now()
-                        """, LEASE_DURATION.toMillis(), repositoryId, token);
+                        """, leaseDuration.toMillis(), repositoryId, token);
                 if (renewed != 1) {
                     lose("lease ownership changed or expired");
                     return;
