@@ -17,8 +17,9 @@ Statuses reflect ledger evidence. `N/A` requires justification.
 | Repo lifecycle / purge | Y | Y | Y | Partial | N | Retention IT | VERIFIED (core) |
 | Webhook ingest | Y | Unit | Partial | Partial | N | Controller tests | PARTIAL |
 | Java↔Kotlin shared-lib impact | Y | Y | Y | Y | Partial | Kotlin provider IT | VERIFIED (ABI) |
-| REST OpenAPI evolution | Y | Y | Y (changes) | Partial | N | Nested $ref MCP @ f905835 | PARTIAL |
+| REST OpenAPI evolution | Y | Y | Y (changes) | Partial | N | Nested+cross-file $ref MCP @ f905835/404c099 | PARTIAL |
 | Kafka Avro evolution | Y | Y | Y (changes) | Partial | N | Avro MCP changes @ f905835 | PARTIAL |
+| Ambiguous contract refresh | Y | Y | Y | Partial | N | Dual REST AMBIGUOUS @ 440a4ef | VERIFIED |
 | Gradle resolution | N | N | N | N/A | N/A | — | NOT_IMPLEMENTED |
 | OS sandbox | Partial | N | N | BLOCKED | N/A | App isolation only | BLOCKED |
 | DR / PITR | Scripts | N | N | Partial | N | Scripts only | BLOCKED (env) |
