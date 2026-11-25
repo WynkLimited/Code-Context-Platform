@@ -51,25 +51,31 @@ public class GenerationRetentionService {
     }
 
     boolean collect(UUID generation, UUID repository) {
-        var claim=leases.tryAcquire(repository,UUID.randomUUID());
-        if(claim.isEmpty()) return false;
-        try(var lease=claim.get()) {
+        try {
             return Boolean.TRUE.equals(transactions.execute(status->{
-                lease.fenceTransaction();
-                // Serialize disable/re-onboard and FK insertion of new jobs with the eligibility check.
-                jdbc.query("SELECT id FROM repositories WHERE id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),repository);
-                var eligible=jdbc.query("""
-                    SELECT g.id,r.owner,r.name FROM index_generations g JOIN repositories r ON r.id=g.repository_id
-                    WHERE g.id=? AND g.repository_id=? AND NOT g.published
-                      AND g.created_at<now()-(? * interval '1 day')
-                    """ + PROTECTED + " FOR UPDATE OF g",(rs,n)->new String[]{rs.getString("owner"),rs.getString("name")},generation,repository,days);
-                if(eligible.isEmpty()) return false;
-                var identity=eligible.get(0);
-                jdbc.update("INSERT INTO generation_cleanup_outbox(generation_id,repository_id,owner,name) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",generation,repository,identity[0],identity[1]);
-                // Derived graph, contract, semantic and vector records use ON DELETE CASCADE.
-                jdbc.update("DELETE FROM index_generations WHERE id=?",generation);
-                return true;
+                // Fail fast when another owner already fences the lease row (INSERT ON CONFLICT blocks on FOR UPDATE).
+                jdbc.execute("SET LOCAL lock_timeout='250ms'");
+                var claim=leases.tryAcquire(repository,UUID.randomUUID());
+                if(claim.isEmpty()) return false;
+                try(var lease=claim.get()) {
+                    lease.fenceTransaction();
+                    // Serialize disable/re-onboard and FK insertion of new jobs with the eligibility check.
+                    jdbc.query("SELECT id FROM repositories WHERE id=? FOR UPDATE",(rs,n)->rs.getObject(1,UUID.class),repository);
+                    var eligible=jdbc.query("""
+                        SELECT g.id,r.owner,r.name FROM index_generations g JOIN repositories r ON r.id=g.repository_id
+                        WHERE g.id=? AND g.repository_id=? AND NOT g.published
+                          AND g.created_at<now()-(? * interval '1 day')
+                        """ + PROTECTED + " FOR UPDATE OF g",(rs,n)->new String[]{rs.getString("owner"),rs.getString("name")},generation,repository,days);
+                    if(eligible.isEmpty()) return false;
+                    var identity=eligible.get(0);
+                    jdbc.update("INSERT INTO generation_cleanup_outbox(generation_id,repository_id,owner,name) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",generation,repository,identity[0],identity[1]);
+                    // Derived graph, contract, semantic and vector records use ON DELETE CASCADE.
+                    jdbc.update("DELETE FROM index_generations WHERE id=?",generation);
+                    return true;
+                }
             }));
+        } catch(org.springframework.dao.DataAccessException locked) {
+            return false;
         }
     }
 

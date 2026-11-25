@@ -503,11 +503,13 @@ SELECT EXISTS(SELECT 1 FROM contracts WHERE generation_id=? AND contract_type='M
                 String.class, TEAM, provider);
         assertNotNull(persistedImpact);
         JsonNode persisted = json.readTree(persistedImpact);
-        assertEquals(3, persisted.path("semanticMethodImpacts").size(), persistedImpact);
-        assertTrue(persistedImpact.contains("src/main/kotlin/app/KotlinPinned.kt"));
-        assertTrue(persistedImpact.contains("src/main/java/app/JavaPinned.java"));
+        JsonNode persistedImpacts = persisted.path("semanticMethodImpacts");
+        assertEquals(3, persistedImpacts.size(), persistedImpact);
+        assertTrue(persistedImpacts.toString().contains("src/main/kotlin/app/KotlinPinned.kt"));
+        assertTrue(persistedImpacts.toString().contains("src/main/java/app/JavaPinned.java"));
         assertTrue(persistedImpact.contains("KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"));
-        assertFalse(persistedImpact.contains("kotlin-consumer-ok"));
+        // Upgraded consumers may appear in candidate/graph metadata; semantic impacts must exclude them.
+        assertFalse(persistedImpacts.toString().contains("kotlin-consumer-ok"), persistedImpacts.toString());
     }
 
     private void assertCallPersisted(UUID repository, UUID generation, String commit, String targetKey, String path) {
