@@ -28,10 +28,10 @@ Every row lists current evidence and the exact next action; rows remain incomple
 | IDX-3 | Incremental/full rebuild equivalence | PARTIALLY IMPLEMENTED | `SharedLibraryImpactPostgresIT` addition/change/deletion/equivalence | Compiled only; run CI then add rename/dependency/graph equivalence cases. |
 | SEARCH-1 | Zoekt exact/regex, evidence, update/deletion | PARTIALLY IMPLEMENTED | `ZoektSearchService`, `ZoektIndexer`, unit tests and shared IT | Four search unit tests passed; run real Zoekt acceptance and adversarial query filters. |
 | SEARCH-2 | Source→Ollama→pgvector→MCP | PARTIALLY IMPLEMENTED | Indexing chunks, `CodeContextTools`, shared IT | Real integration unexecuted; test oversized input, model errors, changed-model reuse and team isolation. |
-| CONTRACT-1 | REST extraction/schema compatibility | PARTIALLY IMPLEMENTED | REST extractors/compatibility unit tests, shared IT | Unit tests passed; extend persisted request/response schema changes and config-derived routes. |
-| CONTRACT-2 | Kafka/Protobuf schemas | PARTIALLY IMPLEMENTED | Kafka/Proto extractors and compatibility tests | Unit tests passed; add persisted schema evolution and consumer impact protocol fixtures. |
-| CONTRACT-3 | Configuration-derived relationships | PARTIALLY IMPLEMENTED | `ContractValueResolver` tests | Unit tests passed; add multi-repo persisted config-backed acceptance. |
-| CONTRACT-4 | Unresolved/ambiguous relationship refresh | PARTIALLY IMPLEMENTED | Durable refresher, late-provider shared IT | Compiled; run late-provider case; implement/test ambiguity re-evaluation and bounded queue under contention. |
+| CONTRACT-1 | REST extraction/schema compatibility | PARTIALLY IMPLEMENTED | OpenAPI JSON `$ref`→`restOp` schemas, direction-aware request/response/param rules, config-derived routes; unit + shared IT evidence | Unit suite green; YAML OpenAPI still line-based (no YAML mapper). Run PG shared IT for persisted OpenAPI schema evolution. |
+| CONTRACT-2 | Kafka/Protobuf schemas | PARTIALLY IMPLEMENTED | Avro/JSON `fields{}` signatures, proto field-number reuse for Kafka, config topic placeholders; unit tests | Unit suite green; add multi-repo persisted Avro evolution + MCP consumer-impact fixture. |
+| CONTRACT-3 | Configuration-derived relationships | PARTIALLY IMPLEMENTED | Nested YAML/properties placeholders for REST+Kafka; unit tests | Unit tests passed; add multi-repo persisted config-backed acceptance. |
+| CONTRACT-4 | Unresolved/ambiguous relationship refresh | PARTIALLY IMPLEMENTED | Durable refresher + late-provider IT; link AMBIGUOUS/RESOLVED re-evaluation; GraphSymbolBinder rebind test | Unit binder test passed; run late-provider PG case; prove ambiguity demotion/resolution under contention. |
 | JVM-1 | Java method resolution, Maven transitive ownership | PARTIALLY IMPLEMENTED | Java semantic analyzer, Maven resolver and unit tests | Unit tests passed; add transitive overlapping-class artifact-ownership fixture. |
 | JVM-2 | Kotlin compiler method semantics, Java interop | PARTIALLY IMPLEMENTED | `KotlinJvmSemanticAnalyzer`, compiler fixtures, mixed shared-library IT | Three real-compiler regression tests passed on Java21. JVM calls/declarations now persist; Java consumes compiled Kotlin jar. Run PG mixed fixture. Next implement Kotlin exported ABI contracts and cross-repo baseline impact, source-level inline/suspend/generic mapping and module dependency topology. |
 | GRAPH-1 | Graphify graph and semantic symbol binding | PARTIALLY IMPLEMENTED | Graphify importer, binder, `GraphifyPostgresIT` | Unit importer/binder tests passed; run real CLI/PG test and mixed-symbol binding assertions. |
@@ -165,3 +165,19 @@ Concurrent functional/security work included in the same push after local valida
 ### GitRepositoryManager Spring wiring repair — 2026-11-25
 
 Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45584498033 on e2f19af: unit gate passed; PostgreSQL suite **2 passed, 0 failures, 2 errors, 0 skips** (least-privilege + retention). Shared and Graphify failed ApplicationContext load: `GitRepositoryManager` gained a package-visible test constructor for DNS injection, and Spring selected that greediest constructor then failed with `No default constructor found`. Production single-arg constructor now marked `@Autowired`; Spring wiring regression added. Contract intelligence increment (OpenAPI schema support, structured REST/Kafka compatibility, ambiguous relationship refresher hooks) included after local validation. Full Java21 suite: **199 passed, 0 failures/errors/skips**.
+
+Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45586396558 on de20325: unit gate passed; PostgreSQL suite **3 passed, 1 failure, 0 errors/skips**. Graphify, least-privilege, retention pass; ApplicationContext loads. Shared acceptance fails at Kotlin ConsumerAKotlin call-site line assertion: helper assumed every `convert(String)` call is on line 5 (Java fixture), but the single-line Kotlin caller is on line 2. Assertion is now path-aware (Java line 5, Kotlin line 2) without weakening resolution requirements.
+
+
+### Contract intelligence slice (CONTRACT-1..4) — 2026-11-25
+
+Local uncommitted continuation on top of `de20325` ledger update only (no further commit/push from this agent).
+
+Implemented against extractor/compatibility engine:
+- OpenAPI JSON `$ref` resolution into durable `restOp{params;request;response}` signatures with required/optional evidence (`OpenApiSchemaSupport`, REST extractor 1.1.0).
+- Direction-aware REST compatibility: required request add / response remove = BREAKING; optional response add / request remove = BACKWARD_COMPATIBLE; unstructured OpenAPI remains UNKNOWN (`StructuredSchemaCompat`).
+- Kafka Avro/JSON Schema → `fields{}` signatures; proto message signatures reuse field-number/type rules; optional field add not breaking; config-derived topic placeholders covered in unit tests.
+- `ConsumerContractIndexRefresher.reevaluateAmbiguousRelationships` demotes multi-provider links and restores RESOLVED when one provider remains; GraphSymbolBinder rebind unit covers AMBIGUOUS→RESOLVED.
+- Shared IT strengthened: REST/Kafka link evidence must retain provider/consumer file+commit.
+
+Versions: generator `1.5.0`, compatibility rules `1.6.0`. Validated: **199** Java21 unit tests passed, 0 failures/errors/skips. Not done: YAML OpenAPI full `$ref` (no YAML mapper), multi-repo persisted OpenAPI/Avro evolution + MCP consumer-impact fixtures, PG proof of ambiguity demotion under contention, late-provider CI execution.

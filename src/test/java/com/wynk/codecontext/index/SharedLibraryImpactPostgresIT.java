@@ -351,8 +351,12 @@ AND target.symbol_key=? AND edge.resolution_status='RESOLVED'
         assertTrue(rows != null && rows > 0, () -> "missing persisted V4/V5 resolved target " + targetKey + " in " + path
                 + "; persisted call-sites=" + callSiteDiagnostics(repository, path)
                 + "; Maven classpath=" + mavenClasspathDiagnostics(repository));
-        if (targetKey.endsWith("java.lang.String)")) {
+        if (targetKey.endsWith("java.lang.String)") && path.endsWith("ConsumerA.java")) {
+            // Java fixture places money.convert("x") on line 5; Kotlin callers keep their own source lines.
             assertEquals(5, jdbc.queryForObject("SELECT start_line FROM semantic_call_sites WHERE repository_id=? AND file_path=? AND declaring_type='org.acme.Money' AND resolved_signature='convert(java.lang.String)' ORDER BY id LIMIT 1", Integer.class, repository, path));
+        }
+        if (path.endsWith("ConsumerAKotlin.kt")) {
+            assertEquals(2, jdbc.queryForObject("SELECT start_line FROM semantic_call_sites WHERE repository_id=? AND file_path=? AND declaring_type='org.acme.Money' AND resolved_signature='convert(java.lang.String)' ORDER BY id LIMIT 1", Integer.class, repository, path));
         }
         Integer caller = jdbc.queryForObject("""
 SELECT count(*) FROM semantic_call_sites site JOIN semantic_symbols caller ON caller.id=site.caller_symbol_id
