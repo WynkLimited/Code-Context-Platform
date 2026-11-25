@@ -92,9 +92,15 @@ class ProductionDatabaseLeastPrivilegeIT {
             for (var call : calls) if (call.get(15, java.util.concurrent.TimeUnit.SECONDS)) allowed++;
             assertEquals(11, allowed, "two independent gate instances must share the remaining eleven requests atomically");
         }
-        assertEquals(13L, jdbc.queryForObject("SELECT used FROM api_rate_limit_windows WHERE team='orders'", Long.class));
+        assertEquals(33L, jdbc.queryForObject("SELECT used FROM api_rate_limit_windows WHERE team='orders'", Long.class));
+        assertFalse(com.wynk.codecontext.security.RateLimitGate.postgres(1, jdbc).check("orders").allowed());
+        assertEquals(34L, jdbc.queryForObject("SELECT used FROM api_rate_limit_windows WHERE team='orders'", Long.class),
+                "a lower-budget replica during rolling configuration must never rewind the shared count");
         assertTrue(second.check("payments").allowed(), "teams have independent budgets");
         assertFalse(com.wynk.codecontext.security.RateLimitGate.postgres(12, jdbc).check("orders").allowed(), "restart must retain the exhausted window");
+        jdbc.update("UPDATE api_rate_limit_windows SET used=2147483648 WHERE team='orders'");
+        assertFalse(first.check("orders").allowed());
+        assertEquals(2147483648L, jdbc.queryForObject("SELECT used FROM api_rate_limit_windows WHERE team='orders'", Long.class));
         jdbc.update("UPDATE api_rate_limit_windows SET window_start = statement_timestamp() - interval '2 minutes' WHERE team='orders'");
         var reset = first.check("orders");
         assertTrue(reset.allowed());

@@ -59,12 +59,12 @@ public final class RateLimitGate {
                     VALUES (?, date_trunc('minute', statement_timestamp()), 1)
                     ON CONFLICT (team) DO UPDATE SET
                       used = CASE WHEN budget.window_start < date_trunc('minute', statement_timestamp()) THEN 1
-                                  ELSE LEAST(budget.used + 1, ?::bigint + 1) END,
+                                  ELSE LEAST(budget.used + 1, 2147483648::bigint) END,
                       window_start = GREATEST(budget.window_start, date_trunc('minute', statement_timestamp()))
                     RETURNING used, GREATEST(1, ceil(extract(epoch FROM
                       (window_start + interval '1 minute' - statement_timestamp())) * 1000))::bigint AS retry_ms
                     """, (rs, row) -> rs.getLong("used") > limit ? Decision.deny(rs.getLong("retry_ms"))
-                        : Decision.allow(limit - rs.getInt("used")), key, limit);
+                        : Decision.allow(limit - rs.getInt("used")), key);
             } catch (org.springframework.dao.DataAccessException failure) {
                 throw new UnavailableException(failure);
             }
