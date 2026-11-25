@@ -34,4 +34,21 @@ class ZoektIndexerTest {
         var metadata=JsonMapper.builder().build().readTree(index.resolve("meta-"+repository+".json").toFile());
         assertEquals("Fixture/repo@"+generation,metadata.path("name").asText());
     }
+
+    @Test void normalizesRealJGitClonePackNamesWithoutChangingRevisionOrFiles() throws Exception {
+        Path source=root.resolve("source"),clone=root.resolve("clone");
+        String commit;
+        try(var git=org.eclipse.jgit.api.Git.init().setDirectory(source.toFile()).setInitialBranch("main").call()) {
+            Files.writeString(source.resolve("Money.java"),"class Money {}\n");
+            git.add().addFilepattern(".").call();
+            commit=git.commit().setAuthor("fixture","fixture@example.com").setCommitter("fixture","fixture@example.com").setMessage("pack fixture").call().name();
+        }
+        org.eclipse.jgit.api.Git.cloneRepository().setURI(source.toUri().toString()).setDirectory(clone.toFile()).call().close();
+        assertTrue(GitPackCompatibility.normalize(clone),"JGit clone pack names must be normalized for the pinned go-git reader");
+        assertFalse(GitPackCompatibility.normalize(clone),"already-compatible repositories must avoid repeated repacking");
+        try(var git=org.eclipse.jgit.api.Git.open(clone.toFile())) {
+            assertEquals(commit,git.getRepository().resolve("HEAD").name());
+            assertEquals("class Money {}\n",Files.readString(clone.resolve("Money.java")));
+        }
+    }
 }

@@ -17,6 +17,7 @@ public class ZoektIndexer {
     private final CodeContextProperties config; private final JsonMapper json;
     public ZoektIndexer(CodeContextProperties c,JsonMapper m){config=c;json=m;}
     public void index(RepositoryRecord repository,Path checkout,java.util.UUID generation) throws Exception {
+        GitPackCompatibility.normalize(checkout);
         String commit;
         try(var git=org.eclipse.jgit.api.Git.open(checkout.toFile())) {
             var head=git.getRepository().resolve("HEAD^{commit}");
