@@ -56,6 +56,7 @@ class SharedLibraryImpactPostgresIT {
     @Autowired PostgresContractIndexStore contractIndexes;
     @Autowired IndexingService indexing;
     @Autowired RepositoryIndexLeaseManager repositoryIndexLeases;
+    @Autowired ConsumerContractIndexRefresher contractRefresher;
     @Autowired JsonMapper json;
     @MockitoSpyBean ZoektIndexer zoektIndexer;
 
@@ -362,6 +363,69 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
 """,Boolean.class,consumerA,dependencyCommit(consumerA))));
     }
 
+
+    @Test
+    void demotesAmbiguousRestProvidersAndResolvesWhenOneProviderRemains() throws Exception {
+        Path providerA = ROOT.resolve("git-sources/orders-api-a");
+        Path providerB = ROOT.resolve("git-sources/orders-api-b");
+        Path consumer = ROOT.resolve("git-sources/orders-client");
+        createGitRepository(providerA, Map.of(
+                "pom.xml", pom("1.0", null).replace("fixture", "org.acme.a"),
+                "src/main/java/org/acme/a/Orders.java",
+                "package org.acme.a; class Orders { @GetMapping(\"/orders/{id}\") Object find(String id) { return null; } }\n"));
+        createGitRepository(providerB, Map.of(
+                "pom.xml", pom("1.0", null).replace("fixture", "org.acme.b"),
+                "src/main/java/org/acme/b/Orders.java",
+                "package org.acme.b; class Orders { @GetMapping(\"/orders/{id}\") Object find(String id) { return null; } }\n"));
+        createGitRepository(consumer, Map.of(
+                "pom.xml", pom("1.0", null),
+                "src/main/java/app/OrdersClient.java",
+                "package app; class OrdersClient { void load() { webClient.get().uri(\"/orders/{id}\"); } }\n"));
+        onboard("orders-api-a", providerA, "SERVICE");
+        onboard("orders-api-b", providerB, "SERVICE");
+        onboard("orders-client", consumer, "SERVICE");
+        indexAndAwait("orders-api-a");
+        indexAndAwait("orders-api-b");
+        indexAndAwait("orders-client");
+
+        UUID consumerGeneration = repositories.currentGeneration(repositories.id("Fixture", "orders-client")).orElseThrow();
+        contractRefresher.refreshGeneration(consumerGeneration);
+
+        Integer ambiguousLinks = jdbc.queryForObject("""
+                SELECT count(*) FROM contract_links l
+                JOIN contracts c ON c.id=l.consumer_contract
+                JOIN index_generations cg ON cg.id=c.generation_id AND cg.published
+                JOIN repositories cr ON cr.id=cg.repository_id AND cr.name='orders-client'
+                WHERE c.canonical_key='rest:GET:/orders/{id}'
+                  AND l.evidence::text LIKE '%AMBIGUOUS%'
+                """, Integer.class);
+        assertTrue(ambiguousLinks != null && ambiguousLinks >= 1,
+                "two published REST providers for the same consumer import must demote to AMBIGUOUS");
+
+        repositories.disable(repositories.id("Fixture", "orders-api-b"));
+        contractRefresher.refreshGeneration(consumerGeneration);
+        contractRefresher.pruneSupersededRelationships();
+
+        Integer stillAmbiguous = jdbc.queryForObject("""
+                SELECT count(*) FROM contract_links l
+                JOIN contracts c ON c.id=l.consumer_contract
+                JOIN index_generations cg ON cg.id=c.generation_id AND cg.published
+                JOIN repositories cr ON cr.id=cg.repository_id AND cr.name='orders-client'
+                WHERE c.canonical_key='rest:GET:/orders/{id}'
+                  AND l.evidence::text LIKE '%AMBIGUOUS%'
+                """, Integer.class);
+        Integer resolved = jdbc.queryForObject("""
+                SELECT count(*) FROM contract_links l
+                JOIN contracts c ON c.id=l.consumer_contract
+                JOIN index_generations cg ON cg.id=c.generation_id AND cg.published
+                JOIN repositories cr ON cr.id=cg.repository_id AND cr.name='orders-client'
+                WHERE c.canonical_key='rest:GET:/orders/{id}'
+                  AND l.evidence::text LIKE '%RESOLVED%'
+                  AND l.evidence::text NOT LIKE '%AMBIGUOUS%'
+                """, Integer.class);
+        assertEquals(0, stillAmbiguous, "disabling the duplicate provider must clear AMBIGUOUS markers");
+        assertTrue(resolved != null && resolved >= 1, "single remaining provider must record RESOLVED evidence");
+    }
 
     @Test
     void indexesKotlinProviderPersistsAbiAndReturnsExactCrossLanguageImpactThroughMcp() throws Exception {
