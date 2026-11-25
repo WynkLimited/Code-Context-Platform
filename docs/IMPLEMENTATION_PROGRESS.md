@@ -22,7 +22,7 @@ Every row lists current evidence and the exact next action; rows remain incomple
 | GC-1 | Configurable durable bounded retention | IMPLEMENTED AND INTEGRATION VERIFIED | `GenerationRetentionService`, V10, `GenerationRetentionPostgresIT` | CI a176f6e executed cascade/outbox; hard-purge + Zoekt reconcile extensions pending next CI. |
 | GC-2 | Active, last-good and impact baseline protection | IMPLEMENTED AND INTEGRATION VERIFIED | Retention eligibility SQL + PostgreSQL test | CI a176f6e; multi-instance simultaneous query/index/cleanup still open. |
 | GC-3 | External cleanup retry/recovery | IMPLEMENTED AND INTEGRATION VERIFIED | Cleanup outbox; fault-injection PG test; idempotent not-found Zoekt remove | CI a176f6e + unit; orphan reconciliation added locally pending next CI. |
-| GC-4 | Disable/re-onboard/delete lifecycle | PARTIALLY IMPLEMENTED | `RepositoryStore`, retention protection | Soft disable tested only in added PG fixture; implement explicit authorized hard-purge lifecycle and cross-team re-onboarding tests. |
+| GC-4 | Disable/re-onboard/delete lifecycle | IMPLEMENTED AND INTEGRATION VERIFIED | `RepositoryStore.purge`, controller `?purge=true`, retention PG hard-purge/reclaim | CI b2346ee: soft disable + authorized hard purge + foreign-team reclaim. Cross-team re-onboarding ACL depth still open. |
 | IDX-1 | Distributed lease acquisition/renewal/fencing | PARTIALLY IMPLEMENTED | V9, `RepositoryIndexLeaseManager`, publication transaction; PG contention test | Run PG tests, then crash/heartbeat failure and two-process publication tests. |
 | IDX-2 | Durable jobs, retries, duplicate delivery | PARTIALLY IMPLEMENTED | `IndexingService`, V7/V8 refresh/webhook queues | Unit webhook suite passed; test stale worker job-state fencing and permanent-failure operations. |
 | IDX-3 | Incremental/full rebuild equivalence | PARTIALLY IMPLEMENTED | `SharedLibraryImpactPostgresIT` addition/change/deletion/equivalence | Compiled only; run CI then add rename/dependency/graph equivalence cases. |
@@ -33,9 +33,9 @@ Every row lists current evidence and the exact next action; rows remain incomple
 | CONTRACT-3 | Configuration-derived relationships | PARTIALLY IMPLEMENTED | Nested YAML/properties placeholders for REST+Kafka; unit tests | Unit tests passed; add multi-repo persisted config-backed acceptance. |
 | CONTRACT-4 | Unresolved/ambiguous relationship refresh | PARTIALLY IMPLEMENTED | Durable refresher + late-provider IT; link AMBIGUOUS/RESOLVED re-evaluation; GraphSymbolBinder rebind test | Unit binder test passed; run late-provider PG case; prove ambiguity demotion/resolution under contention. |
 | JVM-1 | Java method resolution, Maven transitive ownership | PARTIALLY IMPLEMENTED | Java semantic analyzer, Maven resolver and unit tests | Unit tests passed; add transitive overlapping-class artifact-ownership fixture. |
-| JVM-2 | Kotlin compiler method semantics, Java interop | PARTIALLY IMPLEMENTED | PARTIALLY IMPLEMENTED | `KotlinJvmSemanticAnalyzer`, compiler fixtures, mixed shared-library IT | Three real-compiler regression tests passed on Java21. JVM calls/declarations now persist; Java consumes compiled Kotlin jar. Run PG mixed fixture. Next implement Kotlin exported ABI contracts and cross-repo baseline impact, source-level inline/suspend/generic mapping and module dependency topology. |
+| JVM-2 | Kotlin compiler method semantics, Java interop | PARTIALLY IMPLEMENTED | `KotlinJvmSemanticAnalyzer`, ABI contracts, Kotlin provider multi-repo shared IT | CI b2346ee: Kotlin provider ABI + K→K/J→K MCP impact green. Inline/suspend/default/nullability source mapping remains UNKNOWN; inter-module topology still open. |
 | GRAPH-1 | Graphify graph and semantic symbol binding | IMPLEMENTED AND INTEGRATION VERIFIED | Graphify importer, binder, `GraphifyPostgresIT` | CI a176f6e real CLI ingestion; mixed-symbol binding depth still open. |
-| MCP-1 | Six authenticated protocol tools | IMPLEMENTED AND E2E VERIFIED | Shared IT invokes all six tools + cross-team isolation | CI a176f6e authenticated Streamable HTTP; Kotlin-provider MCP impact pending next CI. |
+| MCP-1 | Six authenticated protocol tools | IMPLEMENTED AND E2E VERIFIED | Shared IT invokes all six tools + cross-team isolation + Kotlin-provider impact | CI a176f6e + b2346ee authenticated Streamable HTTP including Kotlin provider impact_analysis. |
 | SEC-1 | Team/repository isolation and adversarial cases | PARTIALLY IMPLEMENTED | API filter, scoped stores/search unit tests | Add cross-team protocol tests for every tool and re-onboarding ACLs. |
 | SEC-2 | Git/Maven SSRF, filesystem/subprocess protection | PARTIALLY IMPLEMENTED | Host allowlists, path guards, time/output limits | Add redirect/DNS/private-address and symlink adversarial tests; assess existing mirror origin validation. |
 | SEC-3 | Credential rotation, rate limits, audit | PARTIALLY IMPLEMENTED | Dual-key `team=current\|previous` roster, rate-limit gate (default off), audit redaction | Unit rotation/revoke green; admin key-admin API and multi-replica limiter still open. |
@@ -224,4 +224,25 @@ Independent continuation (unit-validated before push):
 - Prometheus alert rules under `deploy/prometheus/alerts.yaml`; backup/restore smoke scripts under `scripts/`.
 
 Next: push, workflow_dispatch, confirm Kotlin-provider + purge PG gates, then continue remaining ledger items (domain Micrometer meters, ambiguity PG contention, incremental rename, OS compiler sandbox, DR drill).
+
+### Mandatory CI green for Kotlin provider + hard purge — 2026-11-25
+
+Remote HEAD `b2346ee049528c705991de75051ef960da4abb3a`.
+Workflow: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45629807050 — **success**.
+
+| Gate | Result |
+|---|---|
+| Unit + no-skip | **216 passed, 0 failures, 0 errors, 0 skipped** |
+| SharedLibraryImpactPostgresIT | **2 passed** (Java Money + Kotlin Amount provider / MCP) |
+| GraphifyPostgresIT | **1 passed** |
+| GenerationRetentionPostgresIT | **1 passed** (fencing, hard purge, orphan reconcile) |
+| ProductionDatabaseLeastPrivilegeIT | **1 passed** |
+
+Preceding CI failures on `5eda7e6`/`0345a18` were repaired by:
+1. Exact Java-fixture identity checks (avoid `kotlin-common-library` substring collision).
+2. Retention top-2 protectors for doomed/contended generations.
+3. Persist assertion scoped to `semanticMethodImpacts` (upgraded consumers may appear in graph/candidate metadata).
+4. Retention `collect` uses `SET LOCAL lock_timeout='250ms'` so a fenced lease returns false instead of blocking.
+
+Domain Micrometer meters (`PlatformMetrics`) and prior contract/security/ops slice are included in this green SHA lineage (`0345a18`→`4ca099f`→`b2346ee`). Overall decision remains **NO-GO** pending remaining ledger depth (OS compiler sandbox, DR drill, rename/dependency incremental PG cases, multi-replica rate limit, cluster smoke).
 
