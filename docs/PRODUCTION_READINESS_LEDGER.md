@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `df9b83d7b8bcfb4cec274779cbd5cd5116c24b69` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45678687700 |
+| Last green mandatory CI SHA | `df26d13493d8378776f888b1546f7c8cb0090a12` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45680364704 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -219,3 +219,13 @@ Nine new regression cases cover request/response directions, unrestricted transi
 ### Reactor model construction — 2026-11-26
 
 `MavenClasspathResolver` formerly rebuilt all reactor effective models inside every module loop, in addition to each module's own model. It now constructs each model once in a per-resolution local map and reuses the coordinate set; no state survives into another repository or commit. This removes the explicit N² outer-loop model reconstruction without changing dependency repository policy or executing build plugins. A real 12-child-module + parent fixture uses an approved local artifact repository, BOM imports and inherited dependency versions, then changes the parent BOM version and resolves again with the same resolver. All modules select the correct new artifact rather than reusing the previous commit's model. Focused MavenClasspathResolverTest: **4 passed**, no failures/errors/skips. This is functional and algorithmic evidence, not a measured production indexing latency improvement. Positive sibling-source classpaths and module visibility remain open. Enum df26d13 PR CI is running at 45680364704; continue monitoring it.
+
+### Maven policy boundary regressions — 2026-11-26
+
+Enum commit `df26d13493d8378776f888b1546f7c8cb0090a12` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45680364704. Downloaded XML: **256 unit + seven PostgreSQL cases passed**, no failures/errors/skips. Both new OpenAPI enum classifications executed through authenticated HTTP MCP. Script boundary and real logical restore gates also passed.
+
+Reproduced four Maven trust-boundary failures with controlled temporary fixtures, without touching the reference repository or any real private file: (1) an artifact descriptor injected an unapproved file repository and resolution incorrectly succeeded; (2) a parent relative path outside the snapshot was consumed; (3) an approved BOM path followed a symlink to an outside file; (4) changing a repository URL while retaining its ID still trusted an artifact in the shared local cache. Pre-fix failures are retained in `/tmp/ccp-descriptor-before.log`, `/tmp/ccp-model-containment-before.log`, `/tmp/ccp-cache-revocation-before.log`.
+
+Fixes: ignore artifact-descriptor repositories on the actual Aether session; contain Maven ModelSource2 related-parent reads; require symlink-free approved model files and exact reactor GAV matching; bounded secure XML validation (16 MiB, 128 levels, no DOCTYPE/entities/XInclude); isolate local artifact caches by policy epoch plus ordered operator repository URLs/IDs/host sets. Previously unscoped cache content is not reused. Generator 1.7.0 makes old persisted contract evidence stale until reindexing. Existing approved local artifact resolution, 12-module parent/BOM inheritance, version changes across commits and exact Money signatures still pass. Nine focused Maven tests passed, including actual Aether downloads and cache reuse/revocation rather than mocks. These fixes do not establish OS containment, private-egress enforcement or support for HTTPS parent/BOM model fetching; those remain open.
+
+Full Java21 suite after Maven policy/model/cache corrections: **262 passed**, zero failures/errors/skips, 39.057s. `git diff --check` passed. PostgreSQL acceptance for these changes remains pending automatic PR CI after publication of the scoped model-cache and security commits. Continue with exact-SHA CI validation, then HTTPS parent/BOM model support and correct declared reactor source visibility, without relaxing the repository allowlist or running untrusted Maven/Gradle build lifecycles.

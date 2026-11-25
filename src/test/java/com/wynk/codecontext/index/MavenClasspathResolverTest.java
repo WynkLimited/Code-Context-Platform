@@ -103,6 +103,91 @@ class MavenClasspathResolverTest {
         }
     }
 
+    @Test void rejectsRepositoriesInjectedByTransitiveArtifactDescriptors() throws Exception {
+        Path approved=temp.resolve("approved-artifacts"),unapproved=temp.resolve("unapproved-artifacts");
+        Files.createDirectories(approved);Files.createDirectories(unapproved);
+        installDescriptorArtifact(unapproved,"hidden","<project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId><artifactId>hidden</artifactId><version>1</version></project>");
+        installDescriptorArtifact(approved,"entry","""
+                <project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId><artifactId>entry</artifactId><version>1</version>
+                <repositories><repository><id>injected</id><url>%s</url></repository></repositories>
+                <dependencies><dependency><groupId>org.acme</groupId><artifactId>hidden</artifactId><version>1</version></dependency></dependencies></project>
+                """.formatted(unapproved.toUri()));
+        Path snapshot=temp.resolve("injection-snapshot");Files.createDirectories(snapshot);
+        Files.writeString(snapshot.resolve("pom.xml"),"""
+                <project><modelVersion>4.0.0</modelVersion><groupId>app</groupId><artifactId>consumer</artifactId><version>1</version>
+                <dependencies><dependency><groupId>org.acme</groupId><artifactId>entry</artifactId><version>1</version></dependency></dependencies></project>
+                """);
+        Path cache=temp.resolve("injection-cache");
+        var resolved=new MavenClasspathResolver().resolve(snapshot,"commit-injection",cache,
+                List.of(new MavenClasspathResolver.RepositorySpec("approved",approved.toUri().toString(),Set.of())));
+        assertFalse(resolved.complete(), "unapproved descriptor repositories must not supply transitive artifacts");
+        if(Files.exists(cache))try(var cached=Files.walk(cache)) {
+            assertFalse(cached.anyMatch(path->path.getFileName().toString().equals("hidden-1.jar")), "unapproved artifact must never enter any policy cache");
+        }
+    }
+    private static void installDescriptorArtifact(Path repository,String artifact,String model) throws Exception {
+        Path directory=repository.resolve("org/acme/"+artifact+"/1");Files.createDirectories(directory);
+        Path pom=directory.resolve(artifact+"-1.pom"),jar=directory.resolve(artifact+"-1.jar");
+        Files.writeString(pom,model);try(var output=new JarOutputStream(Files.newOutputStream(jar))) { }
+        writeChecksumSidecars(pom);writeChecksumSidecars(jar);
+    }
+
+    @Test void rejectsParentRelativePathOutsideTheImmutableSnapshot() throws Exception {
+        Path outside=temp.resolve("outside-parent");Files.createDirectories(outside);
+        Files.writeString(outside.resolve("pom.xml"),"<project><modelVersion>4.0.0</modelVersion><groupId>outside</groupId><artifactId>parent</artifactId><version>1</version><packaging>pom</packaging></project>");
+        Path snapshot=temp.resolve("parent-escape-snapshot");Files.createDirectories(snapshot);
+        Files.writeString(snapshot.resolve("pom.xml"),"""
+                <project><modelVersion>4.0.0</modelVersion><parent><groupId>outside</groupId><artifactId>parent</artifactId><version>1</version><relativePath>../outside-parent/pom.xml</relativePath></parent><artifactId>child</artifactId></project>
+                """);
+        var resolved=new MavenClasspathResolver().resolve(snapshot,"commit-parent-escape",temp.resolve("parent-cache"),List.of());
+        assertFalse(resolved.complete(), "parent outside the captured snapshot must not be consumed");
+    }
+    @Test void rejectsSymlinkedBomInAnApprovedFileRepository() throws Exception {
+        Path outside=temp.resolve("outside-bom.xml");
+        Files.writeString(outside,"<project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId><artifactId>bom</artifactId><version>1</version><packaging>pom</packaging></project>");
+        Path approved=temp.resolve("bom-approved");Path bom=approved.resolve("org/acme/bom/1/bom-1.pom");
+        Files.createDirectories(bom.getParent());Files.createSymbolicLink(bom,outside);
+        Path snapshot=temp.resolve("bom-symlink-snapshot");Files.createDirectories(snapshot);
+        Files.writeString(snapshot.resolve("pom.xml"),"""
+                <project><modelVersion>4.0.0</modelVersion><groupId>app</groupId><artifactId>child</artifactId><version>1</version>
+                <dependencyManagement><dependencies><dependency><groupId>org.acme</groupId><artifactId>bom</artifactId><version>1</version><scope>import</scope><type>pom</type></dependency></dependencies></dependencyManagement></project>
+                """);
+        var resolved=new MavenClasspathResolver().resolve(snapshot,"commit-bom-symlink",temp.resolve("bom-cache"),
+                List.of(new MavenClasspathResolver.RepositorySpec("approved",approved.toUri().toString(),Set.of())));
+        assertFalse(resolved.complete(), "symlinked approved model must not read an unapproved file");
+    }
+
+    @Test void rejectsDoctypeAndExcessiveModelNestingWithoutReadingExternalEntities() throws Exception {
+        Path secret=temp.resolve("external-entity.txt");Files.writeString(secret,"PRIVATE_SENTINEL_MUST_NOT_BE_READ");
+        Path snapshot=temp.resolve("xml-snapshot");Files.createDirectories(snapshot);
+        String doctype="<!DOCTYPE project [<!ENTITY secret SYSTEM '"+secret.toUri()+"'>]>";
+        String project="<project><modelVersion>4.0.0</modelVersion><groupId>app</groupId><artifactId>consumer</artifactId><version>1</version></project>";
+        for(String model:List.of(doctype+project.replace("consumer","&secret;"),
+                project.replace("</project>","<properties>"+"<nested>".repeat(150)+"value"+"</nested>".repeat(150)+"</properties></project>"))) {
+            Files.writeString(snapshot.resolve("pom.xml"),model);
+            var resolved=new MavenClasspathResolver().resolve(snapshot,"commit-xml",temp.resolve("xml-cache"),List.of());
+            assertFalse(resolved.complete());
+            assertFalse(resolved.reason().contains("PRIVATE_SENTINEL_MUST_NOT_BE_READ"));
+        }
+    }
+
+    @Test void revokedRepositoryUrlCannotRemainTrustedThroughTheSharedLocalCache() throws Exception {
+        Path first=temp.resolve("original-approved"),replacement=temp.resolve("replacement-approved");
+        Files.createDirectories(first);Files.createDirectories(replacement);
+        installDescriptorArtifact(first,"entry","<project><modelVersion>4.0.0</modelVersion><groupId>org.acme</groupId><artifactId>entry</artifactId><version>1</version></project>");
+        Path snapshot=temp.resolve("revocation-snapshot");Files.createDirectories(snapshot);
+        Files.writeString(snapshot.resolve("pom.xml"),"""
+                <project><modelVersion>4.0.0</modelVersion><groupId>app</groupId><artifactId>consumer</artifactId><version>1</version>
+                <dependencies><dependency><groupId>org.acme</groupId><artifactId>entry</artifactId><version>1</version></dependency></dependencies></project>
+                """);
+        var resolver=new MavenClasspathResolver();Path cache=temp.resolve("shared-policy-cache");
+        assertTrue(resolver.resolve(snapshot,"commit-before-revocation",cache,
+                List.of(new MavenClasspathResolver.RepositorySpec("same-id",first.toUri().toString(),Set.of()))).complete());
+        var revoked=resolver.resolve(snapshot,"commit-after-revocation",cache,
+                List.of(new MavenClasspathResolver.RepositorySpec("same-id",replacement.toUri().toString(),Set.of())));
+        assertFalse(revoked.complete(), "an artifact from the revoked URL must not be trusted merely because repository id matches");
+    }
+
     @Test void rejectsHttpsMavenRepositoryThatResolvesToLoopbackOrMetadataAddress() {
         // RFC1918 targets remain allowed for corporate Maven hosts; NetworkPolicy is the
         // remaining private-egress control. Loopback and link-local/metadata must still fail.
