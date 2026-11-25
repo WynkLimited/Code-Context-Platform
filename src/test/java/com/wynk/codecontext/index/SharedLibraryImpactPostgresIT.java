@@ -796,12 +796,14 @@ FROM semantic_call_sites WHERE id=?
                         id: { type: string }
 %s                        tag: { type: string }
                 """.formatted(openApiRequired, openApiOwnerProp));
-        files.put("schemas/order-event.avsc",
-                "{\"type\":\"record\",\"name\":\"OrderEvent\",\"fields\":" + avroFields + "}");
+        // Separate Avro-backed topic so annotation kafkaTemplate.send("order-events") remains
+        // the single provider-consumer link asserted below.
+        files.put("schemas/inventory-event.avsc",
+                "{\"type\":\"record\",\"name\":\"InventoryEvent\",\"fields\":" + avroFields + "}");
         files.put("src/main/resources/application.properties", """
-                mp.messaging.outgoing.orders.topic=%s
-                mp.messaging.outgoing.orders.schema=schemas/order-event.avsc
-                """.formatted(topic));
+                mp.messaging.outgoing.inventory.topic=inventory-events
+                mp.messaging.outgoing.inventory.schema=schemas/inventory-event.avsc
+                """);
         return Map.copyOf(files);
     }
 
@@ -861,7 +863,7 @@ FROM semantic_call_sites WHERE id=?
         assertTrue(jdbc.queryForObject("""
                 SELECT EXISTS(SELECT 1 FROM contracts c JOIN index_generations g ON g.id=c.generation_id AND g.published
                   WHERE g.repository_id=? AND c.contract_type='KAFKA' AND c.role='EXPORT'
-                    AND c.canonical_key='kafka:order-events'
+                    AND c.canonical_key='kafka:inventory-events'
                     AND c.metadata->>'signature' LIKE 'fields{%%}')
                 """, Boolean.class, provider),
                 "Avro fields{} Kafka export must persist on the published provider generation");
