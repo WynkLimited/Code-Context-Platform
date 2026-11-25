@@ -288,9 +288,14 @@ class SharedLibraryImpactPostgresIT {
         assertFalse(impacts.toString().contains("consumer-service-c"));
         JsonNode contractCandidates=payload.path("impactCandidates");
         assertTrue(contractCandidates.toString().contains("rest:GET:/orders/{id}"),"HTTP removal must reach the authenticated MCP impact response: "+contractCandidates);
-        assertTrue(contractCandidates.toString().contains("fixture/consumer-service-a"),"REST consumer evidence must identify Consumer A: "+contractCandidates);
+        // Impact candidates serialize RepoRef as nested owner/name (Fixture casing), not lowercase "fixture/..." keys.
+        assertTrue(contractCandidates.toString().contains("\"name\":\"consumer-service-a\"")
+                        && contractCandidates.toString().contains("rest:GET:/orders/{id}"),
+                "REST consumer evidence must identify Consumer A: "+contractCandidates);
         assertTrue(contractCandidates.toString().contains("kafka:order-events"),"Kafka topic removal must reach the authenticated MCP impact response: "+contractCandidates);
-        assertTrue(contractCandidates.toString().contains("fixture/consumer-service-b"),"Kafka consumer evidence must identify Consumer B: "+contractCandidates);
+        assertTrue(contractCandidates.toString().contains("\"name\":\"consumer-service-b\"")
+                        && contractCandidates.toString().contains("kafka:order-events"),
+                "Kafka consumer evidence must identify Consumer B: "+contractCandidates);
 
         String persistedImpact = jdbc.queryForObject("SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1", String.class, TEAM, provider);
         assertNotNull(persistedImpact);

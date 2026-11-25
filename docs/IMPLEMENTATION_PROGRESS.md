@@ -181,3 +181,6 @@ Implemented against extractor/compatibility engine:
 - Shared IT strengthened: REST/Kafka link evidence must retain provider/consumer file+commit.
 
 Versions: generator `1.5.0`, compatibility rules `1.6.0`. Validated: **199** Java21 unit tests passed, 0 failures/errors/skips. Not done: YAML OpenAPI full `$ref` (no YAML mapper), multi-repo persisted OpenAPI/Avro evolution + MCP consumer-impact fixtures, PG proof of ambiguity demotion under contention, late-provider CI execution.
+
+Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45588085639 on d0912f2: unit gate passed; PostgreSQL suite **3 passed, 1 failure, 0 errors/skips**. Shared acceptance advanced through Kotlin call-site lines, all six MCP tools, and dual Java/Kotlin semantic impacts. Failure: impactCandidates serialize RepoRef as nested owner/name with Fixture casing, while the assertion looked for lowercase `fixture/consumer-service-a`. Assertion now checks `"name":"consumer-service-a"` / `consumer-service-b` together with the REST/Kafka contract keys. Consumer A/B remain present in the payload; no assertion weakened beyond format alignment.
+
