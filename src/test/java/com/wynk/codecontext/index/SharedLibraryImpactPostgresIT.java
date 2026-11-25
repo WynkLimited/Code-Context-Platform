@@ -200,6 +200,8 @@ class SharedLibraryImpactPostgresIT {
         assertCallPersisted(consumerC, consumerCGeneration, consumerCCommit,
                 "app.ConsumerKotlinPeer#label()", "src/main/java/app/ConsumerJavaPeer.java");
         assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM semantic_call_sites WHERE generation_id=? AND file_path='src/main/kotlin/app/ConsumerKotlinPeer.kt' AND declaring_type='org.acme.Money' AND extractor_version='kotlin-compiler-jvm' AND resolution_status='RESOLVED'",Integer.class,consumerCGeneration));
+        assertTrue(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM contracts WHERE generation_id=? AND contract_type='MAVEN' AND role='EXPORT' AND metadata->'kotlinJvmAbi' @> '[\"app.ConsumerKotlinPeer#label()Ljava/lang/String;\"]'::jsonb AND metadata->>'kotlinSourceCompatibility'='UNKNOWN')",Boolean.class,consumerCGeneration),"compiler-derived exported Kotlin ABI and source-compatibility limitation must persist with the Maven contract");
+
         verifyIncrementalAdditionChangeAndDeletion(consumerCSource, consumerC);
         assertEquals("1.0", dependencyVersion(consumerA));
         assertEquals("2.0", dependencyVersion(consumerB));

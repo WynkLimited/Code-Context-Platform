@@ -120,8 +120,8 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
                     graphify.buildAndPersist(snapshot,gen);
                 } finally {try(var paths=Files.walk(snapshot)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
             }
-            buildAndPersistSemanticCallSites(repo,gen,files,sha);
-            buildAndPersistContractIndex(repo,gen,files,sha);
+            var kotlinAbi=buildAndPersistSemanticCallSites(repo,gen,files,sha);
+            buildAndPersistContractIndex(repo,gen,files,sha,kotlinAbi);
             zoekt.index(repo,root,gen);
             // Atomic visibility: previous generation stays published until every stage above succeeds.
             lease.assertOwned();
@@ -199,7 +199,7 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
     /** Resolve against source roots and Maven descriptors materialized from this immutable Git
      * commit. External artifacts are deliberately absent until the repository's Maven classpath
      * is resolved. */
-    private void buildAndPersistSemanticCallSites(RepositoryRecord repo, UUID generation,
+    private Map<String,com.wynk.codecontext.port.contract.source.KotlinAbiSurface> buildAndPersistSemanticCallSites(RepositoryRecord repo, UUID generation,
                                                    List<GitRepositoryManager.SourceFile> files, String commit) throws Exception {
         Path snapshot=Files.createTempDirectory("code-context-semantic-");
         try {
@@ -217,6 +217,7 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
             Path mavenCache=Path.of(props.repositoryRoot()).toAbsolutePath().normalize().resolve(".maven-cache");
             var mavenResult=mavenClasspathResolver.resolve(snapshot,commit,mavenCache,MavenClasspathResolver.configuredRepositories());
             persistMavenResolution(repo,generation,commit,mavenResult);
+            var kotlinAbi=new HashMap<String,com.wynk.codecontext.port.contract.source.KotlinAbiSurface>();
             var kotlinJars=new HashMap<String,Path>();
             var kotlinModules=files.stream().filter(f->f.path().endsWith(".kt"))
                     .map(f->moduleFor(snapshot,f.path(),mavenResult.modules())).distinct().toList();
@@ -230,7 +231,11 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
                 for(var source:sources)if(source.toString().endsWith(".kt"))
                     jdbc.update("INSERT INTO semantic_call_sites(repository_id,generation_id,commit_sha,file_path,start_line,end_line,invocation,resolution_status,evidence,confidence,extractor_version) VALUES(?,?,?,?,1,1,?,'INCOMPLETE',?,0,'kotlin-compiler-jvm')",
                             repo.id(),generation,commit,snapshot.relativize(source).toString(),"<kotlin-analysis-completeness>",result.diagnostic());
-                if(!result.complete())continue;
+                if(!result.complete()) {
+                    kotlinAbi.put(module,new com.wynk.codecontext.port.contract.source.KotlinAbiSurface(List.of(),false,List.of(result.diagnostic())));
+                    continue;
+                }
+                kotlinAbi.put(module,com.wynk.codecontext.port.contract.source.KotlinAbiSurface.read(result.jar()));
                 kotlinJars.put(module,result.jar());
                 for(var declaration:result.declarations()) {
                     var symbol=declaration.symbol();
@@ -271,6 +276,7 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
                     persistSemanticCallSite(repo.id(),generation,commit,file.path(),call,evidence,caller,target,artifact,version);
                 }
             }
+            return Map.copyOf(kotlinAbi);
         } finally {try(var paths=Files.walk(snapshot)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
     }
 
@@ -324,7 +330,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
                 repo.id(),generation,commit,key,declaringType,signature,kind,status);
     }
 
-    private void buildAndPersistContractIndex(RepositoryRecord repo, UUID generation, List<GitRepositoryManager.SourceFile> files, String commit) throws Exception {
+    private void buildAndPersistContractIndex(RepositoryRecord repo, UUID generation, List<GitRepositoryManager.SourceFile> files, String commit, Map<String,com.wynk.codecontext.port.contract.source.KotlinAbiSurface> kotlinAbi) throws Exception {
         Path snapshot = Files.createTempDirectory("code-context-contract-");
         ContractModels.ContractIndex index;
         try {
@@ -335,7 +341,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
                 Files.writeString(out, file.content());
             }
             var context = new RepositoryContext(repo.owner(), repo.name(), commit, repo.defaultBranch(), snapshot);
-            index = graphSymbolBinder.bind(contractIndexBuilder.build(context), generation);
+            index = graphSymbolBinder.bind(com.wynk.codecontext.port.contract.source.KotlinAbiContracts.enrich(contractIndexBuilder.build(context),kotlinAbi), generation);
         } finally {
             try (var paths = Files.walk(snapshot)) {
                 paths.sorted(Comparator.reverseOrder()).forEach(p -> { try { Files.deleteIfExists(p); } catch (Exception ignored) { } });

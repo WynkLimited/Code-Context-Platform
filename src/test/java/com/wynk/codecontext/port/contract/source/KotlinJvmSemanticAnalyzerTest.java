@@ -92,4 +92,36 @@ class KotlinJvmSemanticAnalyzerTest {
         assertEquals(Set.of("PATH","JAVA_HOME","JAVA_OPTS","LANG"),environment.keySet());
         assertEquals("-Xmx512m -Dfile.encoding=UTF-8",environment.get("JAVA_OPTS"));
     }
+
+    @Test void metadataVisibilityAndBinaryDescriptorsDistinguishInternalAndExportedAbi() throws Exception {
+        Path source=root.resolve("Library.kt");
+        Files.writeString(source,"package lib\nclass Library(val title:String) { fun convert(s:String):String=s; fun convert(n:Int)=n; internal fun secret()=1; private fun hidden()=2 }\nfun String.decorate()=this\ninternal fun privateToModule()=1");
+        var before=analyzer().analyze(root,List.of(source),List.of(),root.resolve("abiBefore"));
+        assertTrue(before.complete(),before.diagnostic());
+        var baseline=KotlinAbiSurface.read(before.jar());
+        assertTrue(baseline.metadataComplete());
+        assertTrue(baseline.members().stream().anyMatch(m->m.name().equals("getTitle")&&m.exported()));
+        assertTrue(baseline.members().stream().anyMatch(m->m.name().equals("decorate")&&m.descriptor().equals("(Ljava/lang/String;)Ljava/lang/String;")&&m.exported()));
+        assertFalse(baseline.members().stream().anyMatch(m->m.name().startsWith("secret")&&m.exported()));
+        assertFalse(baseline.members().stream().anyMatch(m->m.name().equals("privateToModule")&&m.exported()));
+        Files.writeString(source,"package lib\nclass Library(val title:Int) { fun convert(n:Int)=n; private fun convert(s:String):String=s }");
+        var after=analyzer().analyze(root,List.of(source),List.of(),root.resolve("abiAfter"));
+        assertTrue(after.complete(),after.diagnostic());
+        var difference=baseline.compareTo(KotlinAbiSurface.read(after.jar()));
+        assertTrue(difference.removedBinaryMembers().contains("lib.Library#getTitle()Ljava/lang/String;"));
+        assertTrue(difference.removedBinaryMembers().contains("lib.Library#<init>(Ljava/lang/String;)V"));
+        assertTrue(difference.removedBinaryMembers().contains("lib.Library#convert(Ljava/lang/String;)Ljava/lang/String;"));
+        assertFalse(difference.removedBinaryMembers().contains("lib.Library#convert(I)I"));
+        assertFalse(difference.sourceCompatibilityKnown());
+        var identity=com.wynk.codecontext.port.contract.ContractModels.ContractIdentity.ofMaven("lib","library","1.0");
+        var original=new com.wynk.codecontext.port.contract.ContractModels.ContractExport(identity,identity.type(),"pom.xml","lib:library","hash",Map.of("signature","","javaApiExtractionComplete",true));
+        var index=new com.wynk.codecontext.port.contract.ContractModels.ContractIndex("fixture","library","a".repeat(40),"main","1",Map.of(),"1","1",java.time.Instant.EPOCH,"",List.of(original),List.of());
+        var baselineIndex=KotlinAbiContracts.enrich(index,Map.of("",baseline));
+        var headIndex=KotlinAbiContracts.enrich(index,Map.of("",KotlinAbiSurface.read(after.jar())));
+        assertNotEquals(baselineIndex.indexHash(),headIndex.indexHash());
+        var changes=new com.wynk.codecontext.port.contract.compat.ContractCompatibilityEngine().compare(baselineIndex.exports(),headIndex.exports());
+        assertTrue(changes.stream().anyMatch(c->c.isBreaking()),changes.toString());
+        assertEquals("UNKNOWN",headIndex.exports().get(0).metadata().get("kotlinSourceCompatibility"));
+
+    }
 }
