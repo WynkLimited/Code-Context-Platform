@@ -170,6 +170,15 @@ class SharedLibraryImpactPostgresIT {
         assertEquals(consumerBGeneration, repositories.currentGeneration(consumerB).orElseThrow());
         assertEquals(consumerCGeneration, repositories.currentGeneration(consumerC).orElseThrow());
 
+        UUID attemptJob=jdbc.queryForObject("INSERT INTO index_jobs(repository_id,commit_sha,idempotency_key,state,attempt) VALUES(?,'fencing-fixture',?,'RUNNING',2) RETURNING id",UUID.class,provider,"attempt-fencing-"+UUID.randomUUID());
+        try {
+            indexing.retryAttempt(attemptJob,1,new IllegalStateException("late failure from stale attempt"));
+            assertEquals("RUNNING",jdbc.queryForObject("SELECT state FROM index_jobs WHERE id=?",String.class,attemptJob));
+            assertThrows(IllegalStateException.class,()->indexing.markSucceeded(attemptJob,1));
+            indexing.markSucceeded(attemptJob,2);
+            indexing.retryAttempt(attemptJob,2,new IllegalStateException("late failure after success"));
+            assertEquals("SUCCEEDED",jdbc.queryForObject("SELECT state FROM index_jobs WHERE id=?",String.class,attemptJob));
+        } finally { jdbc.update("DELETE FROM index_jobs WHERE id=?",attemptJob); }
         UUID providerV1Generation = repositories.currentGeneration(provider).orElseThrow();
         assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
                 "Zoekt must expose the indexed provider v1 generation before replacement");

@@ -75,7 +75,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
         try {
             var claimed=repositoryLeases.tryAcquire(job.repositoryId,jobId);
             if(claimed.isEmpty()) {
-                jdbc.update("UPDATE index_jobs SET state='QUEUED',attempt=greatest(0,attempt-1),error='repository is already being indexed',available_at=now()+interval '2 seconds',updated_at=now() WHERE id=?",jobId);
+                jdbc.update("UPDATE index_jobs SET state='QUEUED',attempt=greatest(0,attempt-1),error='repository is already being indexed',available_at=now()+interval '2 seconds',updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",jobId,job.attempt);
                 return;
             }
             lease=claimed.get();
@@ -93,14 +93,14 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     private void processLocked(UUID jobId,Job job,RepositoryIndexLeaseManager.Lease lease) {
         try {
             Boolean enabled=jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,job.repositoryId);
-            if(!Boolean.TRUE.equals(enabled)){jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository disabled',updated_at=now() WHERE id=?",jobId);return;}
+            if(!Boolean.TRUE.equals(enabled)){jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository disabled',updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",jobId,job.attempt);return;}
             RepositoryRecord repo=jdbc.queryForObject("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE id=?",(rs,n)->new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),job.repositoryId);
             Path root=git.sync(repo); String sha=git.head(root);
             String published=jdbc.query("SELECT commit_sha FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getString(1),repo.id()).stream().findFirst().orElse(null);
             if(sha.equals(published)) {
                 var currentIndex=contractIndexes.published(repo.id());
                 if(currentIndex.isPresent() && contractIndexes.freshness(currentIndex.get())==ContractModels.IndexFreshness.CURRENT) {
-                    jdbc.update("UPDATE index_jobs SET state='SUCCEEDED',updated_at=now() WHERE id=?",jobId);return;
+                    transactions.execute(status->{lease.fenceTransaction(); markSucceeded(jobId,job.attempt); return null;});return;
                 }
             }
             List<GitRepositoryManager.SourceFile> files=git.filesAt(root,sha);
@@ -130,7 +130,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
                 int publishedRows=jdbc.update("UPDATE index_generations SET published=true WHERE id=? AND EXISTS(SELECT 1 FROM repositories r WHERE r.id=index_generations.repository_id AND r.enabled=true)",gen);
                 if(publishedRows!=1)throw new IllegalStateException("repository disabled before generation publication");
                 contractRefresher.pruneSupersededRelationships();
-                jdbc.update("UPDATE index_jobs SET state='SUCCEEDED',updated_at=now() WHERE id=?",jobId);return null;});
+                markSucceeded(jobId,job.attempt);return null;});
             List<UUID> obsoleteZoektGenerations=jdbc.query("SELECT id FROM index_generations WHERE repository_id=? AND published=false",(rs,n)->rs.getObject(1,UUID.class),repo.id());
             for(UUID obsolete:obsoleteZoektGenerations) {
                 try { zoekt.removeGeneration(repo,obsolete); }
@@ -144,9 +144,16 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             retryJob(jobId,job,e);
         }
     }
+    void markSucceeded(UUID jobId,int attempt) {
+        int changed=jdbc.update("UPDATE index_jobs SET state='SUCCEEDED',updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",jobId,attempt);
+        if(changed!=1)throw new IllegalStateException("index job attempt ownership changed before publication");
+    }
     private void retryJob(UUID jobId,Job job,Exception failure) {
-        int retryDelay=Math.min(300,5*(1<<Math.max(0,job.attempt-1)));
-        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=?",truncate(failure.getMessage()),retryDelay,jobId);
+        retryAttempt(jobId,job.attempt,failure);
+    }
+    void retryAttempt(UUID jobId,int attempt,Exception failure) {
+        int retryDelay=Math.min(300,5*(1<<Math.max(0,attempt-1)));
+        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",truncate(failure.getMessage()),retryDelay,jobId,attempt);
     }
     @PreDestroy public void stopWorkers(){workers.shutdownNow();}
     private void copyUnchangedFiles(UUID previous,UUID next) {

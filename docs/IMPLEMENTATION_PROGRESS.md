@@ -89,3 +89,7 @@ Next external action: user-authorized commit/push of these local fixes, then wor
 ## Authorized CI repair cycle — 2026-11-25
 
 User authorized commits and pushes during this execution exclusively to `fix/jackson3-postgres-acceptance`. Full combined working tree including mirror-origin rejection validated with `KOTLIN_COMPILER="$PWD/target/kotlinc/bin/kotlinc" JAVA_HOME="$PWD/target/jdk21/Contents/Home" PATH="$PWD/target/jdk21/Contents/Home/bin:$PATH" mvn test`: 150 passed, 0 failures, 0 errors, 0 skipped (36.278s). `git diff --check` passed. Commit these fixes, push only that branch, dispatch CI for the new SHA and append actual results below.
+
+### Job-attempt state fencing
+
+Current local follow-up guards completion, retry, contention requeue and disabled-repository failure by both RUNNING state and the claimed attempt number. A stale worker can no longer mark a later attempt failed/successful. No-op already-current success now holds the same transactional lease fence as generation publication. Shared PostgreSQL acceptance adds a real job row at attempt 2, rejects attempt-1 success/failure, completes attempt 2, and rejects late failure after success. This integration assertion is compiled only until its pushed CI run executes. Full Java21 suite after the initial state-guard changes: see subsequent validation entry; no integration success inferred.
