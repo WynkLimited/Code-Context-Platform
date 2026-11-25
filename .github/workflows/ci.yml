@@ -54,6 +54,10 @@ jobs:
           mkdir -p target
           set -o pipefail
           mvn --batch-mode --no-transfer-progress test 2>&1 | tee target/unit-tests-maven.log
+      - name: Backup and restore script regression tests
+        run: |
+          set -o pipefail
+          python3 -m unittest discover -s scripts/tests -v 2>&1 | tee target/script-tests.log
       - name: Verify unit and regression reports
         run: |
           python3 - <<'PY'
@@ -141,6 +145,14 @@ jobs:
         run: |
           set -o pipefail
           mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log
+      - name: Verify PostgreSQL logical backup and restore
+        run: |
+          set -euo pipefail
+          service="${{ job.services.postgres.id }}"
+          docker exec "$service" mkdir -p /tmp/ccp-drill
+          docker cp scripts/. "$service:/tmp/ccp-drill"
+          docker exec -e CI=true -e DATABASE_USER -e DATABASE_PASSWORD "$service" \
+            bash /tmp/ccp-drill/ci-postgres-restore-drill.sh 2>&1 | tee target/restore-drill.log
       - name: Stop Zoekt service
         if: always()
         run: docker rm --force code-context-zoekt code-context-ollama zoekt-tools >/dev/null 2>&1 || true
@@ -262,6 +274,8 @@ jobs:
             target/surefire-reports/**
             target/failsafe-reports/**
             target/*-maven.log
+            target/restore-drill.log
+            target/script-tests.log
             target/acceptance-run-metadata.txt
             target/lease-process-logs/**
           if-no-files-found: warn

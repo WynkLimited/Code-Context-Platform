@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `bee5d607adbed433b549854a50a526861d9096d9` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45673489850 |
+| Last green mandatory CI SHA | `ae417c137622958072b15e39d1300dd2255ef885` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676005931 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -83,7 +83,7 @@ Status vocabulary (this ledger):
 | XRI-K2K | Kotlin→Kotlin | VERIFIED_PRODUCTION_READY | CI Kotlin provider IT |
 | XRI-VER | Version-pinned vs upgraded consumers | VERIFIED_PRODUCTION_READY | CI excludes upgraded consumer from semantic impacts |
 | XRI-PROP | Proposed-change classification inputs | VERIFIED_PRODUCTION_READY | Optional @ToolParam; schema + MCP proposedChange through Streamable HTTP @ 19aa954 |
-| XRI-HOP | Multi-hop / indirect callers | PARTIALLY_IMPLEMENTED | Re-export contract hops ≤3; bounded published intra-repository callers added, CI pending; arbitrary cross-repository method propagation remains open |
+| XRI-HOP | Multi-hop / indirect callers | PARTIALLY_IMPLEMENTED | Re-export contract hops ≤3; bounded published intra-repository callers verified in ae417c1 CI; arbitrary cross-repository method propagation remains open |
 | XRI-GRADLE | Gradle dependency resolution | PARTIALLY_IMPLEMENTED | Explicit unavailable coverage gap recorded; resolver still NOT_IMPLEMENTED |
 | REF-IND | No MultiRepo coupling | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` unit gate |
 | REF-PARITY | Functional parity matrix | PARTIALLY_IMPLEMENTED | See `docs/CROSS_REPO_IMPACT_PARITY_MATRIX.md` |
@@ -185,3 +185,9 @@ SEC-AUTH remains **PARTIALLY_IMPLEMENTED** pending service evidence and the broa
 `RateLimitGateTest`: **6 passed** including existing 429 checks, safe 503, invalid backend rejection and disabled-store behaviour. Complete Java21 suite: **244 passed**, zero failures/errors/skips, 40.310s. YAML parsed and `git diff --check` passed. Added real PostgreSQL restricted-role contention checks to `ProductionDatabaseLeastPrivilegeIT`: two independent gates and 32 concurrent calls consume exactly the eleven remaining requests, counter saturation, per-team isolation, exhausted state after gate replacement, expired-window reset, and one row per team. The fixture pins a future minute to avoid crossing a real minute boundary during contention; production uses database time. Full application migration assertion now requires V11. These PostgreSQL changes are **IMPLEMENTED_UNVERIFIED** until exact-SHA CI completes.
 
 Caller-chain CI currently running at https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676005931 for `ae417c137622958072b15e39d1300dd2255ef885`. An accidentally duplicated dispatch (45676022642) was cancelled; no gate was bypassed on the retained run. Next: verify this run, publish the validated shared-budget slice and verify its mandatory workflow, then continue remaining actionable requirements. Logical backup/restore scripts exist but only have prior dry-run evidence; an isolated CI logical restore drill is an actionable step independent of the externally blocked production WAL/PITR/staging drills.
+
+### Caller-chain CI evidence and logical restore drill — 2026-11-26
+
+`ae417c137622958072b15e39d1300dd2255ef885` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676005931. Downloaded XML: **242 unit + seven PostgreSQL cases passed**, no failures/errors/skips. SharedLibraryImpactPostgresIT requires exact two-hop caller paths and unchanged direct Java/Kotlin impacts through authenticated HTTP MCP; PostgreSQL ACL/wrong-generation negative assertions executed. XRI-HOP remains PARTIALLY_IMPLEMENTED for arbitrary cross-repository method propagation. Shared-budget 5c83562 CI is running at 45676795836.
+
+OPS-BACKUP: repaired logical script integrity/failure handling and added a mandatory disposable PostgreSQL 17 restore drill. Backups have private unique directories, checksum sidecars, explicit user/password environment support and failed-dump removal. Restore validates checksum before any database access, performs an atomic fail-fast restore and raises on missing tables/extensions/history. The old boolean SELECT could return false without failing; this defect is corrected. CI uses actual version-matched pg_dump/pg_restore, compares every public table's count/content fingerprint plus a pre-mutation JSON/vector witness in a separate database, and retains the transcript. Five local shell boundary tests passed, `bash -n`, workflow YAML parsing and `git diff --check` passed. **IMPLEMENTED_UNVERIFIED** for the real restore until exact-SHA CI executes. This closes no WAL/PITR, volume-recovery, production capacity/RPO/RTO or restored-application MCP requirement. Continue other independent actionable requirements while CI runs.
