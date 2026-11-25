@@ -29,6 +29,7 @@ public class GitRepositoryManager {
         Path root = safeRoot().resolve(safeComponent(repo.owner())).resolve(safeComponent(repo.name())).normalize();
         if (!root.startsWith(safeRoot())) throw new IOException("repository path escaped configured root");
         if (Files.isSymbolicLink(root) || Files.isSymbolicLink(root.getParent()) || Files.isSymbolicLink(root.getParent().getParent())) throw new IOException("symlinked repository path rejected");
+        validateUrl(repo.cloneUrl());
         synchronized (locks.computeIfAbsent(root, k -> new Object())) {
             if (!Files.exists(root.resolve(".git"))) {
                 validateUrl(repo.cloneUrl()); Files.createDirectories(root.getParent());
@@ -37,6 +38,10 @@ public class GitRepositoryManager {
                 clone.call().close();
             }
             try (Git git = Git.open(root.toFile())) {
+                String[] origins=git.getRepository().getConfig().getStringList("remote","origin","url");
+                if(origins.length!=1||!repo.cloneUrl().equals(origins[0]))
+                    throw new IOException("mirror origin does not match registered repository");
+                validateUrl(origins[0]);
                 var fetch=git.fetch().setRemote("origin").setTimeout(properties.gitTimeoutSeconds());if(!properties.gitAccessToken().isBlank())fetch.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",properties.gitAccessToken()));fetch.call();
                 git.checkout().setName(repo.defaultBranch()).call();
                 var pull=git.pull().setRemote("origin").setRemoteBranchName(repo.defaultBranch()).setTimeout(properties.gitTimeoutSeconds());if(!properties.gitAccessToken().isBlank())pull.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",properties.gitAccessToken()));pull.call();

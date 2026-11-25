@@ -71,4 +71,25 @@ class KotlinJvmSemanticAnalyzerTest {
         assertTrue(unaffected.calls().stream().anyMatch(c->c.call().signature().equals("convert(int)")));
     }
 
+
+    @Test void rejectsSymlinkEscapeAndExternalOutput() throws Exception {
+        Path outside=Files.createTempFile("outside-kotlin-", ".kt");
+        try {
+            Files.writeString(outside,"fun leaked()=1");
+            Path link=root.resolve("linked");
+            Files.createSymbolicLink(link,outside.getParent());
+            assertThrows(IllegalArgumentException.class,()->analyzer().analyze(root,List.of(link.resolve(outside.getFileName())),List.of(),root.resolve("out")));
+            Path safe=root.resolve("Safe.kt");Files.writeString(safe,"fun safe()=1");
+            assertThrows(IllegalArgumentException.class,()->analyzer().analyze(root,List.of(safe),List.of(),outside.getParent()));
+        } finally { Files.deleteIfExists(outside); }
+    }
+    @Test void removesSecretsAndJvmInjectionEnvironment() {
+        var environment=new HashMap<>(Map.of("PATH","/usr/bin","JAVA_HOME","/jdk",
+                "DATABASE_PASSWORD","secret","JAVA_TOOL_OPTIONS","-javaagent:evil.jar",
+                "JDK_JAVA_OPTIONS","@evil-options","KOTLIN_OPTS","-Xplugin=evil.jar","KOTLIN_COMPILER","/evil/compiler",
+                "BASH_ENV","/evil","GIT_ACCESS_TOKEN","token"));
+        KotlinJvmSemanticAnalyzer.configureEnvironment(environment);
+        assertEquals(Set.of("PATH","JAVA_HOME","JAVA_OPTS","LANG"),environment.keySet());
+        assertEquals("-Xmx512m -Dfile.encoding=UTF-8",environment.get("JAVA_OPTS"));
+    }
 }

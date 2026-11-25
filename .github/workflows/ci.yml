@@ -37,6 +37,11 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Install Protobuf compiler required by regression tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
       - name: Install pinned Kotlin compiler
         run: |
           mkdir -p target
@@ -62,8 +67,8 @@ jobs:
           failures = sum(len(case.findall("failure")) for case in cases)
           errors = sum(len(case.findall("error")) for case in cases)
           skipped = sum(len(case.findall("skipped")) for case in cases)
-          if not cases or failures or errors:
-              print(f"Unit report gate failed: cases={len(cases)} failures={failures} errors={errors}", file=sys.stderr)
+          if not cases or failures or errors or skipped:
+              print(f"Unit report gate failed: cases={len(cases)} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
               sys.exit(1)
           summary = ("## Unit and regression tests: PASS\n\n"
                      f"{len(cases) - skipped} passed, {skipped} skipped, {failures} failures, {errors} errors.\n\n"

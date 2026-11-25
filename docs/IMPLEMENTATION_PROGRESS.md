@@ -1,12 +1,12 @@
 # Implementation progress
 
-Updated 2026-11-24. Overall decision: **NO-GO**. This is a resumable implementation checkpoint, not a production certification.
+Updated 2026-11-25. Overall decision: **NO-GO**. This is a resumable implementation checkpoint, not a production certification.
 
-Baseline: branch `fix/jackson3-postgres-acceptance`, HEAD `b36f0a57eef1782b1248fda06658b0027abb6ea3`. Preserve all uncommitted work. No commit/push authorized. Reference repository is read-only.
+Baseline: branch `fix/jackson3-postgres-acceptance`, pushed HEAD `13fccca2b57f64b85a166268effa07746853a3f5`. Preserve all uncommitted work. Further commits/pushes are not authorized. Reference repository is read-only.
 
 ## Current slice
 
-V9 renewable leases and V10 generation retention are uncommitted. Publication now locks the ownership row inside its transaction (`Lease.fenceTransaction`); lease takeover cannot complete until that transaction ends. A pre-publication ownership check alone was insufficient and has been corrected.
+V9 renewable leases and V10 generation retention are committed in baseline `13fccca`. Publication now locks the ownership row inside its transaction (`Lease.fenceTransaction`); lease takeover cannot complete until that transaction ends. A pre-publication ownership check alone was insufficient and has been corrected.
 
 `GenerationRetentionService` defaults to 30 days, batches of 10, polling every 60 seconds. It preserves published generations, the two newest successful generations, all generations referenced by saved impact analyses, refresh jobs, or contract links, and all generations of repositories with queued/running indexing jobs. Deletion and insertion into the external cleanup outbox commit together; derived PostgreSQL rows cascade. Zoekt cleanup retries exact generation UUIDs, with row locks, five-minute backoff and terminal FAILED after 10 attempts. Completed outbox history is retained. Soft-disabled repositories retain active/baseline evidence and retain their identity on re-onboarding. Hard deletion/purge is not implemented.
 
@@ -70,3 +70,22 @@ Executed: full Java21 suite with 148 tests passed (145 existing + 3 real compile
 Not complete: Kotlin exported Maven ABI contracts/provider compatibility, indirect Kotlin callers, production cross-repository Kotlin impact, full Kotlin metadata/source semantic mapping, inter-module compilation topology, and external service validation. Do not equate compiler JVM evidence with complete Kotlin semantic intelligence. Priority 2–5 gaps in the ledger remain open.
 
 Incremental limitation: Kotlin compiler analysis recompiles each affected module snapshot on every indexing generation; Java semantic analysis and Graphify also reconstruct their stage. No unchanged Kotlin semantic-row reuse is claimed. Final Java21 validation after generator-version and acceptance-fixture changes: 148 tests passed, 0 failures/errors/skips; PostgreSQL fixtures compiled but not executed.
+
+
+## Actual CI execution and compiler isolation fixes — 2026-11-25
+
+Remote branch SHA verified by `git ls-remote`: `13fccca2b57f64b85a166268effa07746853a3f5`. `gh run list --commit <full-sha>` initially returned no runs. CI push trigger is restricted to main; branch requires pull_request or workflow_dispatch. Manually dispatched existing workflow without changing triggers or committing/pushing.
+
+Actual run: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45558522188 (job 139016325629). Result **failure**. Setup-java resolved Temurin **21.0.13+9**. PostgreSQL service initialized using configured pgvector PG17 image; no migration/integration assertions executed. Unit Surefire XML: **148 total, 125 passed, 3 failures, 0 errors, 20 skipped**. All three failures are Kotlin compiler tests. Twenty skipped tests belong to `ProtoContractExtractorTest` (missing protoc). Zoekt/Ollama/Graphify setup and every integration gate were skipped after the unit failure. No service-backed component is verified by this run. Full logs and downloaded XML are retained locally under ignored `target/ci-13fccca*`.
+
+Confirmed failure: `ClassNotFoundException: /home/runner/work/Code-Context-Platform/Code-Context-Platform/target/kotlinc/bin/kotlinc`. The app/CI variable `KOTLIN_COMPILER` selects the executable, but kotlinc's shell launcher also reads it as the Java compiler main class. Inheriting it into the child causes the compiler to load the executable path as a class. Child environment now uses an explicit allowlist and does not inherit that variable. It also removes JAVA_TOOL_OPTIONS, JDK_JAVA_OPTIONS, BASH_ENV, KOTLIN_OPTS and application credentials. Existing timeout and heap bound remain. Added a shared fair semaphore (two compiler processes, 30-second acquisition timeout), real-path checks rejecting symlink escapes, output containment, jar-only classpath and bounded source/output checks. Compiler raw diagnostics are withheld to prevent source or credential disclosure. Disk output size is checked after compilation; this is not a hard filesystem quota or OS sandbox. No source-level security sandbox is claimed.
+
+CI now installs protobuf-compiler before unit execution and rejects all skipped unit reports. Five Kotlin tests run against the actual compiler: the original three resolution/version tests plus adversarial path escape/output and environment-injection tests. Reproducing the CI `KOTLIN_COMPILER` environment under Java21 gives **150 tests passed, 0 failures/errors/skips** locally. Focused Git test also passed after the subsequent origin validation change. No acceptance assertion was weakened.
+
+Independent Git security fix: `GitRepositoryManager.sync` revalidates the registered URL on every refresh, requires exactly one mirror origin identical to the registered URL, and rejects mismatch before fetch. Existing test now tampers origin to loopback and asserts rejection without network access. Redirect/DNS/egress hardening remains open.
+
+Next external action: user-authorized commit/push of these local fixes, then workflow_dispatch on the resulting SHA (or open/update PR). This task does not authorize another commit/push. Do not rerun baseline CI expecting local fixes to be included. Mandatory PostgreSQL17/pgvector, Zoekt, Graphify and Ollama acceptance remains unverified. Kotlin metadata-aware exported ABI, compatibility and cross-repository consumer impact remain PARTIALLY IMPLEMENTED and are the next functional work; compiler isolation is also partial pending OS resource/egress enforcement and further adversarial tests.
+
+## Authorized CI repair cycle — 2026-11-25
+
+User authorized commits and pushes during this execution exclusively to `fix/jackson3-postgres-acceptance`. Full combined working tree including mirror-origin rejection validated with `KOTLIN_COMPILER="$PWD/target/kotlinc/bin/kotlinc" JAVA_HOME="$PWD/target/jdk21/Contents/Home" PATH="$PWD/target/jdk21/Contents/Home/bin:$PATH" mvn test`: 150 passed, 0 failures, 0 errors, 0 skipped (36.278s). `git diff --check` passed. Commit these fixes, push only that branch, dispatch CI for the new SHA and append actual results below.

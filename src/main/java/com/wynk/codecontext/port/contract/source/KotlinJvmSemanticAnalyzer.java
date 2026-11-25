@@ -10,6 +10,7 @@ import static com.wynk.codecontext.port.contract.source.JavaSemanticCallSiteAnal
 
 /** Compiler-derived JVM evidence. Does not execute repository builds, plugins or compiled code. */
 public final class KotlinJvmSemanticAnalyzer {
+    private static final java.util.concurrent.Semaphore COMPILATIONS = new java.util.concurrent.Semaphore(2, true);
     private final String compiler;
     public KotlinJvmSemanticAnalyzer() { this(System.getenv().getOrDefault("KOTLIN_COMPILER","kotlinc")); }
     public KotlinJvmSemanticAnalyzer(String compiler) { this.compiler=compiler; }
@@ -20,7 +21,17 @@ public final class KotlinJvmSemanticAnalyzer {
     public Result analyze(Path snapshot,List<Path> sources,List<Path> dependencies,Path output) throws Exception {
         if(sources.stream().noneMatch(p->p.toString().endsWith(".kt")))return new Result(true,null,List.of(),List.of(),"");
         if(sources.size()>5000)return incomplete("KOTLIN_MODULE_SOURCE_LIMIT");
+        Path trusted=snapshot.toRealPath();
+        for(Path source:sources) {
+            if(!source.toRealPath().startsWith(trusted)||Files.isSymbolicLink(source)||Files.size(source)>2*1024*1024)
+                throw new IllegalArgumentException("source is outside snapshot or exceeds compiler input limit");
+        }
         Files.createDirectories(output);
+        if(!output.toRealPath().startsWith(trusted))throw new IllegalArgumentException("compiler output escaped snapshot");
+        for(Path dependency:dependencies) {
+            if(!Files.isRegularFile(dependency)||Files.isSymbolicLink(dependency)||!dependency.toString().endsWith(".jar"))
+                throw new IllegalArgumentException("compiler classpath must contain approved regular jars");
+        }
         Path jar=output.resolve("kotlin-analysis.jar");
         var command=new ArrayList<String>();command.add(compiler);
         for(Path source:sources) {
@@ -30,11 +41,17 @@ public final class KotlinJvmSemanticAnalyzer {
         }
         command.addAll(List.of("-jvm-target","21","-d",jar.toAbsolutePath().toString()));
         if(!dependencies.isEmpty())command.addAll(List.of("-classpath",String.join(File.pathSeparator,dependencies.stream().map(p->p.toAbsolutePath().toString()).toList())));
+        if(!COMPILATIONS.tryAcquire(30,TimeUnit.SECONDS))return incomplete("KOTLIN_COMPILER_CAPACITY_EXCEEDED");
+        try { return compile(snapshot,sources,jar,command); }
+        finally { COMPILATIONS.release(); }
+    }
+
+    private Result compile(Path snapshot,List<Path> sources,Path jar,List<String> command) throws Exception {
         Process process;
         try {
             var builder=new ProcessBuilder(command).redirectErrorStream(true);
-            builder.environment().put("JAVA_OPTS","-Xmx512m -Dfile.encoding=UTF-8");
-            builder.environment().remove("KOTLIN_RUNNER");
+            configureEnvironment(builder.environment());
+            builder.directory(snapshot.toFile());
             process=builder.start();
         } catch(IOException unavailable) { return incomplete("KOTLIN_COMPILER_UNAVAILABLE"); }
         var diagnostic=new ByteArrayOutputStream();
@@ -47,7 +64,7 @@ public final class KotlinJvmSemanticAnalyzer {
         try {
             if(!process.waitFor(120,TimeUnit.SECONDS))return incomplete("KOTLIN_COMPILER_TIMEOUT");
             drain.join(2000);
-            if(process.exitValue()!=0)return incomplete("KOTLIN_COMPILATION_FAILED: "+diagnostic.toString(java.nio.charset.StandardCharsets.UTF_8).replace(snapshot.toString(),"<snapshot>"));
+            if(process.exitValue()!=0)return incomplete("KOTLIN_COMPILATION_FAILED: compiler rejected source or classpath; raw diagnostics withheld");
         } finally {
             if(process.isAlive()) {
                 try { process.descendants().forEach(p->p.destroyForcibly()); }
@@ -55,6 +72,7 @@ public final class KotlinJvmSemanticAnalyzer {
                 finally { process.destroyForcibly(); }
             }
         }
+        if(Files.size(jar)>256L*1024*1024)return incomplete("KOTLIN_OUTPUT_SIZE_LIMIT");
         var files=new HashMap<String,List<String>>();
         for(Path source:sources)if(source.toString().endsWith(".kt")) {
             String text=Files.readString(source);
@@ -98,6 +116,16 @@ public final class KotlinJvmSemanticAnalyzer {
         }
         return new Result(true,jar,List.copyOf(declarations),List.copyOf(calls),"JVM bytecode evidence; inline calls and source-only types are not reconstructed");
     }
+    static void configureEnvironment(Map<String,String> environment) {
+        // A compiler JVM must never inherit credentials or JVM injection options from the app.
+        var allowed=new HashMap<String,String>();
+        for(String key:List.of("PATH","JAVA_HOME","SystemRoot","TMPDIR","TMP","TEMP"))
+            if(environment.containsKey(key))allowed.put(key,environment.get(key));
+        environment.clear(); environment.putAll(allowed);
+        environment.put("JAVA_OPTS","-Xmx512m -Dfile.encoding=UTF-8");
+        environment.put("LANG","C.UTF-8");
+    }
+
     private static String signature(String owner,String name,String descriptor) {
         return (name.equals("<init>")?owner.substring(owner.lastIndexOf('.')+1):name)+"("+String.join(",",Arrays.stream(Type.getArgumentTypes(descriptor)).map(Type::getClassName).toList())+")";
     }

@@ -28,5 +28,12 @@ class GitRepositoryManagerTest {
         assertTrue(java.content().contains("return 1"));assertFalse(java.blobSha().isBlank());
         assertTrue(manager.readFileAtRevision(clone,commit,"src/Hello.java",1000).contains("return 1"));
         assertThrows(IllegalArgumentException.class,()->manager.readFileAtRevision(clone,commit,"../../etc/passwd",1000));
+        try(Git altered=Git.open(clone.toFile())) {
+            var config=altered.getRepository().getConfig();
+            config.setString("remote","origin","url","https://127.0.0.1/private/repo");
+            config.save();
+        }
+        var failure=assertThrows(java.io.IOException.class,()->manager.sync(record));
+        assertEquals("mirror origin does not match registered repository",failure.getMessage());
     }
 }
