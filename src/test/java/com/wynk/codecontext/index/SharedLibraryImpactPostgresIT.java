@@ -73,7 +73,7 @@ class SharedLibraryImpactPostgresIT {
         registry.add("code-context.zoekt.indexer", () -> System.getenv().getOrDefault("ZOEKT_INDEXER", "zoekt-git-index"));
         registry.add("code-context.zoekt.webserver", () -> System.getenv().getOrDefault("ZOEKT_WEB_SERVER", "http://localhost:6070"));
         registry.add("spring.ai.ollama.base-url", () -> System.getenv().getOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"));
-        registry.add("code-context.api-keys", () -> TEAM + "=" + API_KEY);
+        registry.add("code-context.api-keys", () -> TEAM + "=" + API_KEY + ",isolated=isolated-integration-token");
         registry.add("code-context.admin-api-keys", () -> "admin=admin-token");
         registry.add("code-context.graphify.enabled", () -> "false");
         registry.add("code-context.mcp-allowed-origins", () -> "http://localhost,http://127.0.0.1");
@@ -724,7 +724,32 @@ FROM semantic_call_sites WHERE id=?
         assertTrue(semanticResults.toString().contains("convert"),"semantic retrieval omitted symbol evidence: "+semanticResults);
         assertTrue(semanticResults.toString().contains(repositories.currentCommit(repositories.id("Fixture","common-library")).orElseThrow()),"semantic retrieval omitted commit provenance: "+semanticResults);
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_chunks c JOIN index_generations g ON g.id=c.generation_id AND g.published WHERE g.repository_id=? AND c.embedding IS NOT NULL",Integer.class,repositories.id("Fixture","common-library"))>0,"real Ollama vectors must be persisted in PostgreSQL");
+        verifyOtherTeamIsolation(endpoint);
         return post(client,endpoint,session,Map.of("jsonrpc","2.0","id",9,"method","tools/call","params",Map.of("name","impact_analysis","arguments",Map.of("contract","","repository",repository))));
+    }
+
+    private void verifyOtherTeamIsolation(URI endpoint)throws Exception {
+        var client=HttpClient.newHttpClient();
+        String key="isolated-integration-token";
+        var initialized=post(client,endpoint,null,Map.of("jsonrpc","2.0","id",1000,"method","initialize","params",Map.of("protocolVersion","2025-03-26","capabilities",Map.of(),"clientInfo",Map.of("name","isolated-team-it","version","1.0"))),key);
+        assertTrue(initialized.path("result").has("serverInfo"),initialized.toString());
+        String isolatedSession=lastResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
+        post(client,endpoint,isolatedSession,Map.of("jsonrpc","2.0","method","notifications/initialized"),key);
+        var arguments=new java.util.LinkedHashMap<String,Map<String,Object>>();
+        arguments.put("search_code",Map.of("query","Money"));
+        arguments.put("find_symbol",Map.of("symbol","Money","repository","Fixture/common-library"));
+        arguments.put("read_file",Map.of("repository","Fixture/common-library","path","src/main/java/org/acme/Money.java","startLine",1,"endLine",5));
+        arguments.put("get_neighbors",Map.of("repository","Fixture/consumer-service-a","symbol","ConsumerA"));
+        arguments.put("semantic_search",Map.of("query","money conversion","repository","Fixture/common-library","limit",10));
+        arguments.put("impact_analysis",Map.of("contract","common-library","repository","Fixture/common-library"));
+        int id=1001;
+        for(var entry:arguments.entrySet()) {
+            var response=post(client,endpoint,isolatedSession,Map.of("jsonrpc","2.0","id",id++,"method","tools/call","params",Map.of("name",entry.getKey(),"arguments",entry.getValue())),key);
+            if(entry.getKey().equals("search_code"))assertTrue(structuredToolPayload(response).path("results").isEmpty(),response.toString());
+            else if(entry.getKey().equals("find_symbol"))assertTrue(structuredToolPayload(response).isArray()&&structuredToolPayload(response).isEmpty(),response.toString());
+            else assertTrue(response.path("result").path("isError").asBoolean(false)||response.path("error").isObject(),"foreign repository tool must reject access: "+entry.getKey()+" "+response);
+            assertFalse(response.toString().contains("return money.convert"),"cross-team response leaked source content: "+entry.getKey());
+        }
     }
 
     private void awaitSearch(HttpClient client,URI endpoint,String session,int id,String query,String description)throws Exception {
@@ -785,7 +810,11 @@ FROM semantic_call_sites WHERE id=?
     private HttpResponse<String> lastResponse;
     private String protocolVersion;
     private JsonNode post(HttpClient client, URI endpoint, String session, Object body) throws Exception {
-        HttpResponse<String> response=exchange(client,endpoint,session,body,API_KEY);
+        return post(client,endpoint,session,body,API_KEY);
+    }
+
+    private JsonNode post(HttpClient client, URI endpoint, String session, Object body,String key) throws Exception {
+        HttpResponse<String> response=exchange(client,endpoint,session,body,key);
         assertTrue(response.statusCode()>=200&&response.statusCode()<300,"MCP HTTP "+response.statusCode()+": "+response.body());
         String payload=response.body().lines().filter(line->line.startsWith("data:")).map(line->line.substring(5).strip()).reduce((first,last)->last).orElse(response.body());
         if(payload.isBlank())return json.createObjectNode();

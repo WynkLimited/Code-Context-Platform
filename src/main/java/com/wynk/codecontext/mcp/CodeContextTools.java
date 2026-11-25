@@ -84,10 +84,10 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,source.symbol A
     public String semantic_search(String query,String repository,Integer limit){
         if(query==null||query.isBlank())throw new IllegalArgumentException("semantic search query is required");
         if(query.length()>1024)throw new IllegalArgumentException("semantic search query exceeds 1024 characters");
+        String owner=null,name=null;if(repository!=null&&!repository.isBlank()){RepositoryRecord r=allowed(repository);owner=r.owner();name=r.name();}
         float[] v=embeddings.embed(query);if(v.length!=props.embeddingDimensions())throw new IllegalStateException("embedding model dimension mismatch");
         for(float value:v)if(!Float.isFinite(value))throw new IllegalStateException("embedding model returned a non-finite vector");
         String vec="["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";
-        String owner=null,name=null;if(repository!=null&&!repository.isBlank()){RepositoryRecord r=allowed(repository);owner=r.owner();name=r.name();}
         int n=limit==null?10:Math.max(1,Math.min(limit,50));
         String sql="""
 SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.symbol,c.start_line,c.end_line,c.content,
