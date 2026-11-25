@@ -90,7 +90,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Next |
 |---|---|---|---|
-| SEC-AUTH | API keys + dual-key rotation | PARTIALLY_IMPLEMENTED | Admin key API; multi-replica limiter |
+| SEC-AUTH | API keys + dual-key rotation | PARTIALLY_IMPLEMENTED | Dual-key + `/api/admin/security/api-keys` status; multi-replica limiter open |
 | SEC-ACL | Cross-team tool isolation | VERIFIED_PRODUCTION_READY | Shared IT all six tools |
 | SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Loopback/metadata Maven host rejection unit green; HTTP redirect residual needs NetworkPolicy |
 | SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | App isolation only; cgroup/seccomp BLOCKED pending OS |

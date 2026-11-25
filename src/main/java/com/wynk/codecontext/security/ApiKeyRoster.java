@@ -46,6 +46,15 @@ public final class ApiKeyRoster {
         return Set.copyOf(new LinkedHashSet<>(keyToTeam.values()));
     }
 
+    /** Per-team active key counts for admin status without exposing secret material. */
+    public Map<String, Integer> teamKeyCounts() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (String team : keyToTeam.values()) {
+            counts.merge(team, 1, Integer::sum);
+        }
+        return Map.copyOf(counts);
+    }
+
     /** Validates every key segment without returning secret material. */
     public static void requireProductionStrength(String configured, String label) {
         if (configured == null || configured.isBlank() || configured.contains("local-dev-token")) {

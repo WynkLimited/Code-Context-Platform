@@ -23,6 +23,13 @@ class ApiKeyRosterTest {
         assertEquals("alpha", roster.keyToTeam().get("shared-secret"));
     }
 
+    @Test void teamKeyCountsReflectDualKeyRotationWithoutReturningSecrets() {
+        var roster = ApiKeyRoster.parse("orders=current-secret|previous-secret,billing=solo-secret");
+        assertEquals(2, roster.teamKeyCounts().get("orders"));
+        assertEquals(1, roster.teamKeyCounts().get("billing"));
+        assertFalse(roster.teamKeyCounts().toString().contains("secret"));
+    }
+
     @Test void productionStrengthRejectsShortOrDefaultKeys() {
         assertThrows(IllegalStateException.class, () -> ApiKeyRoster.requireProductionStrength("team=local-dev-token", "TEAM_API_KEYS"));
         assertThrows(IllegalStateException.class, () -> ApiKeyRoster.requireProductionStrength("team=short|also-short", "TEAM_API_KEYS"));
