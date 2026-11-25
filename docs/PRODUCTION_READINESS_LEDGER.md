@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `9d9b1affe5b745c0a29b6ae22406930ffa771de0` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45640957575 |
+| Last green mandatory CI SHA | `f90583537d5cd36a66ad53b6d0fdc8e47e6ab507` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45643037395 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -23,11 +23,11 @@ Status vocabulary (this ledger):
 
 **Next executable actions (priority):**
 
-1. Persist OpenAPI/Avro evolution + ambiguity demotion through PG/MCP fixtures (CONTRACT-1/2/4).
-2. Bounded multi-hop method impact (XRI-HOP) with incompleteness flags.
+1. Ambiguity demotion/resolution under PG contention (CONTRACT-4).
+2. Method-chain multi-hop beyond re-export candidates (XRI-HOP) or keep incompleteness flags + document.
 3. Webhook durable PG concurrency (SEC-WH).
 4. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
-5. Fill remaining mandatory ops docs; keep CI green; external blockers: OS sandbox, DR, k8s.
+5. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
 
 ---
 
@@ -39,7 +39,7 @@ Status vocabulary (this ledger):
 |---|---|---|---|---|---|
 | CTX-1 | Text index | Zoekt exact/regex search with evidence | VERIFIED_PRODUCTION_READY | `ZoektSearchService`, `ZoektIndexer` | CI b2346ee SharedLibrary IT |
 | CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | CI b2346ee |
-| CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested OpenAPI + Avro fields{} persist @ 9d9b1af CI; schema-evolution MCP consumer impact still deepen |
+| CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested OpenAPI + Avro evolution in MCP `changes` @ f905835 CI |
 | CTX-4 | Semantic index | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama |
 
 ### MCP tools

@@ -4,8 +4,8 @@
 
 Branch: `fix/jackson3-postgres-acceptance`  
 Evidence HEAD (this report): see `docs/PRODUCTION_READINESS_LEDGER.md`  
-Last green mandatory CI: `9d9b1affe5b745c0a29b6ae22406930ffa771de0`  
-CI URL: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45640957575  
+Last green mandatory CI: `f90583537d5cd36a66ad53b6d0fdc8e47e6ab507`  
+CI URL: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45643037395  
 
 Reference (read-only): MultiRepo-Code-Review-Agent `main` @ `65144c6060e97c491546674586ea8ae5020588c7`
 
