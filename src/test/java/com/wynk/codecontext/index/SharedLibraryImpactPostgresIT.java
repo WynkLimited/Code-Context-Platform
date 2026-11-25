@@ -585,7 +585,7 @@ FROM semantic_call_sites WHERE id=?
                   AND p.role='EXPORT' AND c.role='IMPORT' AND p.canonical_key='kafka:order-events'
                 """;
         assertEquals(1,jdbc.queryForObject(kafkaSql,Integer.class,provider,kafkaConsumer),"Kafka contract must persist as an exact provider-consumer link");
-        assertTrue(jdbc.queryForObject("SELECT min(confidence)>0 AND count(*)=2 FROM contract_links l JOIN contracts p ON p.id=l.provider_contract JOIN index_generations pg ON pg.id=p.generation_id WHERE pg.repository_id=? AND p.contract_type IN ('REST','KAFKA')",Boolean.class,provider));
+        assertTrue(jdbc.queryForObject("SELECT min(l.confidence)>0 AND count(*)=2 FROM contract_links l JOIN contracts p ON p.id=l.provider_contract JOIN index_generations pg ON pg.id=p.generation_id WHERE pg.repository_id=? AND p.contract_type IN ('REST','KAFKA')",Boolean.class,provider));
     }
 
     private void verifyIncrementalAdditionChangeAndDeletion(Path consumerSource,UUID consumer)throws Exception {
