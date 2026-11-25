@@ -1285,9 +1285,13 @@ FROM semantic_call_sites WHERE id=?
         HttpResponse<String> unauthenticated=exchange(client,endpoint,null,initialize,null);
         assertEquals(401,unauthenticated.statusCode(),"MCP must reject an unauthenticated client; headers="
                 +unauthenticated.headers().map()+" body="+unauthenticated.body());
+        UUID.fromString(unauthenticated.headers().firstValue("X-Request-ID").orElseThrow());
         HttpResponse<String> invalidCredentials=exchange(client,endpoint,null,initialize,"invalid-integration-token");
         assertEquals(401,invalidCredentials.statusCode(),"MCP must reject an invalid API key; headers="
                 +invalidCredentials.headers().map()+" body="+invalidCredentials.body());
+        String invalidRequestId = invalidCredentials.headers().firstValue("X-Request-ID").orElseThrow();
+        UUID.fromString(invalidRequestId);
+        assertNotEquals(unauthenticated.headers().firstValue("X-Request-ID").orElseThrow(), invalidRequestId);
         JsonNode initialized = post(client,endpoint,null,initialize);
         assertTrue(initialized.path("result").has("serverInfo"), initialized.toString());
         HttpResponse<String> initResponse = lastResponse;
@@ -1454,6 +1458,7 @@ FROM semantic_call_sites WHERE id=?
         if(session!=null)builder.header("Mcp-Session-Id",session);
         if(session!=null&&protocolVersion!=null)builder.header("Mcp-Protocol-Version",protocolVersion);
         lastResponse=client.send(builder.build(),HttpResponse.BodyHandlers.ofString());
+        UUID.fromString(lastResponse.headers().firstValue("X-Request-ID").orElseThrow());
         lastResponse.headers().firstValue("Mcp-Protocol-Version").ifPresent(value->protocolVersion=value);
         return lastResponse;
     }

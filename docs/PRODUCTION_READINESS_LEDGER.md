@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `ae417c137622958072b15e39d1300dd2255ef885` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676005931 |
+| Last green mandatory CI SHA | `5c835622803087a7445ed1693dd8dc1b00483c88` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676761869 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -93,7 +93,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Next |
 |---|---|---|---|
-| SEC-AUTH | API keys + dual-key rotation | PARTIALLY_IMPLEMENTED | Dual-key + admin status; PostgreSQL shared team limiter and real contention assertions added, CI pending |
+| SEC-AUTH | API keys + dual-key rotation | PARTIALLY_IMPLEMENTED | Dual-key + admin status; PostgreSQL shared team limiter and real restricted-role contention assertions verified in 5c83562 CI |
 | SEC-ACL | Cross-team tool isolation | VERIFIED_PRODUCTION_READY | Shared IT all six tools |
 | SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Loopback/metadata Maven host rejection unit green; HTTP redirect residual needs NetworkPolicy |
 | SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | Env scrub + kotlinc allowlist; cgroup/seccomp BLOCKED pending OS |
@@ -112,7 +112,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | Green mandatory CI @ 440a4ef (3 SharedLibrary + Graphify + retention + least-privilege) |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 5c83562: 244 unit + seven PostgreSQL cases, including separate-JVM recovery |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -191,3 +191,9 @@ Caller-chain CI currently running at https://github.com/WynkLimited/Code-Context
 `ae417c137622958072b15e39d1300dd2255ef885` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676005931. Downloaded XML: **242 unit + seven PostgreSQL cases passed**, no failures/errors/skips. SharedLibraryImpactPostgresIT requires exact two-hop caller paths and unchanged direct Java/Kotlin impacts through authenticated HTTP MCP; PostgreSQL ACL/wrong-generation negative assertions executed. XRI-HOP remains PARTIALLY_IMPLEMENTED for arbitrary cross-repository method propagation. Shared-budget 5c83562 CI is running at 45676795836.
 
 OPS-BACKUP: repaired logical script integrity/failure handling and added a mandatory disposable PostgreSQL 17 restore drill. Backups have private unique directories, checksum sidecars, explicit user/password environment support and failed-dump removal. Restore validates checksum before any database access, performs an atomic fail-fast restore and raises on missing tables/extensions/history. The old boolean SELECT could return false without failing; this defect is corrected. CI uses actual version-matched pg_dump/pg_restore, compares every public table's count/content fingerprint plus a pre-mutation JSON/vector witness in a separate database, and retains the transcript. Five local shell boundary tests passed, `bash -n`, workflow YAML parsing and `git diff --check` passed. **IMPLEMENTED_UNVERIFIED** for the real restore until exact-SHA CI executes. This closes no WAL/PITR, volume-recovery, production capacity/RPO/RTO or restored-application MCP requirement. Continue other independent actionable requirements while CI runs.
+
+### Shared-budget CI and structured servlet correlation — 2026-11-26
+
+Shared-budget commit `5c835622803087a7445ed1693dd8dc1b00483c88`: PR run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45676761869 passed. Downloaded XML: **244 unit + seven PostgreSQL cases**, no failures/errors/skips. Migration V11 under restricted role and actual concurrent budget tests executed. A later manual dispatch of the same SHA also passed; future pushes already trigger the open PR workflow, so inspect that run instead of dispatching a duplicate. Restore-drill commit `0ec1591db98c40a5e75334bce083adcc596bcce4` is under PR CI at 45677646972.
+
+OPS-METRICS remains PARTIALLY_IMPLEMENTED. Added server-owned UUID response/request correlation before security and explicit REQUEST/ASYNC/ERROR dispatch registration; restoration of MDC after exceptions prevents cross-request leakage. Console logs use the installed Boot 4 Logstash structured formatter. Only dispatch/status/async/elapsed fields are recorded, not URI/header/query/source values. Three focused tests and **247 full Java21 unit tests passed**, no failures/errors/skips (40.231s). The existing PostgreSQL fixture additionally requires UUID correlation on every MCP exchange, preserving all authentication/tool/impact assertions. Service execution awaits next CI. Scope is servlet dispatch threads; arbitrary Reactor/tool/background propagation is not yet provided, and no distributed tracing is claimed. Staging scrape/alert validation remains externally blocked.

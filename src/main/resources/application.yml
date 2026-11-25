@@ -74,3 +74,5 @@ code-context:
   admin-api-keys: ${ADMIN_API_KEYS}
   webhook-secret: ${WEBHOOK_SECRET}
   git-access-token: ${GIT_ACCESS_TOKEN}
+
+logging.structured.format.console: ${LOG_FORMAT_CONSOLE:logstash}

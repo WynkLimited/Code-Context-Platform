@@ -1,6 +1,6 @@
 ## Current continuation checkpoint — 2026-11-26
 
-Authoritative current status: `docs/PRODUCTION_READINESS_LEDGER.md`. Historical sections below describe earlier checkpoints and permissions. Current user authorization permits scoped validated commit/push to `fix/jackson3-postgres-acceptance` and CI dispatch; no production deployment or merge. `bee5d60` is verified green (237 unit + seven PostgreSQL cases including independent JVM recovery). Caller-chain ae417c1 CI is running at 45676005931. Shared PostgreSQL request budgets (V11) are locally validated: 244 Java21 unit tests pass; real restricted-role contention assertions await CI. Overall remains NO-GO. Continue the unresolved master directive requirements after validation.
+Authoritative current status: `docs/PRODUCTION_READINESS_LEDGER.md`. Historical sections below describe earlier checkpoints and permissions. Current user authorization permits scoped validated commit/push to `fix/jackson3-postgres-acceptance` and CI dispatch; no production deployment or merge. `bee5d60` is verified green (237 unit + seven PostgreSQL cases including independent JVM recovery). Caller-chain ae417c1 and shared PostgreSQL request-budget 5c83562 CI both passed (242/244 unit + seven PG). Restore-drill 0ec1591 PR CI is running at 45677646972. Servlet correlation/structured logging passes 247 local Java21 tests; its HTTP assertions await next CI. Overall remains NO-GO. Continue the unresolved master directive requirements after validation.
 
 # Implementation progress
 
