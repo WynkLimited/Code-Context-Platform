@@ -4,6 +4,7 @@ import com.wynk.codecontext.config.CodeContextProperties;
 import com.wynk.codecontext.repo.RepositoryStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -43,6 +44,7 @@ public class IndexWebhookController {
     private final Clock clock;
     private final Duration maxPayloadAge;
 
+    @Autowired
     public IndexWebhookController(IndexingService indexing, CodeContextProperties config, JsonMapper json,
                                   RepositoryStore repositories, JdbcTemplate jdbc,
                                   org.springframework.transaction.PlatformTransactionManager transactionManager) {

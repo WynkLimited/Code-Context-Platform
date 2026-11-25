@@ -9,7 +9,7 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
 | Last green mandatory CI SHA | `19aa954e3e8e9747ca1b94f596565f024575239c` |
 | Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45635577388 |
-| Prior failed CI | c240499 run 45634169162 — MCP schema required optional signatures; fixed in 19aa954 |
+| Prior failed CI | a374923/08c449c run 45636811199 — IndexWebhookController dual-ctor Spring wiring; Autowired fix pending |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
 | Reference repo (read-only) | `WynkLimited/MultiRepo-Code-Review-Agent` @ `main` / `65144c6060e97c491546674586ea8ae5020588c7` |
