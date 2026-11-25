@@ -40,13 +40,13 @@ final class StructuredSchemaCompat {
         }
         var changes = new ArrayList<Diff>();
         changes.addAll(compareNamedFields(
-                beforeOp.params(), afterOp.params(), Direction.REQUEST,
+                beforeOp.params(), afterOp.params(), Direction.REQUEST, false,
                 ContractChangeType.ENDPOINT_SIGNATURE_CHANGED, "parameter"));
         changes.addAll(compareNamedFields(
-                beforeOp.request(), afterOp.request(), Direction.REQUEST,
+                beforeOp.request(), afterOp.request(), Direction.REQUEST, false,
                 ContractChangeType.ENDPOINT_SIGNATURE_CHANGED, "request field"));
         changes.addAll(compareNamedFields(
-                beforeOp.response(), afterOp.response(), Direction.RESPONSE,
+                beforeOp.response(), afterOp.response(), Direction.RESPONSE, false,
                 ContractChangeType.ENDPOINT_SIGNATURE_CHANGED, "response field"));
         if (changes.isEmpty() && !beforeSignature.equals(afterSignature)) {
             changes.add(new Diff(ContractChangeType.ENDPOINT_SIGNATURE_CHANGED, Compatibility.UNKNOWN,
@@ -62,7 +62,23 @@ final class StructuredSchemaCompat {
             return List.of();
         }
         return compareNamedFields(
-                beforeFields, afterFields, direction,
+                beforeFields, afterFields, direction, false,
+                ContractChangeType.SCHEMA_CHANGED, "field");
+    }
+
+    /**
+     * Kafka Avro/JSON Schema producer evolution: required field additions without defaults break
+     * readers of historical payloads, matching Avro backward-compatibility rules more closely than
+     * the REST response surface (where required response additions stay non-blocking).
+     */
+    static List<Diff> compareKafkaFields(String beforeSignature, String afterSignature) {
+        Map<String, Field> beforeFields = parseFields(beforeSignature);
+        Map<String, Field> afterFields = parseFields(afterSignature);
+        if (beforeFields == null || afterFields == null) {
+            return List.of();
+        }
+        return compareNamedFields(
+                beforeFields, afterFields, Direction.RESPONSE, true,
                 ContractChangeType.SCHEMA_CHANGED, "field");
     }
 
@@ -70,6 +86,7 @@ final class StructuredSchemaCompat {
             Map<String, Field> beforeFields,
             Map<String, Field> afterFields,
             Direction direction,
+            boolean requiredAdditionsBreak,
             ContractChangeType changeType,
             String noun
     ) {
@@ -81,7 +98,8 @@ final class StructuredSchemaCompat {
             Field beforeField = beforeFields.get(name);
             Field afterField = afterFields.get(name);
             if (beforeField == null) {
-                Compatibility compatibility = afterField.required() && direction == Direction.REQUEST
+                Compatibility compatibility = afterField.required()
+                        && (direction == Direction.REQUEST || requiredAdditionsBreak)
                         ? Compatibility.BREAKING
                         : Compatibility.BACKWARD_COMPATIBLE;
                 changes.add(new Diff(changeType, compatibility,
@@ -105,7 +123,7 @@ final class StructuredSchemaCompat {
                                 + " to " + afterField.type() + " (" + direction.label() + ")."));
             } else if (beforeField.required() != afterField.required()) {
                 Compatibility compatibility = !beforeField.required() && afterField.required()
-                        && direction == Direction.REQUEST
+                        && (direction == Direction.REQUEST || requiredAdditionsBreak)
                         ? Compatibility.BREAKING
                         : Compatibility.BACKWARD_COMPATIBLE;
                 changes.add(new Diff(changeType, compatibility,

@@ -203,9 +203,8 @@ public class ContractCompatibilityEngine {
             }
             if (StructuredSchemaCompat.isFieldSchema(beforeSignature)
                     && StructuredSchemaCompat.isFieldSchema(afterSignature)) {
-                // Producer exports are consumed like a response surface: removals/type changes break readers.
-                var diffs = StructuredSchemaCompat.compareFields(
-                        beforeSignature, afterSignature, StructuredSchemaCompat.Direction.RESPONSE);
+                // Kafka Avro/JSON Schema: removals, type changes and required additions break readers.
+                var diffs = StructuredSchemaCompat.compareKafkaFields(beforeSignature, afterSignature);
                 if (!diffs.isEmpty()) {
                     return diffs.stream()
                             .map(diff -> change(before, after, diff.changeType(), diff.compatibility(),

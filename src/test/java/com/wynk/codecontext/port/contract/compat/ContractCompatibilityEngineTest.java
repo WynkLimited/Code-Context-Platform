@@ -472,6 +472,28 @@ class ContractCompatibilityEngineTest {
     }
 
     @Test
+    void kafkaAvroRequiredFieldAdditionAndTypeChangeBreakConsumers() {
+        ContractIdentity topic = ContractIdentity.ofKafka("campaign-events");
+        var before = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "one", Map.of("signature", "fields{id:string:required}", "schema", "v1", "direction", "producer"));
+        var requiredAdd = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "two", Map.of("signature", "fields{id:string:required,owner:string:required}", "schema", "v2", "direction", "producer"));
+        assertEquals(Compatibility.BREAKING, only(List.of(before), List.of(requiredAdd)).compatibility());
+
+        var typeChange = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "three", Map.of("signature", "fields{id:long:required}", "schema", "v3", "direction", "producer"));
+        assertEquals(Compatibility.BREAKING, only(List.of(before), List.of(typeChange)).compatibility());
+
+        var arrayTypeChange = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "four", Map.of("signature", "fields{id:string:required,tags:array<long>:optional}",
+                        "schema", "v4", "direction", "producer"));
+        var beforeArray = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "zero", Map.of("signature", "fields{id:string:required,tags:array<string>:optional}",
+                        "schema", "v0", "direction", "producer"));
+        assertEquals(Compatibility.BREAKING, only(List.of(beforeArray), List.of(arrayTypeChange)).compatibility());
+    }
+
+    @Test
     void kafkaProtobufFieldNumberChangeRemainsBreaking() {
         ContractIdentity topic = ContractIdentity.ofKafka("campaign-events");
         var before = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.proto", "campaign-events",

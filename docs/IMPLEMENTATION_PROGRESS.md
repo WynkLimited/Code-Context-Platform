@@ -1,6 +1,6 @@
 # Implementation progress
 
-Updated 2026-11-25. Overall decision: **NO-GO**. This is a resumable implementation checkpoint, not a production certification.
+Updated 2026-11-25 (evening resume). Overall decision: **NO-GO**. This is a resumable implementation checkpoint, not a production certification.
 
 Baseline: branch `fix/jackson3-postgres-acceptance`, pushed HEAD `13fccca2b57f64b85a166268effa07746853a3f5`. Preserve all uncommitted work. Further commits/pushes are not authorized. Reference repository is read-only.
 
@@ -28,8 +28,8 @@ Every row lists current evidence and the exact next action; rows remain incomple
 | IDX-3 | Incremental/full rebuild equivalence | PARTIALLY IMPLEMENTED | `SharedLibraryImpactPostgresIT` addition/change/deletion/equivalence | Compiled only; run CI then add rename/dependency/graph equivalence cases. |
 | SEARCH-1 | Zoekt exact/regex, evidence, update/deletion | IMPLEMENTED AND E2E VERIFIED | `ZoektSearchService`, `ZoektIndexer`, unit + SharedLibraryImpactPostgresIT | CI a176f6e real Zoekt exact/regex + generation deletion; query-scope adversarial unit-tested. |
 | SEARCH-2 | Source→Ollama→pgvector→MCP | IMPLEMENTED AND E2E VERIFIED | Indexing chunks, `CodeContextTools`, shared IT | CI a176f6e real Ollama+pgvector+MCP semantic_search; oversized/model-error cases still open. |
-| CONTRACT-1 | REST extraction/schema compatibility | PARTIALLY IMPLEMENTED | OpenAPI JSON `$ref`→`restOp` schemas, direction-aware request/response/param rules, config-derived routes; unit + shared IT evidence | Unit suite green; YAML OpenAPI still line-based (no YAML mapper). Run PG shared IT for persisted OpenAPI schema evolution. |
-| CONTRACT-2 | Kafka/Protobuf schemas | PARTIALLY IMPLEMENTED | Avro/JSON `fields{}` signatures, proto field-number reuse for Kafka, config topic placeholders; unit tests | Unit suite green; add multi-repo persisted Avro evolution + MCP consumer-impact fixture. |
+| CONTRACT-1 | REST extraction/schema compatibility | PARTIALLY IMPLEMENTED | OpenAPI JSON+YAML `$ref`→`restOp` via SnakeYAML/`OpenApiSchemaSupport`, direction-aware request/response/param rules, config-derived routes; unit + shared IT evidence | YAML `$ref` unit green (extractor 1.2.0). Run PG shared IT for persisted OpenAPI schema evolution. |
+| CONTRACT-2 | Kafka/Protobuf schemas | PARTIALLY IMPLEMENTED | Avro/JSON `fields{}` signatures, proto field-number reuse for Kafka, config topic placeholders; required Avro field add = BREAKING; unit tests | Unit suite green (rules 1.7.0); add multi-repo persisted Avro evolution + MCP consumer-impact fixture. |
 | CONTRACT-3 | Configuration-derived relationships | PARTIALLY IMPLEMENTED | Nested YAML/properties placeholders for REST+Kafka; unit tests | Unit tests passed; add multi-repo persisted config-backed acceptance. |
 | CONTRACT-4 | Unresolved/ambiguous relationship refresh | PARTIALLY IMPLEMENTED | Durable refresher + late-provider IT; link AMBIGUOUS/RESOLVED re-evaluation; GraphSymbolBinder rebind test | Unit binder test passed; run late-provider PG case; prove ambiguity demotion/resolution under contention. |
 | JVM-1 | Java method resolution, Maven transitive ownership | PARTIALLY IMPLEMENTED | Java semantic analyzer, Maven resolver and unit tests | Unit tests passed; add transitive overlapping-class artifact-ownership fixture. |
@@ -38,12 +38,12 @@ Every row lists current evidence and the exact next action; rows remain incomple
 | MCP-1 | Six authenticated protocol tools | IMPLEMENTED AND E2E VERIFIED | Shared IT invokes all six tools + cross-team isolation | CI a176f6e authenticated Streamable HTTP; Kotlin-provider MCP impact pending next CI. |
 | SEC-1 | Team/repository isolation and adversarial cases | PARTIALLY IMPLEMENTED | API filter, scoped stores/search unit tests | Add cross-team protocol tests for every tool and re-onboarding ACLs. |
 | SEC-2 | Git/Maven SSRF, filesystem/subprocess protection | PARTIALLY IMPLEMENTED | Host allowlists, path guards, time/output limits | Add redirect/DNS/private-address and symlink adversarial tests; assess existing mirror origin validation. |
-| SEC-3 | Credential rotation, rate limits, audit | PARTIALLY IMPLEMENTED | Config API keys and webhook audit events | Implement rotation/key administration and rate limits; validate secret injection/rotation without logging secrets. |
+| SEC-3 | Credential rotation, rate limits, audit | PARTIALLY IMPLEMENTED | Dual-key `team=current\|previous` roster, rate-limit gate (default off), audit redaction | Unit rotation/revoke green; admin key-admin API and multi-replica limiter still open. |
 | SEC-4 | Webhook replay protection | IMPLEMENTED AND UNIT TESTED ONLY | V8 and controller/filter tests | Unit tests passed; run durable PG replay/concurrency test. |
 | OPS-1 | K8s security/resources/probes/egress | PARTIALLY IMPLEMENTED | `deploy/k8s`, Compose | YAML/Compose parsing passed; cluster smoke and egress enforcement require deployment environment. |
 | OPS-2 | Shutdown/recovery/reconciliation | PARTIALLY IMPLEMENTED | Worker shutdown, lease expiry, cleanup queue | Add in-flight shutdown and generation reconciliation tests, including external index drift. |
-| OPS-3 | Metrics, correlations, alerts | PARTIALLY IMPLEMENTED | Actuator/Prometheus/log events | Add indexing/search/MCP/queue metrics and actionable alert rules. |
-| OPS-4 | Backup/restore/disaster recovery | PARTIALLY IMPLEMENTED | `BACKUP_AND_RECOVERY.md` | Execute restore/PITR drill and post-restore MCP smoke in isolated PostgreSQL environment. |
+| OPS-3 | Metrics, correlations, alerts | PARTIALLY IMPLEMENTED | Actuator/Prometheus; `deploy/prometheus/alerts.yaml` | Alert YAML unit-parsed; wire domain Micrometer counters/timers in indexing/MCP/search next. |
+| OPS-4 | Backup/restore/disaster recovery | PARTIALLY IMPLEMENTED | `BACKUP_AND_RECOVERY.md`; `scripts/backup-postgres.sh`, `scripts/restore-smoke.sh` | Scripts + dry-run exist; execute restore/PITR drill and post-restore MCP smoke in isolated PostgreSQL environment. |
 | OPS-5 | Preflight/smoke/performance | PARTIALLY IMPLEMENTED | CI service preflights and deployment docs | Add runnable deployment smoke/preflight and measure representative capacity. |
 | VALID-1 | Java21/service acceptance | IMPLEMENTED AND E2E VERIFIED | CI profile plus strict XML gates | CI a176f6e success: 199 unit + 4 PG ITs. Local Docker still unavailable; further gates via workflow_dispatch. |
 
@@ -210,4 +210,18 @@ Implemented locally (pending push/CI):
 - Authorized hard purge (`DELETE ...?purge=true`), mirror deletion, Zoekt reconcile helpers, permanent-failure job unit test, GenerationRetentionPostgresIT purge/reclaim assertions.
 
 Local Java21 suite: **207 passed, 0 failures/errors/skips**. PG Kotlin-provider IT and purge PG assertions require next CI dispatch.
+
+### CI repair + contract/security/ops continuation — 2026-11-25 evening
+
+Failed run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45604442981 on `5eda7e6`: unit gate green; PostgreSQL suite **3 passed, 2 failures**. Root causes:
+1. Kotlin MCP impact assertion used substring `common-library`, which matches `kotlin-common-library`. Tightened to exact Java-fixture identities.
+2. Hard-purge retention assertions created doomed/contended generations inside the top-2 successful protection window. Test now inserts newer successful protectors so those generations are eligible.
+
+Independent continuation (unit-validated before push):
+- OpenAPI YAML `$ref` resolution via SnakeYAML → same `OpenApiSchemaSupport` path as JSON (`RestContractExtractor` 1.2.0); generator `1.6.0`.
+- Dual-key API rotation `team=current|previous` (`ApiKeyRoster` + filter + production strength checks); secrets never appear in roster `toString`.
+- Kafka Avro required-field addition treated as BREAKING (`compareKafkaFields`); rules `1.7.0`.
+- Prometheus alert rules under `deploy/prometheus/alerts.yaml`; backup/restore smoke scripts under `scripts/`.
+
+Next: push, workflow_dispatch, confirm Kotlin-provider + purge PG gates, then continue remaining ledger items (domain Micrometer meters, ambiguity PG contention, incremental rename, OS compiler sandbox, DR drill).
 

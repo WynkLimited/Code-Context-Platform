@@ -14,21 +14,16 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 public class ApiKeyFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(ApiKeyFilter.class);
     private final Map<String, String> teamKeys;
     private final Map<String,String> adminKeys;
     public ApiKeyFilter(CodeContextProperties properties) {
-        this.teamKeys = Arrays.stream(properties.apiKeys().split(","))
-                .map(String::strip).filter(v -> v.contains("="))
-                .map(v -> v.split("=", 2)).collect(Collectors.toUnmodifiableMap(a -> a[1], a -> a[0], (a,b)->a));
-        this.adminKeys=Arrays.stream(properties.adminApiKeys().split(","))
-                .map(String::strip).filter(v -> v.contains("="))
-                .map(v -> v.split("=",2)).collect(Collectors.toUnmodifiableMap(a->a[1],a->a[0],(a,b)->a));
+        // Dual-key rotation: team=current|previous accepts either key during the overlap window.
+        this.teamKeys = ApiKeyRoster.parse(properties.apiKeys()).keyToTeam();
+        this.adminKeys = ApiKeyRoster.parse(properties.adminApiKeys()).keyToTeam();
     }
     @Override protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
             throws ServletException, IOException {

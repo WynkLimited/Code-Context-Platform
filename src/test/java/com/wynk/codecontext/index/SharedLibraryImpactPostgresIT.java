@@ -494,7 +494,9 @@ SELECT EXISTS(SELECT 1 FROM contracts WHERE generation_id=? AND contract_type='M
                         || javaConvertImpact.path("analysisCompleteness").asText().contains("KOTLIN"),
                 javaConvertImpact.toString());
         assertFalse(impacts.toString().contains("kotlin-consumer-ok"));
-        assertFalse(impacts.toString().contains("common-library"));
+        // Exact Java-fixture identity — substring "common-library" also matches kotlin-common-library.
+        assertFalse(impacts.toString().contains("fixture/common-library"));
+        assertFalse(impacts.toString().contains("org.acme:common-library"));
 
         String persistedImpact = jdbc.queryForObject(
                 "SELECT result::text FROM cross_repo_impact_analyses WHERE team=? AND origin_repository_id=? ORDER BY created_at DESC LIMIT 1",

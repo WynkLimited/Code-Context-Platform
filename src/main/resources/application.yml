@@ -38,6 +38,7 @@ code-context:
   repository-root: ${REPOSITORY_ROOT:/var/lib/code-context/repos}
   local-git-root: ${LOCAL_GIT_ROOT:/fixtures}
   zoekt-index-root: ${ZOEKT_INDEX_ROOT:/var/lib/code-context/zoekt}
+  # Dual-key rotation: team=current|previous accepts either key during overlap; drop previous to revoke.
   api-keys: ${TEAM_API_KEYS:local-dev=local-dev-token}
   admin-api-keys: ${ADMIN_API_KEYS:local-dev=local-dev-token}
   webhook-secret: ${WEBHOOK_SECRET:local-webhook-secret-change-me}

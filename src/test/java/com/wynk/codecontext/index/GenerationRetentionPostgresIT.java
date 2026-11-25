@@ -131,7 +131,10 @@ class GenerationRetentionPostgresIT {
             assertFalse(gc.collect(baseline,repo));
 
             // Permanent Zoekt cleanup failure after ten attempts.
+            // Two newer successful generations occupy the retention top-2 protection window so doomed is eligible.
             UUID doomed=generation(jdbc,repo,4,false);
+            generation(jdbc,repo,5,false);
+            generation(jdbc,repo,6,false);
             jdbc.update("UPDATE index_generations SET created_at=now()-interval '60 days' WHERE id=?",doomed);
             adapter.fail=true;
             assertTrue(gc.collect(doomed,repo));
@@ -145,7 +148,10 @@ class GenerationRetentionPostgresIT {
             assertFalse(gc.cleanOne(),"terminal FAILED outbox rows must not be claimed");
 
             // Concurrent lease fencing: a second collector cannot delete while the first holds the fence.
-            UUID contended=generation(jdbc,repo,5,false);
+            // Contended must sit below the newest two successful generations to remain collectible after the lease releases.
+            UUID contended=generation(jdbc,repo,7,false);
+            generation(jdbc,repo,8,false);
+            generation(jdbc,repo,9,false);
             jdbc.update("UPDATE index_generations SET created_at=now()-interval '60 days' WHERE id=?",contended);
             try(var held=leases.tryAcquire(repo,UUID.randomUUID()).orElseThrow()) {
                 new TransactionTemplate(tx).execute(status->{

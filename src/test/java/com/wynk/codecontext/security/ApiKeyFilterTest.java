@@ -45,6 +45,52 @@ class ApiKeyFilterTest {
         assertNull(SecurityContextHolder.getContext().getAuthentication());
     }
 
+    @Test void dualKeyRotationAcceptsCurrentAndPreviousDuringOverlap() throws Exception {
+        var rotating = new CodeContextProperties(
+                "/tmp/repos", "/tmp/fixtures", "/tmp/zoekt",
+                "orders=new-team-secret|old-team-secret",
+                "platform=new-admin-secret|old-admin-secret",
+                "webhook-secret", "", "github.com", "http://localhost", 1024, 1024 * 1024,
+                6000, 2, 300, new CodeContextProperties.Zoekt("zoekt-git-index", "zoekt-local-sync", "http://localhost:6070"),
+                new CodeContextProperties.Graphify("graphify", false));
+
+        for (String key : new String[]{"new-team-secret", "old-team-secret"}) {
+            SecurityContextHolder.clearContext();
+            MockHttpServletRequest request = new MockHttpServletRequest();
+            request.addHeader("X-API-Key", key);
+            new ApiKeyFilter(rotating).doFilter(request, new MockHttpServletResponse(), (req, res) -> { });
+            var authentication = SecurityContextHolder.getContext().getAuthentication();
+            assertNotNull(authentication, key);
+            assertEquals("orders", authentication.getPrincipal(), key);
+            assertFalse(authentication.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN")), key);
+        }
+        for (String key : new String[]{"new-admin-secret", "old-admin-secret"}) {
+            SecurityContextHolder.clearContext();
+            MockHttpServletRequest request = new MockHttpServletRequest();
+            request.addHeader("X-API-Key", key);
+            new ApiKeyFilter(rotating).doFilter(request, new MockHttpServletResponse(), (req, res) -> { });
+            var authentication = SecurityContextHolder.getContext().getAuthentication();
+            assertNotNull(authentication, key);
+            assertEquals("platform", authentication.getPrincipal(), key);
+            assertTrue(authentication.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN")), key);
+        }
+    }
+
+    @Test void droppingPreviousKeyRevokesItWithoutAcceptingUnknownKeys() throws Exception {
+        var afterRotation = new CodeContextProperties(
+                "/tmp/repos", "/tmp/fixtures", "/tmp/zoekt",
+                "orders=new-team-secret",
+                "platform=new-admin-secret",
+                "webhook-secret", "", "github.com", "http://localhost", 1024, 1024 * 1024,
+                6000, 2, 300, new CodeContextProperties.Zoekt("zoekt-git-index", "zoekt-local-sync", "http://localhost:6070"),
+                new CodeContextProperties.Graphify("graphify", false));
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-API-Key", "old-team-secret");
+        new ApiKeyFilter(afterRotation).doFilter(request, new MockHttpServletResponse(), (req, res) -> { });
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+    }
+
     @Test void asyncAndErrorDispatchesReauthenticateFromApiKey() throws Exception {
         for (DispatcherType dispatcherType : new DispatcherType[]{DispatcherType.ASYNC, DispatcherType.ERROR}) {
             MockHttpServletRequest request = request("team-secret", dispatcherType);

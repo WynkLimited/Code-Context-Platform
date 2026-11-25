@@ -24,14 +24,14 @@ public final class ContractModels {
     public static final String INDEX_SCHEMA_VERSION = "1.2.0";
 
     /** Bumped whenever index construction changes in a way that alters output for identical input. */
-    public static final String GENERATOR_VERSION = "1.5.0";
+    public static final String GENERATOR_VERSION = "1.6.0";
 
     /**
      * Bumped whenever {@code ContractCompatibilityEngine} changes a verdict for unchanged input.
      * Participates in the index hash so a rules correction re-opens every cached analysis rather
      * than leaving stale BREAKING/COMPATIBLE conclusions in place.
      */
-    public static final String COMPATIBILITY_RULES_VERSION = "1.6.0";
+    public static final String COMPATIBILITY_RULES_VERSION = "1.7.0";
 
     private ContractModels() {}
 

@@ -59,7 +59,74 @@ class RestContractExtractorTest {
 
         var export = extractor.extractExports(repo).get(0);
         assertEquals("rest:GET:/campaign/{id}", export.canonicalKey());
-        assertTrue(export.metadata().get("signature").toString().contains("responses"));
+        assertTrue(export.metadata().get("signature").toString().startsWith("restOp{"),
+                export.metadata().get("signature").toString());
+    }
+
+    @Test
+    void resolvesOpenApiYamlRefsIntoRequestResponseAndParameterSchemas() throws Exception {
+        Files.writeString(root.resolve("openapi.yaml"), """
+                openapi: 3.0.3
+                paths:
+                  /campaign/{id}:
+                    get:
+                      parameters:
+                        - name: id
+                          in: path
+                          required: true
+                          schema:
+                            type: string
+                        - name: expand
+                          in: query
+                          required: false
+                          schema:
+                            type: boolean
+                      responses:
+                        "200":
+                          content:
+                            application/json:
+                              schema:
+                                $ref: "#/components/schemas/Campaign"
+                  /campaign:
+                    post:
+                      requestBody:
+                        content:
+                          application/json:
+                            schema:
+                              $ref: "#/components/schemas/CampaignCreate"
+                      responses:
+                        "201":
+                          content:
+                            application/json:
+                              schema:
+                                $ref: "#/components/schemas/Campaign"
+                components:
+                  schemas:
+                    Campaign:
+                      type: object
+                      required: [id]
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                    CampaignCreate:
+                      type: object
+                      required: [name]
+                      properties:
+                        name: { type: string }
+                        owner: { type: string }
+                """);
+        var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
+        var exports = extractor().extractExports(repo);
+        var get = exports.stream().filter(e -> e.canonicalKey().equals("rest:GET:/campaign/{id}")).findFirst().orElseThrow();
+        var post = exports.stream().filter(e -> e.canonicalKey().equals("rest:POST:/campaign")).findFirst().orElseThrow();
+
+        assertTrue(get.metadata().get("signature").toString().startsWith("restOp{"), get.metadata().get("signature").toString());
+        assertTrue(get.metadata().get("signature").toString().contains("path:id:required:string"), get.metadata().toString());
+        assertTrue(get.metadata().get("signature").toString().contains("query:expand:optional:boolean"), get.metadata().toString());
+        assertTrue(get.metadata().get("signature").toString().contains("id:string:required"), get.metadata().toString());
+        assertTrue(Boolean.TRUE.equals(get.metadata().get("schemaComplete")), get.metadata().toString());
+        assertTrue(post.metadata().get("signature").toString().contains("name:string:required"), post.metadata().toString());
+        assertTrue(post.metadata().get("requestSchema").toString().contains("name:string:required"), post.metadata().toString());
     }
 
     @Test

@@ -30,7 +30,7 @@ public class RestContractExtractor implements ContractExtractor {
         this.mapper = mapper;
     }
 
-    public static final String VERSION = "1.1.0";
+    public static final String VERSION = "1.2.0";
     private static final long MAX_BYTES = 2L * 1024 * 1024;
     private static final Pattern CLASS_PATH = Pattern.compile(
             "@(?:Path|RequestMapping)\\s*\\(\\s*(?:(?:value|path)\\s*=\\s*)?([^,\\)]+)");
@@ -164,8 +164,8 @@ public class RestContractExtractor implements ContractExtractor {
             if (lowerPath.endsWith("openapi.json")) {
                 parseOpenApiJson(repository, file.path(), file.content(), exports);
             } else if (lowerPath.matches(".*openapi\\.(yaml|yml)$")) {
-                // Prefer Jackson JSON when the document is already JSON-compatible; otherwise keep
-                // the indentation walker for OpenAPI YAML without adding a YAML dependency.
+                // Prefer Jackson JSON when the document is already JSON-compatible; otherwise load YAML
+                // through SnakeYAML into the same OpenAPI schema normalizer used by openapi.json.
                 if (file.content().stripLeading().startsWith("{")) {
                     parseOpenApiJson(repository, file.path(), file.content(), exports);
                 } else {
@@ -176,50 +176,35 @@ public class RestContractExtractor implements ContractExtractor {
         return new Scan(List.copyOf(exports.values()), List.copyOf(imports.values()));
     }
 
-    private static void parseOpenApiYaml(
+    private void parseOpenApiYaml(
             RepositoryContext repository,
             String sourceFile,
             String content,
             Map<String, ContractExport> exports
     ) {
-        String[] lines = content.split("\\R");
-        Pattern pathLine = Pattern.compile("^(\\s+)[\"']?(/[^\"']*)[\"']?:\\s*$");
-        Pattern methodLine = Pattern.compile("^(\\s+)(get|post|put|patch|delete|head|options):\\s*$",
-                Pattern.CASE_INSENSITIVE);
-        String path = null;
-        int pathIndent = -1;
-        int pathsIndent = -1;
-        for (int i = 0; i < lines.length; i++) {
-            if (lines[i].matches("^\\s*paths:\\s*$")) {
-                pathsIndent = leadingSpaces(lines[i]);
-                path = null;
-                continue;
+        try {
+            Object loaded = new org.yaml.snakeyaml.Yaml().load(content);
+            if (loaded == null) {
+                return;
             }
-            if (pathsIndent < 0) {
-                continue;
+            JsonNode document = mapper.valueToTree(loaded);
+            JsonNode paths = document.path("paths");
+            if (!paths.isObject()) {
+                return;
             }
-            if (!lines[i].isBlank() && leadingSpaces(lines[i]) <= pathsIndent) {
-                break;
-            }
-            var pathMatcher = pathLine.matcher(lines[i]);
-            if (pathMatcher.find() && pathMatcher.group(1).length() > pathsIndent) {
-                path = pathMatcher.group(2);
-                pathIndent = pathMatcher.group(1).length();
-                continue;
-            }
-            var method = methodLine.matcher(lines[i]);
-            if (path == null || !method.find() || method.group(1).length() <= pathIndent) {
-                continue;
-            }
-            int methodIndent = method.group(1).length();
-            var signature = new StringBuilder(method.group(2).toLowerCase(Locale.ROOT)).append(':');
-            for (int j = i + 1; j < lines.length; j++) {
-                String next = lines[j];
-                if (!next.isBlank() && leadingSpaces(next) <= methodIndent) break;
-                if (!next.isBlank()) signature.append('\n').append(next.strip());
-            }
-            add(repository, false, method.group(2), path, sourceFile, null, -1, "openapi",
-                    signature.toString(), exports, new LinkedHashMap<>());
+            paths.properties().forEach(path -> path.getValue().properties().forEach(operation -> {
+                if (operation.getKey().matches("(?i)get|post|put|patch|delete|head|options")) {
+                    String signature = OpenApiSchemaSupport.operationSignature(document, operation.getValue());
+                    if (signature.isBlank()) {
+                        signature = operation.getValue().toString();
+                    }
+                    Map<String, Object> evidence = OpenApiSchemaSupport.operationEvidence(document, operation.getValue());
+                    add(repository, false, operation.getKey(), path.getKey(), sourceFile, null, -1, "openapi",
+                            signature, evidence, exports, new LinkedHashMap<>());
+                }
+            }));
+        } catch (Exception ignored) {
+            // Invalid OpenAPI YAML reduces coverage; it never fails the origin review.
         }
     }
 
@@ -337,12 +322,6 @@ public class RestContractExtractor implements ContractExtractor {
             start = previousStart;
         }
         return content.substring(start, offset);
-    }
-
-    private static int leadingSpaces(String value) {
-        int count = 0;
-        while (count < value.length() && Character.isWhitespace(value.charAt(count))) count++;
-        return count;
     }
 
     private static String join(String left, String right) {
