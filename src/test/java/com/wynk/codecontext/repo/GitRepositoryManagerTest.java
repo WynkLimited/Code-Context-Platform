@@ -36,4 +36,14 @@ class GitRepositoryManagerTest {
         var failure=assertThrows(java.io.IOException.class,()->manager.sync(record));
         assertEquals("mirror origin does not match registered repository",failure.getMessage());
     }
+
+    @Test void springSelectsProductionConstructorWithTestResolverConstructorPresent() {
+        var props=new CodeContextProperties(temp.resolve("repos").toString(),temp.resolve("sources").toString(),temp.resolve("zoekt").toString(),"team=secret","team=admin-secret","","","github.com","http://localhost",1024,1024*1024,6000,2,300,new CodeContextProperties.Zoekt("zoekt-git-index","zoekt-local-sync","http://localhost:6070"),new CodeContextProperties.Graphify("graphify",false));
+        try(var context=new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+            context.registerBean(CodeContextProperties.class,()->props);
+            context.register(GitRepositoryManager.class);
+            context.refresh();
+            assertNotNull(context.getBean(GitRepositoryManager.class));
+        }
+    }
 }

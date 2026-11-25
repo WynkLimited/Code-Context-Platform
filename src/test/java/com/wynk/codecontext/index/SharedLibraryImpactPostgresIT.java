@@ -610,6 +610,14 @@ FROM semantic_call_sites WHERE id=?
                 """;
         assertEquals(1,jdbc.queryForObject(kafkaSql,Integer.class,provider,kafkaConsumer),"Kafka contract must persist as an exact provider-consumer link");
         assertTrue(jdbc.queryForObject("SELECT min(l.confidence)>0 AND count(*)=2 FROM contract_links l JOIN contracts p ON p.id=l.provider_contract JOIN index_generations pg ON pg.id=p.generation_id WHERE pg.repository_id=? AND p.contract_type IN ('REST','KAFKA')",Boolean.class,provider));
+        assertTrue(jdbc.queryForObject("""
+                SELECT bool_and(l.evidence::text LIKE '%providerFile%' AND l.evidence::text LIKE '%consumerFile%'
+                                AND l.evidence::text LIKE '%providerCommit%' AND l.evidence::text LIKE '%consumerCommit%')
+                FROM contract_links l
+                JOIN contracts p ON p.id=l.provider_contract JOIN index_generations pg ON pg.id=p.generation_id
+                WHERE pg.repository_id=? AND p.contract_type IN ('REST','KAFKA')
+                """,Boolean.class,provider),
+                "persisted REST/Kafka links must retain provider and consumer file/commit evidence");
     }
 
     private void verifyIncrementalAdditionChangeAndDeletion(Path consumerSource,UUID consumer)throws Exception {

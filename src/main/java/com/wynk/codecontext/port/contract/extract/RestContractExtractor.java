@@ -30,7 +30,7 @@ public class RestContractExtractor implements ContractExtractor {
         this.mapper = mapper;
     }
 
-    public static final String VERSION = "1.0.0";
+    public static final String VERSION = "1.1.0";
     private static final long MAX_BYTES = 2L * 1024 * 1024;
     private static final Pattern CLASS_PATH = Pattern.compile(
             "@(?:Path|RequestMapping)\\s*\\(\\s*(?:(?:value|path)\\s*=\\s*)?([^,\\)]+)");
@@ -160,10 +160,17 @@ public class RestContractExtractor implements ContractExtractor {
                 add(repository, true, rust.group(1), pathFromUrl(rust.group(2)), file.path(),
                         file.content(), rust.start(), "rust-reqwest", rust.group(), exports, imports);
             }
-            if (file.path().toLowerCase(Locale.ROOT).matches(".*openapi\\.(yaml|yml)$")) {
-                parseOpenApiYaml(repository, file.path(), file.content(), exports);
-            } else if (file.path().toLowerCase(Locale.ROOT).endsWith("openapi.json")) {
+            String lowerPath = file.path().toLowerCase(Locale.ROOT);
+            if (lowerPath.endsWith("openapi.json")) {
                 parseOpenApiJson(repository, file.path(), file.content(), exports);
+            } else if (lowerPath.matches(".*openapi\\.(yaml|yml)$")) {
+                // Prefer Jackson JSON when the document is already JSON-compatible; otherwise keep
+                // the indentation walker for OpenAPI YAML without adding a YAML dependency.
+                if (file.content().stripLeading().startsWith("{")) {
+                    parseOpenApiJson(repository, file.path(), file.content(), exports);
+                } else {
+                    parseOpenApiYaml(repository, file.path(), file.content(), exports);
+                }
             }
         }
         return new Scan(List.copyOf(exports.values()), List.copyOf(imports.values()));
@@ -223,11 +230,17 @@ public class RestContractExtractor implements ContractExtractor {
             Map<String, ContractExport> exports
     ) {
         try {
-            JsonNode paths = mapper.readTree(content).path("paths");
+            JsonNode document = mapper.readTree(content);
+            JsonNode paths = document.path("paths");
             paths.properties().forEach(path -> path.getValue().properties().forEach(operation -> {
                 if (operation.getKey().matches("(?i)get|post|put|patch|delete|head|options")) {
+                    String signature = OpenApiSchemaSupport.operationSignature(document, operation.getValue());
+                    if (signature.isBlank()) {
+                        signature = operation.getValue().toString();
+                    }
+                    Map<String, Object> evidence = OpenApiSchemaSupport.operationEvidence(document, operation.getValue());
                     add(repository, false, operation.getKey(), path.getKey(), sourceFile, null, -1, "openapi",
-                            operation.getValue().toString(), exports, new LinkedHashMap<>());
+                            signature, evidence, exports, new LinkedHashMap<>());
                 }
             }));
         } catch (Exception ignored) {
@@ -248,6 +261,24 @@ public class RestContractExtractor implements ContractExtractor {
             Map<String, ContractExport> exports,
             Map<String, ContractImport> imports
     ) {
+        add(repository, client, method, path, sourceFile, fileContent, anchorOffset, framework, signature,
+                Map.of(), exports, imports);
+    }
+
+    private static void add(
+            RepositoryContext repository,
+            boolean client,
+            String method,
+            String path,
+            String sourceFile,
+            String fileContent,
+            int anchorOffset,
+            String framework,
+            String signature,
+            Map<String, Object> schemaEvidence,
+            Map<String, ContractExport> exports,
+            Map<String, ContractImport> imports
+    ) {
         ContractIdentity identity = ContractIdentity.ofRest(method, path);
         String normalizedSignature = signature.replaceAll("\\s+", " ").strip();
         String resolved = method.strip().toUpperCase(Locale.ROOT) + " " + path;
@@ -258,6 +289,9 @@ public class RestContractExtractor implements ContractExtractor {
         Map<String, Object> base = new LinkedHashMap<>();
         base.put("framework", framework);
         base.put("signature", normalizedSignature);
+        if (schemaEvidence != null) {
+            base.putAll(schemaEvidence);
+        }
         Map<String, Object> metadata = ContractEntryMetadata.forRestEntry(
                 base,
                 repository.commit(),

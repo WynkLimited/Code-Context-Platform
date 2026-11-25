@@ -10,6 +10,7 @@ import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.transport.HttpConfig;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -29,7 +30,9 @@ public class GitRepositoryManager {
     private final CodeContextProperties properties;
     private final ConcurrentHashMap<Path,Object> locks = new ConcurrentHashMap<>();
     private final OutboundUrlGuard.NameResolver nameResolver;
+    @Autowired
     public GitRepositoryManager(CodeContextProperties properties) { this(properties, InetAddressResolver.INSTANCE); }
+    /** Test seam for injecting a fake DNS resolver; not a Spring injection point. */
     GitRepositoryManager(CodeContextProperties properties, OutboundUrlGuard.NameResolver nameResolver) {
         this.properties = properties;
         this.nameResolver = nameResolver;

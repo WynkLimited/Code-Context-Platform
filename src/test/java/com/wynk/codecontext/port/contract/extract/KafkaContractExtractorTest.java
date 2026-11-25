@@ -20,7 +20,7 @@ class KafkaContractExtractorTest {
         Files.createDirectories(root.resolve("src/main/resources"));
         Files.createDirectories(root.resolve("schemas"));
         Files.writeString(root.resolve("schemas/campaign.avsc"),
-                "{\"type\":\"record\",\"name\":\"Campaign\",\"fields\":[]}");
+                "{\"type\":\"record\",\"name\":\"Campaign\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"tag\",\"type\":[\"null\",\"string\"],\"default\":null}]}");
         Files.writeString(root.resolve("src/main/resources/application.properties"), """
                 mp.messaging.outgoing.campaigns.topic=campaign-events
                 mp.messaging.outgoing.campaigns.schema=schemas/campaign.avsc
@@ -38,9 +38,28 @@ class KafkaContractExtractorTest {
                 extractor.extractExports(repo).stream().map(e -> e.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
         assertEquals(Set.of("kafka:campaign-audit", "kafka:spring-input"),
                 extractor.extractImports(repo).stream().map(i -> i.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
-        assertEquals("schemas/campaign.avsc", extractor.extractExports(repo).stream()
+        var campaign = extractor.extractExports(repo).stream()
                 .filter(value -> value.canonicalKey().equals("kafka:campaign-events"))
-                .findFirst().orElseThrow().metadata().get("schemaFile"));
+                .findFirst().orElseThrow();
+        assertEquals("schemas/campaign.avsc", campaign.metadata().get("schemaFile"));
+        assertEquals("fields{id:string:required,tag:string:optional}", campaign.metadata().get("signature"));
+        assertEquals("producer", campaign.metadata().get("direction"));
+    }
+
+    @Test
+    void resolvesConfigDerivedTopicFromNestedYamlPlaceholder() throws Exception {
+        Files.createDirectories(root.resolve("src/main/resources"));
+        Files.writeString(root.resolve("src/main/resources/application.yaml"), """
+                messaging:
+                  orders:
+                    topic: order-events
+                """);
+        Files.writeString(root.resolve("src/main/resources/application.properties"), """
+                mp.messaging.outgoing.orders.topic=${messaging.orders.topic}
+                """);
+        var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
+        assertEquals(Set.of("kafka:order-events"), new KafkaContractExtractor().extractExports(repo)
+                .stream().map(e -> e.canonicalKey()).collect(java.util.stream.Collectors.toSet()));
     }
 
     @Test

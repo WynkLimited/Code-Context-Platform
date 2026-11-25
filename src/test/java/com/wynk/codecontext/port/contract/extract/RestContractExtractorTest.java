@@ -63,6 +63,103 @@ class RestContractExtractorTest {
     }
 
     @Test
+    void resolvesOpenApiJsonRefsIntoRequestResponseAndParameterSchemas() throws Exception {
+        Files.writeString(root.resolve("openapi.json"), """
+                {
+                  "openapi": "3.0.3",
+                  "paths": {
+                    "/campaign/{id}": {
+                      "get": {
+                        "parameters": [
+                          {"name":"id","in":"path","required":true,"schema":{"type":"string"}},
+                          {"name":"expand","in":"query","required":false,"schema":{"type":"boolean"}}
+                        ],
+                        "responses": {
+                          "200": {
+                            "content": {
+                              "application/json": {
+                                "schema": {"$ref":"#/components/schemas/Campaign"}
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "/campaign": {
+                      "post": {
+                        "requestBody": {
+                          "content": {
+                            "application/json": {
+                              "schema": {"$ref":"#/components/schemas/CampaignCreate"}
+                            }
+                          }
+                        },
+                        "responses": {
+                          "201": {
+                            "content": {
+                              "application/json": {
+                                "schema": {"$ref":"#/components/schemas/Campaign"}
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "components": {
+                    "schemas": {
+                      "Campaign": {
+                        "type": "object",
+                        "required": ["id"],
+                        "properties": {
+                          "id": {"type":"string"},
+                          "name": {"type":"string"}
+                        }
+                      },
+                      "CampaignCreate": {
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {
+                          "name": {"type":"string"},
+                          "owner": {"type":"string"}
+                        }
+                      }
+                    }
+                  }
+                }
+                """);
+        var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
+        var exports = extractor().extractExports(repo);
+        var get = exports.stream().filter(e -> e.canonicalKey().equals("rest:GET:/campaign/{id}")).findFirst().orElseThrow();
+        var post = exports.stream().filter(e -> e.canonicalKey().equals("rest:POST:/campaign")).findFirst().orElseThrow();
+
+        assertTrue(get.metadata().get("signature").toString().startsWith("restOp{"), get.metadata().get("signature").toString());
+        assertTrue(get.metadata().get("signature").toString().contains("path:id:required:string"), get.metadata().toString());
+        assertTrue(get.metadata().get("signature").toString().contains("query:expand:optional:boolean"), get.metadata().toString());
+        assertTrue(get.metadata().get("signature").toString().contains("id:string:required"), get.metadata().toString());
+        assertTrue(Boolean.TRUE.equals(get.metadata().get("schemaComplete")), get.metadata().toString());
+        assertTrue(post.metadata().get("signature").toString().contains("name:string:required"), post.metadata().toString());
+        assertTrue(post.metadata().get("requestSchema").toString().contains("name:string:required"), post.metadata().toString());
+    }
+
+    @Test
+    void resolvesConfigDerivedNestedYamlEndpoint() throws Exception {
+        Files.createDirectories(root.resolve("src/main/resources"));
+        Files.writeString(root.resolve("src/main/resources/application.yaml"), """
+                api:
+                  campaign:
+                    base: /campaigns
+                """);
+        Files.createDirectories(root.resolve("src/main/java"));
+        Files.writeString(root.resolve("src/main/java/CampaignResource.java"), """
+                @RequestMapping("${api.campaign.base}")
+                class CampaignResource { @GetMapping("/{id}") Object get() { return null; } }
+                """);
+        var repo = new RepositoryContext("o", "r", "a".repeat(40), "main", root);
+        assertEquals("rest:GET:/campaigns/{id}", extractor().extractExports(repo).get(0).canonicalKey());
+    }
+
+    @Test
     void extractsGoAndPythonClientOperationsAsImports() throws Exception {
         Files.writeString(root.resolve("client.py"), "requests.get(\"https://catalog.internal/items/42\")");
         Files.writeString(root.resolve("client.go"), "http.Post(\"https://catalog.internal/orders\", \"application/json\", body)");

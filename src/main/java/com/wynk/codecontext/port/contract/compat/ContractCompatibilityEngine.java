@@ -198,6 +198,21 @@ public class ContractCompatibilityEngine {
                             : "Published Maven public API was extended compatibly."));
         }
         if (before.type() == ContractModels.ContractType.KAFKA) {
+            if (ProtoSignatureParser.isMessage(beforeSignature) && ProtoSignatureParser.isMessage(afterSignature)) {
+                return compareMessages(before, after, beforeSignature, afterSignature);
+            }
+            if (StructuredSchemaCompat.isFieldSchema(beforeSignature)
+                    && StructuredSchemaCompat.isFieldSchema(afterSignature)) {
+                // Producer exports are consumed like a response surface: removals/type changes break readers.
+                var diffs = StructuredSchemaCompat.compareFields(
+                        beforeSignature, afterSignature, StructuredSchemaCompat.Direction.RESPONSE);
+                if (!diffs.isEmpty()) {
+                    return diffs.stream()
+                            .map(diff -> change(before, after, diff.changeType(), diff.compatibility(),
+                                    beforeSignature, afterSignature, diff.detail()))
+                            .toList();
+                }
+            }
             boolean declaredSchemas = hasMetadata(before, "schema") && hasMetadata(after, "schema");
             return List.of(change(before, after, ContractChangeType.SCHEMA_CHANGED,
                     Compatibility.UNKNOWN,
@@ -207,6 +222,17 @@ public class ContractCompatibilityEngine {
                             : "Kafka payload changed without a declared schema; impact is inferred."));
         }
         if (before.type() == ContractModels.ContractType.REST) {
+            if (StructuredSchemaCompat.isRestOperation(beforeSignature)
+                    && StructuredSchemaCompat.isRestOperation(afterSignature)) {
+                var diffs = StructuredSchemaCompat.compareRest(beforeSignature, afterSignature);
+                if (!diffs.isEmpty()) {
+                    return diffs.stream()
+                            .map(diff -> change(before, after, diff.changeType(), diff.compatibility(),
+                                    beforeSignature, afterSignature, diff.detail()))
+                            .toList();
+                }
+                return List.of();
+            }
             boolean openApi = "openapi".equals(before.metadata().get("framework"))
                     && "openapi".equals(after.metadata().get("framework"));
             return List.of(change(before, after, ContractChangeType.ENDPOINT_SIGNATURE_CHANGED,

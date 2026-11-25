@@ -185,6 +185,74 @@ public final class ConsumerContractIndexRefresher {
                   AND ((p.generation_id=? AND cg.published) OR (c.generation_id=? AND pg.published))
                 ON CONFLICT(provider_contract,consumer_contract) DO UPDATE SET confidence=excluded.confidence,evidence=excluded.evidence
                 """, generation, generation);
+        reevaluateAmbiguousRelationships(generation);
+    }
+
+    /**
+     * Re-classifies consumer imports that match multiple published providers as AMBIGUOUS, and
+     * restores exact confidence when a previously ambiguous consumer settles to one provider.
+     */
+    void reevaluateAmbiguousRelationships(UUID generation) {
+        jdbc.update("""
+                UPDATE contract_links l
+                SET confidence=LEAST(l.confidence, 0.40),
+                    evidence=COALESCE(
+                      CASE WHEN jsonb_typeof(l.evidence)='array' THEN l.evidence ELSE jsonb_build_array(l.evidence) END,
+                      '[]'::jsonb
+                    ) || jsonb_build_array(jsonb_build_object(
+                        'relationshipStatus','AMBIGUOUS',
+                        'reason','multiple published providers match this consumer import',
+                        'providerCount',providers.provider_count))
+                FROM (
+                  SELECT c.id AS consumer_id, count(DISTINCT pg.repository_id) AS provider_count
+                  FROM contracts c
+                  JOIN contract_links l2 ON l2.consumer_contract=c.id
+                  JOIN contracts p ON p.id=l2.provider_contract
+                  JOIN index_generations pg ON pg.id=p.generation_id AND pg.published
+                  WHERE c.role='IMPORT' AND (c.generation_id=? OR p.generation_id=?)
+                  GROUP BY c.id
+                  HAVING count(DISTINCT pg.repository_id) > 1
+                ) providers
+                WHERE l.consumer_contract=providers.consumer_id
+                  AND NOT EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(
+                      CASE WHEN jsonb_typeof(l.evidence)='array' THEN l.evidence ELSE jsonb_build_array(l.evidence) END
+                    ) elem WHERE elem->>'relationshipStatus'='AMBIGUOUS')
+                """, generation, generation);
+        jdbc.update("""
+                UPDATE contract_links l
+                SET confidence=LEAST(p.confidence, c.confidence),
+                    evidence=COALESCE((
+                      SELECT jsonb_agg(elem)
+                      FROM jsonb_array_elements(
+                        CASE WHEN jsonb_typeof(l.evidence)='array' THEN l.evidence ELSE jsonb_build_array(l.evidence) END
+                      ) elem
+                      WHERE coalesce(elem->>'relationshipStatus','') <> 'AMBIGUOUS'
+                    ), '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+                        'relationshipStatus','RESOLVED',
+                        'reason','single published provider remains after re-evaluation'))
+                FROM contracts c, contracts p, index_generations pg, index_generations cg
+                WHERE l.consumer_contract=c.id
+                  AND l.provider_contract=p.id
+                  AND pg.id=p.generation_id AND pg.published
+                  AND cg.id=c.generation_id AND cg.published
+                  AND c.role='IMPORT'
+                  AND (c.generation_id=? OR p.generation_id=?)
+                  AND (
+                    SELECT count(DISTINCT pg2.repository_id)
+                    FROM contract_links l2
+                    JOIN contracts p2 ON p2.id=l2.provider_contract
+                    JOIN index_generations pg2 ON pg2.id=p2.generation_id AND pg2.published
+                    WHERE l2.consumer_contract=c.id
+                  ) = 1
+                  AND EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(
+                      CASE WHEN jsonb_typeof(l.evidence)='array' THEN l.evidence ELSE jsonb_build_array(l.evidence) END
+                    ) elem
+                    WHERE elem->>'relationshipStatus'='AMBIGUOUS'
+                  )
+                """, generation, generation);
     }
 
     /** Remove links involving superseded or failed generations after the replacement publishes. */
