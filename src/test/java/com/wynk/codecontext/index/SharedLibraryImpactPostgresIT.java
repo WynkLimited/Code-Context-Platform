@@ -428,6 +428,41 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
         assertEquals(0, stillAmbiguous, "disabling the duplicate provider must clear AMBIGUOUS markers");
         assertTrue(remainingLinks != null && remainingLinks >= 1,
                 "single remaining enabled provider must retain an exact REST link after prune+refresh");
+
+        // Durable webhook replay: same delivery ID must enqueue once against PostgreSQL.
+        String sha;
+        try (Git source = Git.open(providerA.toFile())) { sha = source.getRepository().resolve("HEAD").name(); }
+        byte[] body = ("{\"after\":\"" + sha + "\",\"repository\":{\"full_name\":\"Fixture/orders-api-a\"},"
+                + "\"head_commit\":{\"timestamp\":\"" + java.time.Instant.now().toString() + "\"}}")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        String signature = webhookSignature(body);
+        UUID delivery = UUID.fromString("adf3f391-cfa6-4f27-8c4c-467f1b865ab9");
+        var client = HttpClient.newHttpClient();
+        URI webhook = URI.create("http://localhost:" + port + "/webhooks/github/Fixture/orders-api-a");
+        HttpResponse<String> first = client.send(HttpRequest.newBuilder(webhook)
+                .header("Content-Type", "application/json")
+                .header("X-Hub-Signature-256", signature)
+                .header("X-GitHub-Delivery", delivery.toString())
+                .header("X-GitHub-Event", "push")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> replay = client.send(HttpRequest.newBuilder(webhook)
+                .header("Content-Type", "application/json")
+                .header("X-Hub-Signature-256", signature)
+                .header("X-GitHub-Delivery", delivery.toString())
+                .header("X-GitHub-Event", "push")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body)).build(), HttpResponse.BodyHandlers.ofString());
+        assertEquals(202, first.statusCode(), first.body());
+        assertEquals(202, replay.statusCode(), replay.body());
+        assertTrue(first.body().contains("\"accepted\":true") || first.body().contains("\"accepted\": true"), first.body());
+        assertTrue(replay.body().contains("\"duplicate\":true") || replay.body().contains("\"duplicate\": true"), replay.body());
+        assertEquals(1, jdbc.queryForObject("SELECT count(*) FROM webhook_deliveries WHERE delivery_id=?", Integer.class, delivery));
+    }
+
+    private static String webhookSignature(byte[] body) throws Exception {
+        String secret = System.getenv().getOrDefault("WEBHOOK_SECRET", "local-webhook-secret-change-me");
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256"));
+        return "sha256=" + java.util.HexFormat.of().formatHex(mac.doFinal(body));
     }
 
     @Test
