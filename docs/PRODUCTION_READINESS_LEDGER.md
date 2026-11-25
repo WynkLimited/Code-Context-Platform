@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `e65ddaa2261a3d4aa9e25b001ed00330dc0bc433` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45647208095 |
+| Last green mandatory CI SHA | `440a4ef903f59445ae55181447744143d467dfbe` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45650148978 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -25,11 +25,10 @@ Status vocabulary (this ledger):
 
 **Next executable actions (priority):**
 
-1. Ambiguity demotion/resolution under PG contention (CONTRACT-4).
-2. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
-3. Webhook durable PG concurrency (SEC-WH).
-4. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
-5. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
+1. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
+2. Webhook durable PG concurrency (SEC-WH).
+3. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
+4. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
 
 ---
 
@@ -87,6 +86,7 @@ Status vocabulary (this ledger):
 | XRI-GRADLE | Gradle dependency resolution | NOT_IMPLEMENTED | Maven-first; Gradle TBD |
 | REF-IND | No MultiRepo coupling | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` unit gate |
 | REF-PARITY | Functional parity matrix | PARTIALLY_IMPLEMENTED | See `docs/CROSS_REPO_IMPACT_PARITY_MATRIX.md` |
+| CONTRACT-4 | Ambiguous relationship refresh | VERIFIED_PRODUCTION_READY | Dual REST providers → AMBIGUOUS; disable → clean relink @ 440a4ef |
 
 ### Security
 
@@ -111,7 +111,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | Green mandatory CI @ 19aa954 (run 45635577388) |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | Green mandatory CI @ 440a4ef (3 SharedLibrary + Graphify + retention + least-privilege) |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
