@@ -60,6 +60,7 @@ code-context:
   graphify:
     command: ${GRAPHIFY_COMMAND:graphify}
     enabled: ${GRAPHIFY_ENABLED:false}
+logging.structured.format.console: ${LOG_FORMAT_CONSOLE:logstash}
 ---
 spring:
   config.activate.on-profile: test
@@ -75,4 +76,3 @@ code-context:
   webhook-secret: ${WEBHOOK_SECRET}
   git-access-token: ${GIT_ACCESS_TOKEN}
 
-logging.structured.format.console: ${LOG_FORMAT_CONSOLE:logstash}
