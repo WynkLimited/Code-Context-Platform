@@ -219,10 +219,9 @@ class SharedLibraryImpactPostgresIT {
         assertEquals("1.0", reloadedMavenImport.dependencyVersion());
         assertTrue(reloadedMavenImport.metadata().containsKey("evidenceComplete"));
 
-        write(providerSource, "pom.xml", pom("2.0", null).replace("fixture","org.acme"));
-        write(providerSource, "src/main/java/org/acme/Money.java", librarySource("public String convert(java.math.BigDecimal value) { return value.toString(); }\n    public String convert(Integer value) { return value.toString(); }"));
-        write(providerSource, "src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\"/orders/v2/{id}\") Object find(String id) { return null; } }\n");
-        write(providerSource, "src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\"order-events-v2\", \"payload\"); } }\n");
+        Map<String,String> providerV2 = libraryFiles("2.0",
+                "public String convert(java.math.BigDecimal value) { return value.toString(); }\n    public String convert(Integer value) { return value.toString(); }");
+        providerV2.forEach((path, content) -> write(providerSource, path, content));
         try (Git providerGit = Git.open(providerSource.toFile())) { commit(providerGit, "publish common-library 2.0"); }
         indexAndAwait("common-library");
 
