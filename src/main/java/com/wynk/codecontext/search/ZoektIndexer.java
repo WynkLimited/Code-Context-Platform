@@ -17,12 +17,18 @@ public class ZoektIndexer {
     private final CodeContextProperties config; private final JsonMapper json;
     public ZoektIndexer(CodeContextProperties c,JsonMapper m){config=c;json=m;}
     public void index(RepositoryRecord repository,Path checkout,java.util.UUID generation) throws Exception {
+        String commit;
+        try(var git=org.eclipse.jgit.api.Git.open(checkout.toFile())) {
+            var head=git.getRepository().resolve("HEAD^{commit}");
+            if(head==null)throw new IOException("Zoekt source commit is unavailable");
+            commit=head.name();
+        }
         Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();Files.createDirectories(index);
         Path metadata=index.resolve("meta-"+repository.id()+".json");
         String generationName=repository.key()+"@"+generation;
         json.writeValue(metadata.toFile(),new RepoMetadata(generationName,"Code Context indexed generation"));
         Path log=index.resolve("index-"+repository.id()+".log");
-        Process process=new ProcessBuilder(List.of(config.zoekt().indexer(),"-index",index.toString(),"-branches",repository.defaultBranch(),"-incremental","-meta",metadata.toString(),checkout.toString()))
+        Process process=new ProcessBuilder(List.of(config.zoekt().indexer(),"-index",index.toString(),"-branches",commit,"-incremental","-meta",metadata.toString(),checkout.toString()))
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         boolean done=process.waitFor(Duration.ofMinutes(20).toMillis(),TimeUnit.MILLISECONDS);
         if(!done){process.destroyForcibly();throw new IOException("Zoekt indexing exceeded 20 minute limit");}
