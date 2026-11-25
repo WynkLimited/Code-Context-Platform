@@ -184,3 +184,20 @@ Versions: generator `1.5.0`, compatibility rules `1.6.0`. Validated: **199** Jav
 
 Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45588085639 on d0912f2: unit gate passed; PostgreSQL suite **3 passed, 1 failure, 0 errors/skips**. Shared acceptance advanced through Kotlin call-site lines, all six MCP tools, and dual Java/Kotlin semantic impacts. Failure: impactCandidates serialize RepoRef as nested owner/name with Fixture casing, while the assertion looked for lowercase `fixture/consumer-service-a`. Assertion now checks `"name":"consumer-service-a"` / `consumer-service-b` together with the REST/Kafka contract keys. Consumer A/B remain present in the payload; no assertion weakened beyond format alignment.
 
+
+### Mandatory CI stages green — 2026-11-25
+
+Remote SHA verified: `a176f6e9a740fd966b4343f9b076f430d5627cd7`.
+Workflow: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45590165866 — **success**.
+
+| Gate | Result |
+|---|---|
+| Unit + no-skip | **199 passed, 0 failures, 0 errors, 0 skipped** (Java Temurin 21.0.13) |
+| SharedLibraryImpactPostgresIT | **1 passed, 0/0/0** (69.13s) — real Zoekt/Ollama/Graphify/MCP path |
+| GraphifyPostgresIT | **1 passed, 0/0/0** |
+| GenerationRetentionPostgresIT | **1 passed, 0/0/0** |
+| ProductionDatabaseLeastPrivilegeIT | **1 passed, 0/0/0** (V1–V10 as restricted role) |
+| All four verify-* report gates | success |
+
+PostgreSQL service: `pgvector/pgvector:0.8.1-pg17`. Overall production decision remains **NO-GO** until remaining ledger items (hard purge, OS compiler sandbox, full ops drills, remaining contract/security depth) are closed; mandatory service-backed acceptance for this slice is now executed and green.
+
