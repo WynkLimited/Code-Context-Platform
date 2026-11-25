@@ -16,12 +16,12 @@ Statuses: `FUNCTIONALLY_EQUIVALENT` · `PLATFORM_IMPLEMENTATION_SUPERIOR` · `PA
 | Direct consumer impact | Routing + call match | Persisted semanticMethodImpacts | FUNCTIONALLY_EQUIVALENT | CI Java+Kotlin | — |
 | Indirect / multi-hop | Producer BFS + Graphify hops | Direct edges; limitation documented | PARTIALLY_EQUIVALENT | Limitations string in MCP | Bounded hop resolver |
 | Version-pinned consumers | Cache/key + coords | Explicit 1.0 impacted / 2.0 excluded | FUNCTIONALLY_EQUIVALENT | Kotlin+Java IT | — |
-| Proposed change / PR diff | ChangeClassifier + base/head | Generation compare primarily | PARTIALLY_EQUIVALENT | `impact_analysis` | Add optional proposed signature inputs |
+| Proposed change / PR diff | ChangeClassifier + base/head | Generation compare + optional oldSignature/newSignature | PARTIALLY_EQUIVALENT | MCP proposedChange @ 19aa954 | Diff/base-commit still open |
 | Evidence / confidence | Rich EvidenceSource + blocking veto | Evidence strings + confidence; non-blocking | INTENTIONALLY_DIFFERENT_WITH_JUSTIFICATION | MCP `blocking:false` | Platform is advisory MCP, not review gate |
 | Persistent generations | Filesystem commit indexes | PostgreSQL generations + Zoekt + vectors | PLATFORM_IMPLEMENTATION_SUPERIOR | Pipeline + CI | — |
 | Team authorization | Product registry / review scope | API key + team_repository_access | INTENTIONALLY_DIFFERENT_WITH_JUSTIFICATION | Shared IT ACL | — |
 | LLM semantic layer | Ollama + evidence gate | Not used for impact authority | INTENTIONALLY_DIFFERENT_WITH_JUSTIFICATION | — | Keep deterministic |
-| Independent build | N/A | Must build without MultiRepo | IMPLEMENTED_UNVERIFIED | pom independence | Automated gate test |
+| Independent build | N/A | Must build without MultiRepo | FUNCTIONALLY_EQUIVALENT | `ArchitecturalIndependenceTest` | — |
 | Comparative regression fixtures | NullUtils/DateUtils/gnostic-e2e | Money/Amount fixtures | PARTIALLY_EQUIVALENT | Shared IT | Port more ground-truth cases independently |
 
 ## Coupling confirmation

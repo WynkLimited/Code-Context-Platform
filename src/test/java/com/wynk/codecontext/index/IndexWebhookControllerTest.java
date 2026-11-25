@@ -17,6 +17,10 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
@@ -63,7 +67,41 @@ class IndexWebhookControllerTest {
         assertEquals(new IndexWebhookController.Delivery(REPOSITORY_ID, hash), fixture.jdbc.deliveries.get(deliveryId));
     }
 
+    @Test
+    void rejectsStaleHeadCommitTimestampBeforeEnqueue() throws Exception {
+        Instant now = Instant.parse("2026-11-25T14:00:00Z");
+        var fixture = fixture(Clock.fixed(now, ZoneOffset.UTC), Duration.ofMinutes(15));
+        byte[] body = payload("1".repeat(40), "2026-11-25T13:00:00Z");
+        String signature = signature(body);
+
+        ResponseStatusException failure = assertThrows(ResponseStatusException.class,
+                () -> fixture.controller.github("Fixture", "lib", signature,
+                        "bdf3f391-cfa6-4f27-8c4c-467f1b865ab6", "push", body));
+
+        assertEquals(400, failure.getStatusCode().value());
+        assertEquals(0, fixture.indexing.enqueueCount);
+        assertEquals(0, fixture.jdbc.insertCount);
+    }
+
+    @Test
+    void acceptsFreshHeadCommitTimestamp() throws Exception {
+        Instant now = Instant.parse("2026-11-25T14:00:00Z");
+        var fixture = fixture(Clock.fixed(now, ZoneOffset.UTC), Duration.ofMinutes(15));
+        byte[] body = payload("1".repeat(40), "2026-11-25T13:55:00Z");
+        String signature = signature(body);
+
+        var accepted = fixture.controller.github("Fixture", "lib", signature,
+                "cdf3f391-cfa6-4f27-8c4c-467f1b865ab7", "push", body);
+
+        assertTrue((Boolean) accepted.get("accepted"));
+        assertEquals(1, fixture.indexing.enqueueCount);
+    }
+
     private static Fixture fixture() {
+        return fixture(Clock.systemUTC(), Duration.ZERO);
+    }
+
+    private static Fixture fixture(Clock clock, Duration maxPayloadAge) {
         var jdbc = new WebhookJdbc();
         var repository = new RepositoryRecord(REPOSITORY_ID, "Fixture", "lib", "https://github.com/Fixture/lib.git", "team-a", "main", "LIBRARY", "/repos/Fixture/lib");
         RepositoryStore repositories = new RepositoryStore(jdbc) {
@@ -78,7 +116,8 @@ class IndexWebhookControllerTest {
             @Override public void rollback(TransactionStatus status) { }
         };
         WebhookIndexing indexing = new WebhookIndexing(repositories, properties, transactionManager);
-        return new Fixture(new IndexWebhookController(indexing, properties, JsonMapper.builder().build(), repositories, jdbc, transactionManager), indexing, jdbc);
+        return new Fixture(new IndexWebhookController(indexing, properties, JsonMapper.builder().build(),
+                repositories, jdbc, transactionManager, clock, maxPayloadAge), indexing, jdbc);
     }
 
     private static CodeContextProperties properties() {
@@ -89,7 +128,14 @@ class IndexWebhookControllerTest {
     }
 
     private static byte[] payload(String sha) {
-        return ("{\"after\":\"" + sha + "\",\"repository\":{\"full_name\":\"Fixture/lib\"}}").getBytes(StandardCharsets.UTF_8);
+        return payload(sha, null);
+    }
+
+    private static byte[] payload(String sha, String headCommitTimestamp) {
+        String head = headCommitTimestamp == null ? ""
+                : ",\"head_commit\":{\"timestamp\":\"" + headCommitTimestamp + "\"}";
+        return ("{\"after\":\"" + sha + "\",\"repository\":{\"full_name\":\"Fixture/lib\"}" + head + "}")
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     private static String signature(byte[] payload) throws Exception {

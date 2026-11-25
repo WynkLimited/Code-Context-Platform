@@ -2,6 +2,8 @@ package com.wynk.codecontext.port.contract.extract;
 
 import com.wynk.codecontext.port.contract.ContractEntryMetadata;
 import com.wynk.codecontext.port.contract.RepositoryContext;
+import com.wynk.codecontext.port.contract.compat.CompatibilityModels.Compatibility;
+import com.wynk.codecontext.port.contract.compat.ContractCompatibilityEngine;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 import org.junit.jupiter.api.io.TempDir;
@@ -207,6 +209,109 @@ class RestContractExtractorTest {
         assertTrue(Boolean.TRUE.equals(get.metadata().get("schemaComplete")), get.metadata().toString());
         assertTrue(post.metadata().get("signature").toString().contains("name:string:required"), post.metadata().toString());
         assertTrue(post.metadata().get("requestSchema").toString().contains("name:string:required"), post.metadata().toString());
+    }
+
+    @Test
+    void nestedYamlRefSchemaEvolutionDetectsBreakingRequiredFieldAddition() throws Exception {
+        Path beforeRoot = Files.createDirectories(root.resolve("before"));
+        Path afterRoot = Files.createDirectories(root.resolve("after"));
+        String baseYaml = """
+                openapi: 3.0.3
+                paths:
+                  /campaign:
+                    post:
+                      requestBody:
+                        content:
+                          application/json:
+                            schema:
+                              $ref: "#/components/schemas/CampaignCreate"
+                      responses:
+                        "201":
+                          content:
+                            application/json:
+                              schema:
+                                $ref: "#/components/schemas/Campaign"
+                components:
+                  schemas:
+                    Campaign:
+                      type: object
+                      required: [id]
+                      properties:
+                        id: { type: string }
+                        detail:
+                          $ref: "#/components/schemas/CampaignDetail"
+                    CampaignDetail:
+                      type: object
+                      required: [title]
+                      properties:
+                        title: { type: string }
+                        tag: { type: string }
+                    CampaignCreate:
+                      type: object
+                      required: [name]
+                      properties:
+                        name: { type: string }
+                        detail:
+                          $ref: "#/components/schemas/CampaignDetail"
+                """;
+        Files.writeString(beforeRoot.resolve("openapi.yaml"), baseYaml);
+        Files.writeString(afterRoot.resolve("openapi.yaml"), """
+                openapi: 3.0.3
+                paths:
+                  /campaign:
+                    post:
+                      requestBody:
+                        content:
+                          application/json:
+                            schema:
+                              $ref: "#/components/schemas/CampaignCreate"
+                      responses:
+                        "201":
+                          content:
+                            application/json:
+                              schema:
+                                $ref: "#/components/schemas/Campaign"
+                components:
+                  schemas:
+                    Campaign:
+                      type: object
+                      required: [id]
+                      properties:
+                        id: { type: string }
+                        detail:
+                          $ref: "#/components/schemas/CampaignDetail"
+                    CampaignDetail:
+                      type: object
+                      required: [title]
+                      properties:
+                        title: { type: string }
+                        tag: { type: string }
+                    CampaignCreate:
+                      type: object
+                      required: [name, owner]
+                      properties:
+                        name: { type: string }
+                        owner: { type: string }
+                        detail:
+                          $ref: "#/components/schemas/CampaignDetail"
+                """);
+
+        var before = extractor().extractExports(new RepositoryContext("o", "r", "a".repeat(40), "main", beforeRoot));
+        var after = extractor().extractExports(new RepositoryContext("o", "r", "b".repeat(40), "main", afterRoot));
+        assertEquals(1, before.size());
+        assertEquals(1, after.size());
+        String beforeSig = before.get(0).metadata().get("signature").toString();
+        String afterSig = after.get(0).metadata().get("signature").toString();
+        // Nested $ref leaves are flattened; when the parent property is optional, nested
+        // required flags demote to optional so consumers are not falsely broken.
+        assertTrue(beforeSig.contains("detail.title:string:optional"), beforeSig);
+        assertTrue(beforeSig.contains("name:string:required"), beforeSig);
+        assertTrue(afterSig.contains("owner:string:required"), afterSig);
+        assertTrue(afterSig.contains("detail.title:string:optional"), afterSig);
+
+        var change = new ContractCompatibilityEngine().compare(before, after).get(0);
+        assertEquals(Compatibility.BREAKING, change.compatibility(), change.detail());
+        assertTrue(change.detail().toLowerCase().contains("request"), change.detail());
     }
 
     @Test

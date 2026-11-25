@@ -7,9 +7,9 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `b2346ee049528c705991de75051ef960da4abb3a` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45629807050 |
-| Latest CI (c240499) | FAILED run 45634169162 — `oldSignature`/`newSignature` incorrectly required in MCP schema; fix pending push |
+| Last green mandatory CI SHA | `19aa954e3e8e9747ca1b94f596565f024575239c` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45635577388 |
+| Prior failed CI | c240499 run 45634169162 — MCP schema required optional signatures; fixed in 19aa954 |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
 | Reference repo (read-only) | `WynkLimited/MultiRepo-Code-Review-Agent` @ `main` / `65144c6060e97c491546674586ea8ae5020588c7` |
@@ -39,7 +39,7 @@ Status vocabulary (this ledger):
 |---|---|---|---|---|---|
 | CTX-1 | Text index | Zoekt exact/regex search with evidence | VERIFIED_PRODUCTION_READY | `ZoektSearchService`, `ZoektIndexer` | CI b2346ee SharedLibrary IT |
 | CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | CI b2346ee |
-| CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | YAML `$ref` unit green; multi-repo OpenAPI/Avro evolution PG pending |
+| CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested YAML `$ref` flatten + evolution unit green; multi-repo OpenAPI/Avro PG pending |
 | CTX-4 | Semantic index | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama |
 
 ### MCP tools
@@ -80,7 +80,7 @@ Status vocabulary (this ledger):
 | XRI-K2J | Kotlin→Java | VERIFIED_PRODUCTION_READY | CI Kotlin provider IT |
 | XRI-K2K | Kotlin→Kotlin | VERIFIED_PRODUCTION_READY | CI Kotlin provider IT |
 | XRI-VER | Version-pinned vs upgraded consumers | VERIFIED_PRODUCTION_READY | CI excludes upgraded consumer from semantic impacts |
-| XRI-PROP | Proposed-change classification inputs | PARTIALLY_IMPLEMENTED | Optional @ToolParam signatures; schema + MCP proposedChange assertion added; await CI |
+| XRI-PROP | Proposed-change classification inputs | VERIFIED_PRODUCTION_READY | Optional @ToolParam; schema + MCP proposedChange through Streamable HTTP @ 19aa954 |
 | XRI-HOP | Multi-hop / indirect callers | PARTIALLY_IMPLEMENTED | Direct edges only; bounded hops open |
 | XRI-GRADLE | Gradle dependency resolution | NOT_IMPLEMENTED | Maven-first; Gradle TBD |
 | REF-IND | No MultiRepo coupling | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` unit gate |
@@ -94,7 +94,7 @@ Status vocabulary (this ledger):
 | SEC-ACL | Cross-team tool isolation | VERIFIED_PRODUCTION_READY | Shared IT all six tools |
 | SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Deeper redirect adversarial |
 | SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | App isolation only; cgroup/seccomp BLOCKED pending OS |
-| SEC-WH | Webhook replay | IMPLEMENTED_UNVERIFIED | Unit green; durable PG concurrency open |
+| SEC-WH | Webhook replay + timestamp freshness | PARTIALLY_IMPLEMENTED | Delivery-id replay + head_commit age gate; durable PG concurrency open |
 
 ### Operations
 
@@ -109,7 +109,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | Local unit 220/220 @ master-directive slice; last green mandatory CI b2346ee (await next dispatch) |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | Green mandatory CI @ 19aa954 (run 45635577388) |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---

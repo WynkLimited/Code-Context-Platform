@@ -20,6 +20,10 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
@@ -28,22 +32,35 @@ import java.util.UUID;
 public class IndexWebhookController {
     private static final Logger LOGGER = LoggerFactory.getLogger(IndexWebhookController.class);
     static final int MAX_PAYLOAD_BYTES = 1_048_576;
+    /** Default maximum age for push event timestamps when the payload includes one. */
+    static final Duration DEFAULT_MAX_PAYLOAD_AGE = Duration.ofMinutes(15);
     private final IndexingService indexing;
     private final CodeContextProperties config;
     private final JsonMapper json;
     private final RepositoryStore repositories;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
+    private final Clock clock;
+    private final Duration maxPayloadAge;
 
     public IndexWebhookController(IndexingService indexing, CodeContextProperties config, JsonMapper json,
                                   RepositoryStore repositories, JdbcTemplate jdbc,
                                   org.springframework.transaction.PlatformTransactionManager transactionManager) {
+        this(indexing, config, json, repositories, jdbc, transactionManager, Clock.systemUTC(), DEFAULT_MAX_PAYLOAD_AGE);
+    }
+
+    IndexWebhookController(IndexingService indexing, CodeContextProperties config, JsonMapper json,
+                           RepositoryStore repositories, JdbcTemplate jdbc,
+                           org.springframework.transaction.PlatformTransactionManager transactionManager,
+                           Clock clock, Duration maxPayloadAge) {
         this.indexing = indexing;
         this.config = config;
         this.json = json;
         this.repositories = repositories;
         this.jdbc = jdbc;
         this.transactions = new TransactionTemplate(transactionManager);
+        this.clock = clock == null ? Clock.systemUTC() : clock;
+        this.maxPayloadAge = maxPayloadAge == null ? DEFAULT_MAX_PAYLOAD_AGE : maxPayloadAge;
     }
 
     @PostMapping("/webhooks/github/{owner}/{name}")
@@ -82,6 +99,7 @@ public class IndexWebhookController {
         if (!sha.matches("[0-9a-fA-F]{40}")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "GitHub push payload has an invalid commit");
         }
+        rejectStalePayload(payload);
 
         var repository = repositories.find(owner, name)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "repository not onboarded"));
@@ -127,6 +145,51 @@ public class IndexWebhookController {
                 auth.getPrincipal(), r.id()) > 0).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
         UUID job = indexing.enqueue(owner, name, "HEAD", "manual-" + repo.id() + "-" + System.nanoTime());
         return Map.of("accepted", true, "jobId", job.toString());
+    }
+
+    /**
+     * When GitHub includes a trusted event timestamp ({@code head_commit.timestamp} or
+     * {@code repository.pushed_at}), reject deliveries older than {@link #maxPayloadAge}.
+     * Payloads without a parseable timestamp remain accepted so replay protection still
+     * depends on delivery-id idempotency for those events.
+     */
+    void rejectStalePayload(JsonNode payload) {
+        if (maxPayloadAge.isZero() || maxPayloadAge.isNegative()) return;
+        Instant eventTime = parseEventTimestamp(payload);
+        if (eventTime == null) return;
+        Instant cutoff = clock.instant().minus(maxPayloadAge);
+        if (eventTime.isBefore(cutoff)) {
+            LOGGER.warn("github.webhook.stale_timestamp eventTime={} cutoff={} maxAge={}",
+                    eventTime, cutoff, maxPayloadAge);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "webhook event timestamp is too old");
+        }
+    }
+
+    private static Instant parseEventTimestamp(JsonNode payload) {
+        for (String path : new String[] {"head_commit.timestamp", "repository.pushed_at"}) {
+            String raw = textAt(payload, path);
+            if (raw.isBlank()) continue;
+            try {
+                return Instant.parse(raw);
+            } catch (DateTimeParseException ignored) {
+                // GitHub may omit fractional seconds; Instant.parse requires ISO-8601.
+            }
+            try {
+                return Instant.parse(raw.endsWith("Z") ? raw : raw + "Z");
+            } catch (DateTimeParseException ignored) {
+                LOGGER.debug("github.webhook.unparseable_timestamp path={} value={}", path, raw);
+            }
+        }
+        return null;
+    }
+
+    private static String textAt(JsonNode root, String dottedPath) {
+        JsonNode current = root;
+        for (String part : dottedPath.split("\\.")) {
+            if (current == null || current.isMissingNode()) return "";
+            current = current.path(part);
+        }
+        return current == null || current.isMissingNode() || current.isNull() ? "" : current.asText("").strip();
     }
 
     private static String sha256(byte[] body) {

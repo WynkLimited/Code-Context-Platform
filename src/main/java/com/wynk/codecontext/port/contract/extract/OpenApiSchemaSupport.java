@@ -144,10 +144,26 @@ final class OpenApiSchemaSupport {
         }
         for (var property : properties.properties()) {
             String name = property.getKey();
-            String type = schemaType(document, property.getValue(), depth + 1);
+            JsonNode nested = resolveRef(document, property.getValue(), depth + 1);
+            Map<String, String> nestedFields = objectFields(document, nested, depth + 1);
             boolean isRequired = required.contains(name);
-            fields.put(name, name + ":" + type + ":" + (isRequired ? "required" : "optional"));
-            if (fields.size() >= MAX_FIELDS) break;
+            if (!nestedFields.isEmpty() && nestedFields.keySet().stream().noneMatch("$"::equals)) {
+                // Flatten nested object/$ref properties so schema evolution sees leaf fields.
+                for (var nestedEntry : nestedFields.entrySet()) {
+                    String nestedName = name + "." + nestedEntry.getKey();
+                    String[] parts = nestedEntry.getValue().split(":", 3);
+                    String nestedType = parts.length > 1 ? parts[1] : "object";
+                    String nestedReq = parts.length > 2 ? parts[2] : "optional";
+                    // Nested required only applies when the parent property itself is required.
+                    String effectiveReq = isRequired ? nestedReq : "optional";
+                    fields.put(nestedName, nestedName + ":" + nestedType + ":" + effectiveReq);
+                    if (fields.size() >= MAX_FIELDS) return fields;
+                }
+            } else {
+                String type = schemaType(document, property.getValue(), depth + 1);
+                fields.put(name, name + ":" + type + ":" + (isRequired ? "required" : "optional"));
+                if (fields.size() >= MAX_FIELDS) break;
+            }
         }
         return fields;
     }
