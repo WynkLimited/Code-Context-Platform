@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `404c099e2c150a110dab3209d1193574aee5d3bb` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45644775317 |
+| Last green mandatory CI SHA | `7b65acd2d4054ce265a6864c4f4b0c56f4370e9d` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45645936895 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -21,10 +21,12 @@ Status vocabulary (this ledger):
 
 ## Resume checkpoint
 
+**Session progress (this closure):** Ledger + MultiRepo parity docs; proposed-change MCP params; independence gate; webhook freshness; nested+cross-file OpenAPI `$ref`; Avro/OpenAPI MCP evolution in shared IT; hop incompleteness flags; admin API-key status; mandatory CI green @ `7b65acd`.
+
 **Next executable actions (priority):**
 
 1. Ambiguity demotion/resolution under PG contention (CONTRACT-4).
-2. Method-chain multi-hop beyond re-export candidates (XRI-HOP) or keep incompleteness flags + document.
+2. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
 3. Webhook durable PG concurrency (SEC-WH).
 4. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
 5. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
