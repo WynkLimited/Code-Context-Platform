@@ -104,6 +104,18 @@ class ZoektSearchServiceTest {
         server.verify();
     }
 
+    @Test
+    void springSelectsProductionConstructorWithTestTransportConstructorPresent() {
+        try(var context=new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+            context.registerBean(CodeContextProperties.class,ZoektSearchServiceTest::properties);
+            context.registerBean(RepositoryStore.class,ZoektSearchServiceTest::repositories);
+            context.registerBean(JsonMapper.class,()->JsonMapper.builder().build());
+            context.register(ZoektSearchService.class);
+            context.refresh();
+            org.junit.jupiter.api.Assertions.assertNotNull(context.getBean(ZoektSearchService.class));
+        }
+    }
+
     private static void authenticate(String team) {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(team, "", List.of()));

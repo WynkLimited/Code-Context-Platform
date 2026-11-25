@@ -26,6 +26,7 @@ public class ZoektSearchService {
     private final RepositoryStore repositories;
     private final JsonMapper json;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public ZoektSearchService(CodeContextProperties props, RepositoryStore repositories, JsonMapper json) {
         this(props, repositories, json, defaultBuilder());
     }
