@@ -33,6 +33,7 @@ public class GraphifyIndexer {
         Path graph=repo.resolve("graphify-out/graph.json");List<String> cmd=List.of(config.graphify().command(),"update",repo.toString(),"--no-cluster");
         Path log=repo.resolve(".graphify-index.log");
         ProcessBuilder builder=new ProcessBuilder(cmd).directory(repo.toFile()).redirectErrorStream(true).redirectOutput(log.toFile());
+        com.wynk.codecontext.security.SubprocessHardening.scrubEnvironment(builder.environment());
         var child=builder.environment();child.clear();child.put("PATH","/opt/graphify/bin:/usr/local/bin:/usr/bin:/bin");child.put("HOME",repo.toString());
         child.put("OLLAMA_HOST",System.getenv().getOrDefault("OLLAMA_BASE_URL","http://ollama:11434"));child.put("OLLAMA_BASE_URL",System.getenv().getOrDefault("OLLAMA_BASE_URL","http://ollama:11434"));child.put("GRAPHIFY_BACKEND","ollama");
         child.put("OLLAMA_MODEL",System.getenv().getOrDefault("GRAPHIFY_OLLAMA_MODEL","qwen3:0.6b"));

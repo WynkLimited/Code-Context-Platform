@@ -118,6 +118,7 @@ public final class KotlinJvmSemanticAnalyzer {
     }
     static void configureEnvironment(Map<String,String> environment) {
         // A compiler JVM must never inherit credentials or JVM injection options from the app.
+        com.wynk.codecontext.security.SubprocessHardening.scrubEnvironment(environment);
         var allowed=new HashMap<String,String>();
         for(String key:List.of("PATH","JAVA_HOME","SystemRoot","TMPDIR","TMP","TEMP"))
             if(environment.containsKey(key))allowed.put(key,environment.get(key));

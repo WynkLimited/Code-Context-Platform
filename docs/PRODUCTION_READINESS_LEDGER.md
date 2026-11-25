@@ -95,7 +95,7 @@ Status vocabulary (this ledger):
 | SEC-AUTH | API keys + dual-key rotation | PARTIALLY_IMPLEMENTED | Dual-key + `/api/admin/security/api-keys` status; multi-replica limiter open |
 | SEC-ACL | Cross-team tool isolation | VERIFIED_PRODUCTION_READY | Shared IT all six tools |
 | SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Loopback/metadata Maven host rejection unit green; HTTP redirect residual needs NetworkPolicy |
-| SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | App isolation only; cgroup/seccomp BLOCKED pending OS |
+| SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | Env scrub + kotlinc allowlist; cgroup/seccomp BLOCKED pending OS |
 | SEC-WH | Webhook replay + timestamp freshness | PARTIALLY_IMPLEMENTED | Delivery-id replay + head_commit age gate @ ab3dcbb CI; durable PG concurrency open |
 
 ### Operations
