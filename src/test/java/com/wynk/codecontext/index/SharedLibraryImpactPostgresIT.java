@@ -114,6 +114,7 @@ class SharedLibraryImpactPostgresIT {
         jdbc.update("DELETE FROM repositories");
         if(Files.exists(ROOT))try(var paths=Files.walk(ROOT)){paths.sorted(java.util.Comparator.reverseOrder()).forEach(path->{try{Files.deleteIfExists(path);}catch(Exception e){throw new IllegalStateException(e);}});}
         Files.createDirectories(ROOT.resolve("git-sources"));
+        Files.createDirectories(ROOT.resolve("maven-repository"));
         System.setProperty("MAVEN_ALLOWED_REPOSITORIES", "integration=" + ROOT.resolve("maven-repository").toUri());
     }
 
