@@ -301,6 +301,43 @@ class SharedLibraryImpactPostgresIT {
         assertTrue(kotlinImpact.path("provenance").asText().contains("KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"));
         assertFalse(impacts.toString().contains("consumer-service-b"));
         assertFalse(impacts.toString().contains("consumer-service-c"));
+        assertTrue(payload.path("intraRepositoryCallerChainsSupported").asBoolean(false), payload.toString());
+        JsonNode callerChains = payload.path("publishedCallerChains");
+        assertEquals("INTRA_REPOSITORY_PUBLISHED_RESOLVED_CALL_GRAPH", callerChains.path("scope").asText());
+        assertFalse(callerChains.path("complete").asBoolean(true));
+        assertFalse(callerChains.path("truncated").asBoolean(true));
+        assertFalse(callerChains.path("depthBoundReached").asBoolean(true));
+        assertEquals(2, callerChains.path("chains").size(), callerChains.toString());
+        JsonNode upstream = callerChains.path("chains").get(1);
+        assertEquals("app.EntryPoint#request(app.ConsumerA, org.acme.Money)", upstream.path("callerSymbol").asText());
+        assertEquals("app.ConsumerA#call(org.acme.Money)", upstream.path("directConsumerSymbol").asText());
+        assertEquals(2, upstream.path("depth").asInt());
+        assertEquals("fixture/consumer-service-a", upstream.path("consumerRepository").asText());
+        assertEquals(consumerACommit, upstream.path("consumerCommit").asText());
+        assertEquals(consumerAGeneration.toString(), upstream.path("generationId").asText());
+        assertEquals("org.acme.Money#convert(java.lang.String)", upstream.path("providerSymbol").asText());
+        assertEquals("org.acme:common-library:1.0", upstream.path("dependencyArtifact").asText());
+        assertEquals("CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN", upstream.path("currentCompatibility").asText());
+        assertEquals("POTENTIAL_UPGRADE_CALLER", upstream.path("classification").asText());
+        assertFalse(upstream.path("confirmedBreakage").asBoolean(true));
+        assertEquals(List.of("app.EntryPoint#request(app.ConsumerA, org.acme.Money)",
+                        "app.EntryPoint#load(app.ConsumerA, org.acme.Money)", "app.ConsumerA#call(org.acme.Money)"),
+                java.util.stream.StreamSupport.stream(upstream.path("symbols").spliterator(), false).map(JsonNode::asText).toList());
+        for (JsonNode edge : upstream.path("callSites")) {
+            assertEquals(consumerAGeneration.toString(), edge.path("generation").asText());
+            assertEquals("src/main/java/app/EntryPoint.java", edge.path("file").asText());
+            assertTrue(edge.path("startLine").asInt() > 0);
+            assertTrue(edge.path("confidence").asDouble() > 0);
+            assertFalse(edge.path("evidence").asText().isBlank());
+        }
+        var callerResolver = new com.wynk.codecontext.port.contract.graph.PublishedCallerChainResolver(jdbc);
+        var rootImpact = json.readValue(javaImpact.toString(),
+                com.wynk.codecontext.port.contract.graph.CrossRepoImpactResolver.SemanticMethodImpact.class);
+        String snapshotKey = "fixture/consumer-service-a@" + consumerACommit;
+        assertTrue(callerResolver.resolve("team-without-access", List.of(rootImpact),
+                Map.of(snapshotKey, consumerAGeneration)).chains().isEmpty(), "caller graph must enforce team ACLs");
+        assertTrue(callerResolver.resolve(TEAM, List.of(rootImpact),
+                Map.of(snapshotKey, UUID.randomUUID())).chains().isEmpty(), "caller graph must enforce the captured generation");
         JsonNode contractCandidates=payload.path("impactCandidates");
         assertTrue(contractCandidates.toString().contains("rest:GET:/orders/{id}"),"HTTP removal must reach the authenticated MCP impact response: "+contractCandidates);
         // Impact candidates serialize RepoRef as nested owner/name (Fixture casing), not lowercase "fixture/..." keys.
@@ -925,6 +962,17 @@ FROM semantic_call_sites WHERE id=?
         files.put("pom.xml", pom("1.0", "<dependencies><dependency><groupId>org.acme</groupId><artifactId>common-library</artifactId><version>"+version+"</version></dependency></dependencies>"));
         files.put("src/main/java/app/"+className+".java", "package app;\nimport org.acme.Money;\npublic class "+className+" {\n  public "+returnType+" call(Money money) {\n    return "+invocation+";\n  }\n"+unresolvedMethod+"}\n");
         if(className.equals("ConsumerA")) {
+            files.put("src/main/java/app/EntryPoint.java", """
+                    package app;
+                    public class EntryPoint {
+                      public String load(ConsumerA consumer, org.acme.Money money) {
+                        return consumer.call(money);
+                      }
+                      public String request(ConsumerA consumer, org.acme.Money money) {
+                        return load(consumer, money);
+                      }
+                    }
+                    """);
             files.put("src/main/java/app/OrderClient.java", "package app;\nclass OrderClient { void load() { webClient.get().uri(\"/orders/{id}\"); } }\n");
             // Kotlin→Java cross-repo caller of the same removed overload; must surface as a separate JVM edge.
             files.put("src/main/kotlin/app/ConsumerAKotlin.kt", "package app\nclass ConsumerAKotlin { fun call(money: org.acme.Money)=money.convert(\"x\") }\n");

@@ -14,7 +14,7 @@ Statuses: `FUNCTIONALLY_EQUIVALENT` · `PLATFORM_IMPLEMENTATION_SUPERIOR` · `PA
 | REST contract extract + compat | RestContractExtractor + rules | Same family + OpenAPI JSON/YAML `$ref` | PARTIALLY_EQUIVALENT | Nested+cross-file `$ref` + MCP @ f905835 | Remote URL `$ref` intentionally rejected |
 | Kafka / Avro / proto | Extractors; many UNKNOWN | fields{} + required-add BREAKING + proto numbers | PARTIALLY_EQUIVALENT | Avro evolution in MCP changes @ f905835 | Consumer-linked Avro impact depth |
 | Direct consumer impact | Routing + call match | Persisted semanticMethodImpacts | FUNCTIONALLY_EQUIVALENT | CI Java+Kotlin | — |
-| Indirect / multi-hop | Producer BFS + Graphify hops | Direct edges; limitation documented | PARTIALLY_EQUIVALENT | Limitations string in MCP | Bounded hop resolver |
+| Indirect / multi-hop | Producer BFS + Graphify hops | Direct edges plus bounded published intra-repository reverse caller chains; cross-repository propagation remains incomplete | PARTIALLY_EQUIVALENT | Resolver unit tests; HTTP MCP assertions pending next CI | Cross-repository method propagation |
 | Version-pinned consumers | Cache/key + coords | Explicit 1.0 impacted / 2.0 excluded | FUNCTIONALLY_EQUIVALENT | Kotlin+Java IT | — |
 | Proposed change / PR diff | ChangeClassifier + base/head | Generation compare + optional oldSignature/newSignature | PARTIALLY_EQUIVALENT | MCP proposedChange @ 19aa954 | Diff/base-commit still open |
 | Evidence / confidence | Rich EvidenceSource + blocking veto | Evidence strings + confidence; non-blocking | INTENTIONALLY_DIFFERENT_WITH_JUSTIFICATION | MCP `blocking:false` | Platform is advisory MCP, not review gate |

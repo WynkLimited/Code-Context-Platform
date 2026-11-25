@@ -196,6 +196,9 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
             persistImpact(r,after,before,"FAILED",failed);
             return failed;
         }
+        var callerChains=new com.wynk.codecontext.port.contract.graph.PublishedCallerChainResolver(jdbc)
+                .resolve(team(),resolution.semanticMethodImpacts(),resolution.impacted().stream().collect(java.util.stream.Collectors.toMap(
+                        candidate->candidate.repo().key()+"@"+candidate.commit(),CrossRepoImpactResolver.Impacted::generationId)));
         // Capture the immutable published consumer generations for this analysis before scheduling
         // refresh jobs. A newly queued refresh must not make the generation being analyzed appear
         // stale midway through the same request.
@@ -214,6 +217,8 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
         result.put("methodLevelAnalysis", methodEvidence.complete() ? "COMPLETE_FOR_SUPPORTED_JAVA_FILES" : "INCOMPLETE");
         result.put("methodLevelAnalysisComplete", methodEvidence.complete());
         result.put("semanticMethodImpacts",resolution.semanticMethodImpacts());
+        result.put("publishedCallerChains",callerChains);
+        result.put("intraRepositoryCallerChainsSupported",true);
         result.put("skippedRepositories",resolution.skipped()); result.put("contractGraph",resolution.graph());
         result.put("unknownCompatibilityPresent",unknown);
         result.put("confirmedConsumerBreakage",false); result.put("consumerBehaviorAnalysis","NOT_RUN");
@@ -238,7 +243,7 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.s
         }
         result.put("completenessScope","Contract generation comparison, team-scoped Maven dependency routing, exact V5 Java semantic method references, and Kotlin compiler JVM call edges where dependency artifacts and provider symbols are available; Kotlin source compatibility stays UNKNOWN; results remain informational.");
         result.put("consumerRefreshScheduled",refreshRequest.scheduled()); result.put("consumerRefreshTruncated",refreshRequest.truncated());
-        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin JVM binary edges from the compiler analyzer are reported when present; Kotlin source compatibility (inline, suspend, defaults, nullability, exact source mappings) remains UNKNOWN and never proves safety.","Full indirect method-chain resolution remains unsupported.","Repositories outside the authenticated team's access scope are not searched.","Proposed-change classification distinguishes potential binary incompatibility from behavioural unknowns; it never claims definite runtime breakage."));
+        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin JVM binary edges from the compiler analyzer are reported when present; Kotlin source compatibility (inline, suspend, defaults, nullability, exact source mappings) remains UNKNOWN and never proves safety.","Published intra-repository caller chains are bounded advisory reachability evidence; arbitrary cross-repository method-chain propagation remains unsupported.","Repositories outside the authenticated team's access scope are not searched.","Proposed-change classification distinguishes potential binary incompatibility from behavioural unknowns; it never claims definite runtime breakage."));
         persistImpact(r,after,before,status,result);
         return result;
     }

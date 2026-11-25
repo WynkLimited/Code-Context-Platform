@@ -1,3 +1,7 @@
+## Current continuation checkpoint — 2026-11-26
+
+Authoritative current status: `docs/PRODUCTION_READINESS_LEDGER.md`. Historical sections below describe earlier checkpoints and permissions. Current user authorization permits scoped validated commit/push to `fix/jackson3-postgres-acceptance` and CI dispatch; no production deployment or merge. `bee5d60` is verified green (237 unit + seven PostgreSQL cases including independent JVM recovery). Bounded published caller-chain implementation and acceptance additions are next awaiting exact-SHA CI; overall remains NO-GO. Continue the unresolved master directive requirements after validation.
+
 # Implementation progress
 
 Updated 2026-11-25 (evening resume). Overall decision: **NO-GO**. This is a resumable implementation checkpoint, not a production certification.
