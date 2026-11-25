@@ -175,6 +175,10 @@ public final class ConsumerContractIndexRefresher {
                 FROM contracts p JOIN contracts c ON p.contract_type=c.contract_type
                 JOIN index_generations pg ON pg.id=p.generation_id JOIN index_generations cg ON cg.id=c.generation_id
                 WHERE p.role='EXPORT' AND c.role='IMPORT' AND pg.repository_id<>cg.repository_id
+                  AND EXISTS(SELECT 1 FROM team_repository_access pa JOIN team_repository_access ca ON ca.team=pa.team
+                             JOIN repositories pr ON pr.id=pa.repository_id AND pr.enabled
+                             JOIN repositories cr ON cr.id=ca.repository_id AND cr.enabled
+                             WHERE pa.repository_id=pg.repository_id AND ca.repository_id=cg.repository_id)
                   AND (p.canonical_key=c.canonical_key OR (p.contract_type='REST'
                     AND split_part(p.canonical_key,':',3)=split_part(c.canonical_key,':',3)
                     AND (split_part(c.canonical_key,':',2)='*' OR split_part(p.canonical_key,':',2)='*' OR split_part(p.canonical_key,':',2)=split_part(c.canonical_key,':',2))))
@@ -189,6 +193,15 @@ public final class ConsumerContractIndexRefresher {
                 DELETE FROM contract_links l
                 WHERE EXISTS (SELECT 1 FROM contracts c JOIN index_generations g ON g.id=c.generation_id WHERE c.id=l.provider_contract AND g.published=false)
                    OR EXISTS (SELECT 1 FROM contracts c JOIN index_generations g ON g.id=c.generation_id WHERE c.id=l.consumer_contract AND g.published=false)
+                   OR NOT EXISTS (
+                     SELECT 1 FROM contracts p JOIN index_generations pg ON pg.id=p.generation_id
+                     JOIN contracts c ON c.id=l.consumer_contract JOIN index_generations cg ON cg.id=c.generation_id
+                     JOIN team_repository_access pa ON pa.repository_id=pg.repository_id
+                     JOIN team_repository_access ca ON ca.repository_id=cg.repository_id AND ca.team=pa.team
+                     JOIN repositories pr ON pr.id=pg.repository_id AND pr.enabled
+                     JOIN repositories cr ON cr.id=cg.repository_id AND cr.enabled
+                     WHERE p.id=l.provider_contract)
+
                 """);
     }
 

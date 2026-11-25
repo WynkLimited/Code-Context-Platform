@@ -25,9 +25,9 @@ public class ProductionConfigurationCheck {
         };
     }
 
-    @Bean FlywayMigrationStrategy databaseRoleGuard(Environment env,JdbcTemplate jdbc) {
+    @Bean FlywayMigrationStrategy databaseRoleGuard(Environment env) {
         return flyway -> {
-            if(java.util.Arrays.asList(env.getActiveProfiles()).contains("production"))requireNonSuperuser(jdbc);
+            if(java.util.Arrays.asList(env.getActiveProfiles()).contains("production"))requireNonSuperuser(new JdbcTemplate(flyway.getConfiguration().getDataSource()));
             flyway.migrate();
         };
     }

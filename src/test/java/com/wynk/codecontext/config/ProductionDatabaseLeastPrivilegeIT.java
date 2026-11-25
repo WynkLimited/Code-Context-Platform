@@ -65,6 +65,7 @@ class ProductionDatabaseLeastPrivilegeIT {
             try (var cleanup = DriverManager.getConnection(url, admin, adminPassword);
                  var statement = cleanup.createStatement()) {
                 statement.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
+                statement.execute("DROP OWNED BY " + role);
                 statement.execute("DROP ROLE IF EXISTS " + role);
             } catch (SQLException cleanupError) {
                 throw new IllegalStateException("Could not clean up temporary runtime-role integration fixture", cleanupError);

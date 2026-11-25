@@ -99,6 +99,21 @@ class GenerationRetentionPostgresIT {
                     takeover.assertOwned();
                 }
             }
+            UUID foreignRepo=jdbc.queryForObject("INSERT INTO repositories(owner,name,clone_url,team,mirror_path) VALUES('foreign','provider','','foreign-team','') RETURNING id",UUID.class);
+            UUID foreignGeneration=generation(jdbc,foreignRepo,1,true);
+            jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES('local-team',?),('foreign-team',?)",repo,foreignRepo);
+            jdbc.update("INSERT INTO contracts(generation_id,contract_type,canonical_key,role,file_path,line,evidence,confidence,content_hash) VALUES(?,'REST','rest:GET:/old','EXPORT','Foreign.java',1,'fixture',1,'hash')",foreignGeneration);
+            var relationships=new ConsumerContractIndexRefresher(jdbc,null,null);
+            try {
+                relationships.refreshGeneration(foreignGeneration);
+                assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM contract_links",Integer.class),"matching identities alone must not establish cross-team relationships");
+                jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES('local-team',?)",foreignRepo);
+                relationships.refreshGeneration(foreignGeneration);
+                assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM contract_links",Integer.class),"explicit shared access permits relationship binding");
+                jdbc.update("DELETE FROM team_repository_access WHERE repository_id=? AND team='local-team'",foreignRepo);
+                relationships.pruneSupersededRelationships();
+                assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM contract_links",Integer.class),"revoked shared access must prune stored relationships");
+            } finally { relationships.shutdown(); }
             // Disable and re-onboard retain the published evidence and the same repository identity.
             jdbc.update("UPDATE repositories SET enabled=false WHERE id=?",repo);
             assertFalse(gc.collect(active,repo));
