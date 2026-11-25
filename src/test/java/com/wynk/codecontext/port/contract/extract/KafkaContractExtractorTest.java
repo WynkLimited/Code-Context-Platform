@@ -1,6 +1,8 @@
 package com.wynk.codecontext.port.contract.extract;
 
 import com.wynk.codecontext.port.contract.RepositoryContext;
+import com.wynk.codecontext.port.contract.compat.CompatibilityModels.Compatibility;
+import com.wynk.codecontext.port.contract.compat.ContractCompatibilityEngine;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -9,6 +11,7 @@ import java.nio.file.Path;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class KafkaContractExtractorTest {
 
@@ -44,6 +47,37 @@ class KafkaContractExtractorTest {
         assertEquals("schemas/campaign.avsc", campaign.metadata().get("schemaFile"));
         assertEquals("fields{id:string:required,tag:string:optional}", campaign.metadata().get("signature"));
         assertEquals("producer", campaign.metadata().get("direction"));
+    }
+
+    @Test
+    void avroSchemaEvolutionDetectsBreakingRequiredFieldAdditionThroughExtractor() throws Exception {
+        Path beforeRoot = Files.createDirectories(root.resolve("before"));
+        Path afterRoot = Files.createDirectories(root.resolve("after"));
+        Files.createDirectories(beforeRoot.resolve("schemas"));
+        Files.createDirectories(beforeRoot.resolve("src/main/resources"));
+        Files.createDirectories(afterRoot.resolve("schemas"));
+        Files.createDirectories(afterRoot.resolve("src/main/resources"));
+        Files.writeString(beforeRoot.resolve("schemas/campaign.avsc"),
+                "{\"type\":\"record\",\"name\":\"Campaign\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}");
+        Files.writeString(afterRoot.resolve("schemas/campaign.avsc"),
+                "{\"type\":\"record\",\"name\":\"Campaign\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"owner\",\"type\":\"string\"}]}");
+        String props = """
+                mp.messaging.outgoing.campaigns.topic=campaign-events
+                mp.messaging.outgoing.campaigns.schema=schemas/campaign.avsc
+                """;
+        Files.writeString(beforeRoot.resolve("src/main/resources/application.properties"), props);
+        Files.writeString(afterRoot.resolve("src/main/resources/application.properties"), props);
+
+        var extractor = new KafkaContractExtractor();
+        var before = extractor.extractExports(new RepositoryContext("o", "r", "a".repeat(40), "main", beforeRoot));
+        var after = extractor.extractExports(new RepositoryContext("o", "r", "b".repeat(40), "main", afterRoot));
+        assertEquals("fields{id:string:required}", before.get(0).metadata().get("signature"));
+        assertEquals("fields{id:string:required,owner:string:required}", after.get(0).metadata().get("signature"));
+
+        var change = new ContractCompatibilityEngine().compare(before, after).get(0);
+        assertEquals(Compatibility.BREAKING, change.compatibility(), change.detail());
+        assertTrue(change.detail().toLowerCase().contains("field") || change.detail().toLowerCase().contains("owner"),
+                change.detail());
     }
 
     @Test

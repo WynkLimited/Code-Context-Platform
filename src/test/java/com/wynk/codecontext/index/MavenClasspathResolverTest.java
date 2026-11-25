@@ -53,6 +53,31 @@ class MavenClasspathResolverTest {
         assertEquals("app.ConsumerA#call(org.acme.Money)",convert.callerClass()+"#"+convert.callerMethod());
     }
 
+    @Test void rejectsHttpsMavenRepositoryThatResolvesToLoopbackOrMetadataAddress() {
+        // RFC1918 targets remain allowed for corporate Maven hosts; NetworkPolicy is the
+        // remaining private-egress control. Loopback and link-local/metadata must still fail.
+        var loopback = new MavenClasspathResolver.RepositorySpec(
+                "loop", "https://artifacts.example/maven/", Set.of("artifacts.example"));
+        var loopFailure = assertThrows(IllegalArgumentException.class,
+                () -> loopback.remote(host -> new java.net.InetAddress[]{
+                        java.net.InetAddress.getByName("127.0.0.1")}));
+        assertTrue(loopFailure.getMessage().toLowerCase().contains("not approved"), loopFailure.getMessage());
+
+        var metadata = new MavenClasspathResolver.RepositorySpec(
+                "meta", "https://artifacts.example/maven/", Set.of("artifacts.example"));
+        var metaFailure = assertThrows(IllegalArgumentException.class,
+                () -> metadata.remote(host -> new java.net.InetAddress[]{
+                        java.net.InetAddress.getByName("169.254.169.254")}));
+        assertTrue(metaFailure.getMessage().toLowerCase().contains("not approved"), metaFailure.getMessage());
+    }
+
+    @Test void rejectsNonHttpsMavenRepositoryUrls() {
+        var http = new MavenClasspathResolver.RepositorySpec(
+                "insecure", "http://repo.example/maven/", Set.of("repo.example"));
+        var failure = assertThrows(IllegalArgumentException.class, http::remote);
+        assertTrue(failure.getMessage().toLowerCase().contains("not approved"), failure.getMessage());
+    }
+
     private static void writeChecksumSidecars(Path artifact) throws Exception {
         byte[] content=Files.readAllBytes(artifact);
         for(String algorithm:List.of("SHA-1","MD5")) {

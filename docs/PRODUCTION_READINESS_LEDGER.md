@@ -23,11 +23,11 @@ Status vocabulary (this ledger):
 
 **Next executable actions (priority):**
 
-1. Persist OpenAPI/Avro evolution + ambiguity demotion through PG/MCP (CONTRACT-1/2/4).
-2. Expand webhook durable PG replay + deeper SSRF redirect adversarial (SEC-WH / SEC-SSRF).
-3. Bounded multi-hop impact (XRI-HOP) with incompleteness flags.
-4. Continue security/reliability slices; record external blockers for OS sandbox, DR drill, cluster smoke.
-5. Dispatch CI after each slice; keep mandatory gates green.
+1. Persist OpenAPI/Avro evolution + ambiguity demotion through PG/MCP fixtures (CONTRACT-1/2/4).
+2. Bounded multi-hop method impact (XRI-HOP) with incompleteness flags.
+3. Webhook durable PG concurrency (SEC-WH).
+4. Reliability crash/heartbeat two-process drills (IDX-1/2) via CI when feasible.
+5. Fill remaining mandatory ops docs; keep CI green; external blockers: OS sandbox, DR, k8s.
 
 ---
 
@@ -92,7 +92,7 @@ Status vocabulary (this ledger):
 |---|---|---|---|
 | SEC-AUTH | API keys + dual-key rotation | PARTIALLY_IMPLEMENTED | Admin key API; multi-replica limiter |
 | SEC-ACL | Cross-team tool isolation | VERIFIED_PRODUCTION_READY | Shared IT all six tools |
-| SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Deeper redirect adversarial |
+| SEC-SSRF | Git/Maven URL guards | PARTIALLY_IMPLEMENTED | Loopback/metadata Maven host rejection unit green; HTTP redirect residual needs NetworkPolicy |
 | SEC-SANDBOX | OS compiler sandbox | PARTIALLY_IMPLEMENTED | App isolation only; cgroup/seccomp BLOCKED pending OS |
 | SEC-WH | Webhook replay + timestamp freshness | PARTIALLY_IMPLEMENTED | Delivery-id replay + head_commit age gate; durable PG concurrency open |
 

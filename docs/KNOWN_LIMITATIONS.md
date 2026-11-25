@@ -1,27 +1,40 @@
 # Known limitations
 
-Honest boundaries of the Code Context Platform as of the production-readiness closure on branch `fix/jackson3-postgres-acceptance`.
+Honest inventory of supported vs incomplete behaviour. Do not treat undocumented gaps as supported.
 
-## Analysis
+## Fully / strongly supported (evidence in CI)
 
-- Kotlin **source** compatibility (inline, suspend, defaults, nullability, exact source↔JVM mapping) remains **UNKNOWN**; JVM binary ABI removals are reported.
-- Full indirect method-chain / multi-hop blast radius is **not** complete; MCP limitations state this explicitly.
-- Gradle dependency graphs are **not** implemented (Maven-first).
-- Dynamic URLs/topics without resolvable configuration stay unresolved/ambiguous with calibrated confidence — never fabricated.
-- `impact_analysis` is **informational** (`blocking:false`); it is not a merge gate.
+- Zoekt text search with generation-aware publication
+- Graphify → PostgreSQL graph (when enabled)
+- Semantic search via local Ollama + pgvector
+- Java↔Java and Kotlin JVM ABI cross-repo method impact for Maven-pinned consumers
+- REST/Kafka topic linking for annotation/config-derived routes
+- Soft disable, hard purge, generation retention fencing
+- MCP six tools over authenticated Streamable HTTP
 
-## Security / execution
+## Partial
 
-- Compiler isolation is application-level (env allowlist, path containment, timeouts, output bounds). OS cgroup/seccomp sandbox is **not** claimed.
-- In-process rate limiting defaults to off (`rate-limit-per-minute:0`); multi-replica shared limiter is not implemented.
+- OpenAPI nested `$ref` flattening (same-document `#/` only; external file `$ref` not resolved)
+- Kafka Avro `fields{}` evolution (unit-level; multi-repo MCP fixture pending)
+- Contract ambiguity demotion (SQL refresher; contention PG proof pending)
+- Proposed-change classification (signatures only; no full PR diff)
+- Indirect impact via re-export hops only; method-chain multi-hop incomplete
+- Webhook freshness when timestamp present; durable PG concurrency open
+- Dual-key API rotation; admin key API incomplete
+- Metrics/alerts YAML present; live scrape unverified
+- Backup scripts present; PITR drill not executed
 
-## Operations
+## Not implemented / blocked
 
-- Backup/restore scripts exist; **PITR and post-restore MCP smoke** require an isolated PostgreSQL environment that has not been drilled in CI.
-- Kubernetes manifests exist; cluster egress/smoke and live Prometheus alert firing are not verified here.
-- Pilot “push searchable within ~1 minute” needs representative repository benchmarks beyond fixture sizes.
+- Gradle dependency resolution
+- OS-level compiler/Maven sandbox (cgroup/seccomp)
+- Representative pilot performance certification
+- Kubernetes cluster smoke / egress enforcement proof
+- Actual Cursor/Claude/Windsurf client certification beyond protocol
 
-## Reference alignment
+## Intentional product differences vs MultiRepo Code Review Agent
 
-- MultiRepo-Code-Review-Agent is an engineering baseline only. No shared module or dependency is permitted.
-- Comparative accuracy against MultiRepo must use independently maintained fixtures and ground truth — not MultiRepo output as oracle.
+- Advisory MCP (`blocking:false`) vs PR review gate
+- Persistent generations vs ephemeral PR indexes
+- Team API-key ACL vs review-product registry
+- No shared module or compile/test/runtime dependency on MultiRepo
