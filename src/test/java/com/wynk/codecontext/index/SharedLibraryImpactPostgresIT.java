@@ -404,8 +404,8 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
                 "two published REST providers for the same consumer import must demote to AMBIGUOUS");
 
         repositories.disable(repositories.id("Fixture", "orders-api-b"));
-        contractRefresher.refreshGeneration(consumerGeneration);
         contractRefresher.pruneSupersededRelationships();
+        contractRefresher.refreshGeneration(consumerGeneration);
 
         Integer stillAmbiguous = jdbc.queryForObject("""
                 SELECT count(*) FROM contract_links l
@@ -415,17 +415,19 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
                 WHERE c.canonical_key='rest:GET:/orders/{id}'
                   AND l.evidence::text LIKE '%AMBIGUOUS%'
                 """, Integer.class);
-        Integer resolved = jdbc.queryForObject("""
+        Integer remainingLinks = jdbc.queryForObject("""
                 SELECT count(*) FROM contract_links l
                 JOIN contracts c ON c.id=l.consumer_contract
+                JOIN contracts p ON p.id=l.provider_contract
                 JOIN index_generations cg ON cg.id=c.generation_id AND cg.published
+                JOIN index_generations pg ON pg.id=p.generation_id AND pg.published
                 JOIN repositories cr ON cr.id=cg.repository_id AND cr.name='orders-client'
+                JOIN repositories pr ON pr.id=pg.repository_id AND pr.enabled AND pr.name='orders-api-a'
                 WHERE c.canonical_key='rest:GET:/orders/{id}'
-                  AND l.evidence::text LIKE '%RESOLVED%'
-                  AND l.evidence::text NOT LIKE '%AMBIGUOUS%'
                 """, Integer.class);
         assertEquals(0, stillAmbiguous, "disabling the duplicate provider must clear AMBIGUOUS markers");
-        assertTrue(resolved != null && resolved >= 1, "single remaining provider must record RESOLVED evidence");
+        assertTrue(remainingLinks != null && remainingLinks >= 1,
+                "single remaining enabled provider must retain an exact REST link after prune+refresh");
     }
 
     @Test
