@@ -50,6 +50,27 @@ class RateLimitGateTest {
         }
     }
 
+    @Test void sharedStoreFailureRejectsWithoutLeakingDetails() throws Exception {
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate() {
+            @Override public <T> T queryForObject(String sql, org.springframework.jdbc.core.RowMapper<T> mapper, Object... args) {
+                throw new org.springframework.dao.DataAccessResourceFailureException("sensitive JDBC credentials");
+            }
+        };
+        var filter = new RateLimitFilter(RateLimitGate.postgres(1, jdbc));
+        var response = new MockHttpServletResponse();
+        filter.doFilter(new MockHttpServletRequest("GET", "/mcp"), response, (req, res) -> fail("storage failure must not bypass the budget"));
+        assertEquals(503, response.getStatus());
+        assertEquals("1", response.getHeader("Retry-After"));
+        assertEquals("request budget temporarily unavailable", response.getContentAsString());
+    }
+
+    @Test void backendConfigurationRejectsTyposAndDisabledSharedStoreNeedsNoDatabase() {
+        var config = new SecurityConfig();
+        assertThrows(IllegalArgumentException.class, () -> config.rateLimitGate(1, "postgre", null));
+        assertFalse(config.rateLimitGate(0, "postgres", null).enabled());
+        assertTrue(config.rateLimitGate(1, "memory", null).enabled());
+    }
+
     @Test void filterSkipsWebhooksEvenWhenEnabled() throws Exception {
         var gate = RateLimitGate.perMinute(1);
         var filter = new RateLimitFilter(gate);

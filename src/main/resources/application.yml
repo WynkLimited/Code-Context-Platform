@@ -41,8 +41,9 @@ code-context:
   # Dual-key rotation: team=current|previous accepts either key during overlap; drop previous to revoke.
   api-keys: ${TEAM_API_KEYS:local-dev=local-dev-token}
   admin-api-keys: ${ADMIN_API_KEYS:local-dev=local-dev-token}
-  # 0 disables the in-process limiter; set >0 (e.g. 120) to enforce per-principal per-minute budgets.
+  # 0 disables limiting; positive budgets use PostgreSQL across replicas by default.
   rate-limit-per-minute: ${RATE_LIMIT_PER_MINUTE:0}
+  rate-limit-store: ${RATE_LIMIT_STORE:postgres}
   webhook-secret: ${WEBHOOK_SECRET:local-webhook-secret-change-me}
   git-access-token: ${GIT_ACCESS_TOKEN:}
   git-allowed-hosts: ${GIT_ALLOWED_HOSTS:github.com}

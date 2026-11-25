@@ -17,8 +17,14 @@ import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 public class SecurityConfig {
     @Bean ApiKeyFilter apiKeyFilter(CodeContextProperties p) { return new ApiKeyFilter(p); }
     @Bean McpOriginFilter mcpOriginFilter(CodeContextProperties p){return new McpOriginFilter(p);}
-    @Bean RateLimitGate rateLimitGate(@Value("${code-context.rate-limit-per-minute:0}") int limitPerMinute) {
-        return RateLimitGate.perMinute(limitPerMinute);
+    @Bean RateLimitGate rateLimitGate(@Value("${code-context.rate-limit-per-minute:0}") int limitPerMinute,
+                                      @Value("${code-context.rate-limit-store:postgres}") String store,
+                                      org.springframework.jdbc.core.JdbcTemplate jdbc) {
+        return switch (store) {
+            case "postgres" -> RateLimitGate.postgres(limitPerMinute, jdbc);
+            case "memory" -> RateLimitGate.perMinute(limitPerMinute);
+            default -> throw new IllegalArgumentException("rate-limit-store must be postgres or memory");
+        };
     }
     @Bean RateLimitFilter rateLimitFilter(RateLimitGate gate) { return new RateLimitFilter(gate); }
     @Bean FilterRegistrationBean<ApiKeyFilter> apiKeyFilterServletRegistration(ApiKeyFilter filter) {

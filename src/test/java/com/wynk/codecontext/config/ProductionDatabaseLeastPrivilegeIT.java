@@ -46,7 +46,7 @@ class ProductionDatabaseLeastPrivilegeIT {
                     .placeholders(Map.of("vectorDimensions", "1024"))
                     .load();
             var result = flyway.migrate();
-            assertEquals(10, result.migrationsExecuted, "runtime role must execute V1-V10");
+            assertEquals(11, result.migrationsExecuted, "runtime role must execute V1-V11");
 
             try (var runtimeConnection = DriverManager.getConnection(url, role, password);
                  var runtimeStatement = runtimeConnection.createStatement()) {
@@ -58,9 +58,10 @@ class ProductionDatabaseLeastPrivilegeIT {
                 }
                 try (var history = runtimeStatement.executeQuery("SELECT count(*) FROM " + schema + ".flyway_schema_history WHERE success")) {
                     assertTrue(history.next());
-                    assertEquals(10, history.getInt(1));
+                    assertEquals(11, history.getInt(1));
                 }
             }
+            assertSharedBudget(url, role, password, schema);
         } finally {
             try (var cleanup = DriverManager.getConnection(url, admin, adminPassword);
                  var statement = cleanup.createStatement()) {
@@ -72,4 +73,33 @@ class ProductionDatabaseLeastPrivilegeIT {
             }
         }
     }
+    private void assertSharedBudget(String url, String role, String password, String schema) throws Exception {
+        String scopedUrl = url + (url.contains("?") ? "&" : "?") + "currentSchema=" + schema + ",public";
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(
+                new org.springframework.jdbc.datasource.DriverManagerDataSource(scopedUrl, role, password));
+        var first = com.wynk.codecontext.security.RateLimitGate.postgres(12, jdbc);
+        var second = com.wynk.codecontext.security.RateLimitGate.postgres(12,
+                new org.springframework.jdbc.core.JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(scopedUrl, role, password)));
+        // Keep this contention fixture away from the wall-clock minute boundary without sleeping or mocking PostgreSQL.
+        jdbc.update("INSERT INTO api_rate_limit_windows(team,window_start,used) VALUES ('orders', date_trunc('minute', statement_timestamp()) + interval '1 minute', 1)");
+        try (var workers = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var calls = new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for (int i = 0; i < 32; i++) {
+                var gate = i % 2 == 0 ? first : second;
+                calls.add(workers.submit(() -> gate.check("orders").allowed()));
+            }
+            int allowed = 0;
+            for (var call : calls) if (call.get(15, java.util.concurrent.TimeUnit.SECONDS)) allowed++;
+            assertEquals(11, allowed, "two independent gate instances must share the remaining eleven requests atomically");
+        }
+        assertEquals(13L, jdbc.queryForObject("SELECT used FROM api_rate_limit_windows WHERE team='orders'", Long.class));
+        assertTrue(second.check("payments").allowed(), "teams have independent budgets");
+        assertFalse(com.wynk.codecontext.security.RateLimitGate.postgres(12, jdbc).check("orders").allowed(), "restart must retain the exhausted window");
+        jdbc.update("UPDATE api_rate_limit_windows SET window_start = statement_timestamp() - interval '2 minutes' WHERE team='orders'");
+        var reset = first.check("orders");
+        assertTrue(reset.allowed());
+        assertEquals(11, reset.remaining());
+        assertEquals(2, jdbc.queryForObject("SELECT count(*) FROM api_rate_limit_windows", Integer.class), "one row per team, not per request/window");
+    }
+
 }

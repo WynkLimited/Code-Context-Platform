@@ -39,7 +39,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String bucket = authentication == null || authentication.getPrincipal() == null
                 ? "anonymous"
                 : String.valueOf(authentication.getPrincipal());
-        RateLimitGate.Decision decision = gate.check(bucket);
+        RateLimitGate.Decision decision;
+        try { decision = gate.check(bucket); }
+        catch (RateLimitGate.UnavailableException failure) {
+            logger.warn("Rate-limit storage unavailable; authenticated request rejected");
+            response.setStatus(503);
+            response.setHeader("Retry-After", "1");
+            response.setContentType("text/plain");
+            response.getWriter().write("request budget temporarily unavailable");
+            return;
+        }
         if (!decision.allowed()) {
             response.setStatus(429);
             response.setHeader("Retry-After", Long.toString(Math.max(1L, (decision.retryAfterMillis() + 999) / 1000)));
