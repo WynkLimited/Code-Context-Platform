@@ -43,9 +43,10 @@ public class RepositoryController {
         Path mirror=Path.of(props.repositoryRoot()).toAbsolutePath().normalize().resolve(request.owner()).resolve(request.name());
         return transactions.execute(status->{
             // Serialize duplicate registrations before testing configuration, including across replicas.
-            jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(?,0))",Object.class,request.owner()+"/"+request.name());
+            jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(lower(?),0))",Object.class,request.owner()+"/"+request.name());
             lifecycle.requireMirrorAvailable(mirror,null);
             var previous=store.findAny(request.owner(),request.name());
+            lifecycle.requireIdentityAvailable(request.owner(),request.name(),previous.map(RepositoryRecord::id).orElse(null));
             previous.ifPresent(repository->lifecycle.requireSettled(repository.id()));
             boolean reactivated=previous.isPresent()&&store.find(request.owner(),request.name()).isEmpty();
             store.find(request.owner(),request.name()).ifPresent(existing->{

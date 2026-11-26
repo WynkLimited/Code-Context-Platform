@@ -61,10 +61,9 @@ public final class RepositoryLifecycle {
             if(current.repository().equals(target))return status(id,team);
             if(current.revision()!=before.revision())throw conflict("repository configuration changed during validation");
             if(!current.desiredEnabled())throw conflict("repository is offboarded; explicitly re-onboard before updating it");
-            jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(?,0))",Object.class,owner+"/"+name);
+            jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(lower(?),0))",Object.class,owner+"/"+name);
             requireMirrorAvailable(mirror,id);
-            if(!jdbc.queryForList("SELECT id FROM repositories WHERE owner=? AND name=? AND id<>?",owner,name,id).isEmpty())
-                throw conflict("target repository identity is already registered");
+            requireIdentityAvailable(owner,name,id);
             long revision=current.revision()+1;
             queuePreparation(old,target,revision);
             // Disabled visibility is committed before any destructive cleanup. In-flight old workers
@@ -123,8 +122,12 @@ public final class RepositoryLifecycle {
         });
     }
     public void requireMirrorAvailable(Path path,UUID except) {
-        Integer pending=jdbc.queryForObject("SELECT count(*) FROM repository_lifecycle_work WHERE state<>'DONE' AND previous_repository->>'mirrorPath'=? AND (?::uuid IS NULL OR repository_id<>?)",Integer.class,path.toString(),except,except);
+        Integer pending=jdbc.queryForObject("SELECT count(*) FROM repository_lifecycle_work WHERE state<>'DONE' AND lower(previous_repository->>'mirrorPath')=lower(?) AND (?::uuid IS NULL OR repository_id<>?)",Integer.class,path.toString(),except,except);
         if(pending!=null&&pending>0)throw conflict("repository path cleanup is pending; retry after lifecycle recovery");
+    }
+    public void requireIdentityAvailable(String owner,String name,UUID except) {
+        Integer claimed=jdbc.queryForObject("SELECT count(*) FROM repositories WHERE lower(owner)=lower(?) AND lower(name)=lower(?) AND (?::uuid IS NULL OR id<>?)",Integer.class,owner,name,except,except);
+        if(claimed!=null&&claimed>0)throw conflict("target repository identity is already registered, including case aliases");
     }
     @Scheduled(fixedDelayString="${LIFECYCLE_POLL_MS:3000}") public void poll() {
         if(!busy.compareAndSet(false,true))return;
@@ -235,7 +238,7 @@ public final class RepositoryLifecycle {
         var old=work.previous();Path expected=root().resolve(old.owner()).resolve(old.name());
         if(!expected.equals(Path.of(old.mirrorPath()).toAbsolutePath().normalize()))throw new IllegalStateException("legacy mirror path needs explicit operator reconciliation");
         requireMirrorAvailable(expected,work.repository());
-        Integer claimed=jdbc.queryForObject("SELECT count(*) FROM repositories WHERE mirror_path=? AND id<>?",Integer.class,expected.toString(),work.repository());
+        Integer claimed=jdbc.queryForObject("SELECT count(*) FROM repositories WHERE lower(mirror_path)=lower(?) AND id<>?",Integer.class,expected.toString(),work.repository());
         if(claimed!=null&&claimed>0)throw new IllegalStateException("old mirror path is owned by another repository");
         git.deleteMirrorIfOriginMatches(old);
     }

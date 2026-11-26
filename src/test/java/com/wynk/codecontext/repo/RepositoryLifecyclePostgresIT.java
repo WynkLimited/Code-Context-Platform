@@ -46,6 +46,9 @@ class RepositoryLifecyclePostgresIT {
             try(var repository=Git.open(relocated.toFile())){repository.branchCreate().setName("pilot").call();}
             String oldMirror=temp.resolve("mirrors/acme/original").toString();
             var first=repositories.insert("acme","original",original.toUri().toString(),"team","main","SERVICE",oldMirror);
+            var identityService=lifecycle;
+            assertThrows(org.springframework.web.server.ResponseStatusException.class,()->identityService.requireIdentityAvailable("ACME","ORIGINAL",null));
+            assertDoesNotThrow(()->identityService.requireIdentityAvailable("ACME","ORIGINAL",first.id()));
             jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES('team',?)",first.id());
             git.sync(first);String before=git.head(Path.of(oldMirror));
             UUID generation=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published) VALUES(?,?,1,true) RETURNING id",UUID.class,first.id(),before);
@@ -62,6 +65,7 @@ class RepositoryLifecyclePostgresIT {
                 assertTrue(lifecycle.processOne());
                 assertTrue(Files.exists(Path.of(oldMirror)),"a valid old repository lease must defer physical cleanup");
                 assertEquals("QUEUED",jdbc.queryForObject("SELECT state FROM repository_lifecycle_work",String.class));
+                assertThrows(org.springframework.web.server.ResponseStatusException.class,()->identityService.requireMirrorAvailable(Path.of(oldMirror.toUpperCase(java.util.Locale.ROOT)),null),"case aliases must not reclaim an old mirror while cleanup is pending");
             }finally{held.close();}
             jdbc.update("UPDATE repository_lifecycle_work SET available_at=now()-interval '1 second'");
             assertTrue(lifecycle.processOne());

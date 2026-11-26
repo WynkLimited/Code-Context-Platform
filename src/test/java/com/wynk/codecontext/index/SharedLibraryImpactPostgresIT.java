@@ -526,6 +526,10 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
             git.checkout().setName("main").call();
         }
         automaticallyOnboardAndAwait("lifecycle-original",original);
+        var alias=HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories"))
+                .header("X-API-Key","integration-admin-token").header("Content-Type","application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("owner","fixture","name","lifecycle-original","cloneUrl",original.toUri().toString(),"defaultBranch","main","type","SERVICE")))).build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(409,alias.statusCode(),"case aliases must not create duplicate provider identities or overlapping mirror paths");
         UUID id=repositories.id("Fixture","lifecycle-original");
         UUID before=repositories.currentGeneration(id).orElseThrow();
         var oldClient=new LifecycleMcp(API_KEY);var newClient=new LifecycleMcp("isolated-integration-token");
