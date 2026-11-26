@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `10d546042bcd570f45d5ce284c8ae1c5443c91cd` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45768140338 |
+| Last green mandatory CI SHA | `c5894be30502629cc68ac41f7f2f8bb854c3e44c` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45770009550 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -391,3 +391,16 @@ Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/4576762959
 ### Correct indexing failure diagnostic category — 2026-11-26
 
 Actual fixture teardown logs exposed a plain InterruptedException labeled as a database failure. A focused regression reproduced this because the SQL formatter returned class names for every exception chain. It now returns SQL diagnostics only when the chain contains SQLException; other indexing failures log a generic event with the exception class and existing job MDC, without raw non-SQL messages. Actual PostgreSQL SQLSTATE, server message, schema/table/column/constraint, next exceptions and cycle termination remain covered by three new driver-backed formatter tests. Complete local Java21 suite **306 passed**, zero failures/errors/skips (49.150s); `git diff --check` passed. Service CI for this logging-only change remains pending publication. No retry, publication, security, migration or acceptance criteria changed.
+
+
+### Master directive Phase 1 — complete-input token budgeting (2026-11-26)
+
+Checkpoint c5894be and remote branch verified identical with a clean starting tree. CI 45770009550 succeeded; downloaded `target/ci-c5894be-reports` contains 72 Surefire XML reports, **316 passed, zero failures/errors/skips** (306 default tests, nine PostgreSQL cases, one HTTPS case). This preserves the accepted six-tool MCP, real-service semantic retrieval, publication and separate-JVM recovery baseline.
+
+**Requirement SEM-TOKEN — IMPLEMENTED_UNVERIFIED pending exact-commit service acceptance.** Every structural, document and fallback chunk now passes a complete-input budget after existing character/section/line limits. Estimate is one token per UTF-8 byte plus 32 reserved special tokens; the exact repo/file/class/symbol header consumes the same budget. Cap is min(1500, effective embedding context). This deliberately conservative byte estimate is not an actual model tokenizer count. Oversized metadata fails explicitly; provider truncation remains disabled. Prefer blank lines, then physical line ends; long lines split at code-point boundaries. Carry at most ten whole lines and at most one quarter of the source budget, always advancing. Short inputs retain their original bytes. Generator epoch 1.14.0 forces safe regeneration rather than copying old oversized chunks.
+
+Accepted fixed fallback/config window counts necessarily change when an old window exceeds the new full-input token bound. The existing 121-line and large-config fixtures remain unchanged. Acceptance now checks every fallback line against its exact source slice, all 121 lines covered, maximum sixty-line ranges, section containment, exact configuration reconstruction and full persisted UTF-8 input bounds. Small Markdown and inline Java source assertions remain exact and unchanged. Existing impact, security, provenance, reuse and rollback assertions remain intact. Real Ollama/PostgreSQL/MCP verification will run in the mandatory workflow; helper tests alone do not close the feature.
+
+Phase 1 tiny merging and structural-language coverage remain PARTIALLY_IMPLEMENTED / NOT_IMPLEMENTED as previously inventoried; automated onboarding, reactor/Gradle, general cross-repository chains and later acceptance phases remain open. Overall **NOT READY FOR PRODUCTION**. No migration or reference-repository change.
+
+Local Java 21 full suite: **311 passed, zero failures/errors/skips**, 72s (`/tmp/ccp-token-full.log`). Added final long-configuration reconstruction regression then ran the focused input-budget suite: **six passed**, zero failures/errors/skips (`/tmp/ccp-token-final.log`); all acceptance source compiles. `git diff --check` passed. PostgreSQL/Ollama execution is not claimed locally (no running Docker daemon).

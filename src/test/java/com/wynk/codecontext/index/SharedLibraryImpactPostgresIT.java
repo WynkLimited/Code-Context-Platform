@@ -217,12 +217,35 @@ class SharedLibraryImpactPostgresIT {
         assertEquals("public String convert(String value) { return value; }",
                 sourceChunks.getFirst().get("content").toString().split("\n---\n",2)[1]);
         var fallbackWindows=jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='docs/fallback-notes.txt' ORDER BY start_line",String.class,providerV1Generation);
-        assertEquals(List.of("1:60","51:110","101:121"),fallbackWindows,
-                "plain text must persist exact 60-line windows with ten-line overlap");
+        assertTrue(fallbackWindows.size()>3,"token-heavy fallback windows must be subdivided without dropping lines");
+        var fallbackChunks=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='docs/fallback-notes.txt' ORDER BY id",providerV1Generation);
+        String[] fallbackSource=libraryFiles("1.0","").get("docs/fallback-notes.txt").split("\n");
+        var coveredFallbackLines=new java.util.HashSet<Integer>();
+        for(var chunk:fallbackChunks) {
+            int start=((Number)chunk.get("start_line")).intValue(),end=((Number)chunk.get("end_line")).intValue();
+            assertTrue(end-start<60,"fallback chunks must retain the maximum sixty-line bound");
+            assertEquals(String.join("\n",java.util.Arrays.copyOfRange(fallbackSource,start-1,end)),
+                    chunk.get("content").toString().split("\n---\n",2)[1].stripTrailing(),"persisted fallback content must match its exact source lines");
+            java.util.stream.IntStream.rangeClosed(start,end).forEach(coveredFallbackLines::add);
+        }
+        assertEquals(java.util.stream.IntStream.rangeClosed(1,121).boxed().collect(java.util.stream.Collectors.toSet()),coveredFallbackLines,
+                "all 121 fallback source lines must remain searchable after token subdivision");
         assertEquals(List.of("1:3","4:5"),jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='docs/guide.md' ORDER BY start_line",String.class,providerV1Generation),
                 "Markdown sections must persist the actual heading boundaries");
-        assertEquals(List.of("1:2","3:4"),jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='config/runtime.yaml' ORDER BY start_line",String.class,providerV1Generation),
-                "large configuration must persist separate top-level sections");
+        var configurationChunks=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='config/runtime.yaml' ORDER BY id",providerV1Generation);
+        assertTrue(configurationChunks.size()>2,"large configuration values must be split to fit the embedding token budget");
+        for(var chunk:configurationChunks) {
+            int start=((Number)chunk.get("start_line")).intValue(),end=((Number)chunk.get("end_line")).intValue();
+            assertTrue((start>=1&&end<=2)||(start>=3&&end<=4),"configuration chunks must remain inside their top-level section: "+chunk);
+        }
+        String configurationSource=java.util.stream.Stream.of(1,3).map(section->configurationChunks.stream()
+                .filter(c->((Number)c.get("start_line")).intValue()>=section&&((Number)c.get("end_line")).intValue()<=section+1)
+                .map(c->c.get("content").toString().split("\n---\n",2)[1]).collect(java.util.stream.Collectors.joining()))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        assertEquals(libraryFiles("1.0","").get("config/runtime.yaml").stripTrailing(),configurationSource.stripTrailing(),
+                "splitting long configuration values must preserve all source characters in section order");
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND octet_length(content)+32>1500",Integer.class,providerV1Generation),
+                "all actual Ollama embedding inputs, including headers and reserved tokens, must fit the conservative token budget");
         assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
                 "Zoekt must expose the indexed provider v1 generation before replacement");
 

@@ -247,8 +247,11 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
                     ?DocumentChunks.split(file.path(),symbol.text,symbol.textStart,props.maxChunkChars()).stream()
                             .map(piece->new Chunk(piece.text(),piece.firstLine(),piece.lastLine())).toList()
                     :split(symbol.text,symbol.textStart,props.maxChunkChars());
+            String header="repo: "+repo.key()+" | file: "+file.path()+"\n"+(symbol.owner==null?"":"class: "+symbol.owner+"\n")+symbol.type.toLowerCase()+": "+symbol.qualified+"\n---\n";
+            chunks=chunks.stream().flatMap(part->EmbeddingInputChunks.split(part.text,part.start,header,space.contextTokens()).stream())
+                    .map(part->new Chunk(part.text(),part.firstLine(),part.lastLine())).toList();
             for(Chunk part:chunks) {
-                String chunk="repo: "+repo.key()+" | file: "+file.path()+"\n"+(symbol.owner==null?"":"class: "+symbol.owner+"\n")+symbol.type.toLowerCase()+": "+symbol.qualified+"\n---\n"+part.text;
+                String chunk=header+part.text;
                 String hash=sha256(chunk);
                 if(previous!=null&&jdbc.update("""
 INSERT INTO code_chunks(generation_id,file_path,symbol,start_line,end_line,content_hash,embedding,content)
