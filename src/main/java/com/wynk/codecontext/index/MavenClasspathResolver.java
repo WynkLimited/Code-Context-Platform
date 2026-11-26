@@ -51,6 +51,7 @@ public final class MavenClasspathResolver {
     public static final String VERSION = "maven-resolver-1.9.26-policy-3";
     private static final int MAX_POMS = 256;
     private static final int MAX_ARTIFACTS = 1000;
+    private static final long MAX_ARTIFACT_BYTES = 512L*1024*1024;
     private final RepositorySystem system;
 
     public MavenClasspathResolver() { this(newRepositorySystem()); }
@@ -115,7 +116,7 @@ public final class MavenClasspathResolver {
                         .filter(p->Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) && !PathContainment.isSymlink(p))
                         .distinct().toList();
                 if(jars.size()>MAX_ARTIFACTS) return Result.incomplete(commit,"ARTIFACT_LIMIT_EXCEEDED",modules);
-                for(Path jar:jars) if(Files.size(jar)>512L*1024*1024) return Result.incomplete(commit,"ARTIFACT_SIZE_LIMIT_EXCEEDED",modules);
+                for(Path jar:jars) if(Files.size(jar)>MAX_ARTIFACT_BYTES) return Result.incomplete(commit,"ARTIFACT_SIZE_LIMIT_EXCEEDED",modules);
                 var artifactRows=new LinkedHashMap<String,ResolvedDependency>();
                 collectDependencies(resolved.getRoot(),0,artifactRows);
                 modules.add(new ModuleClasspath(module,model.getGroupId(),model.getArtifactId(),model.getVersion(),model.getPackaging(),List.copyOf(jars),fingerprint(jars),"RESOLVED",null,List.copyOf(artifactRows.values())));
@@ -183,13 +184,27 @@ public final class MavenClasspathResolver {
         for(var child:node.getChildren()) {
             var artifact=child.getArtifact();
             if(artifact!=null&&artifact.getFile()!=null) {
-                Path file=artifact.getFile().toPath();String checksum=java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file)));
+                Path file=artifact.getFile().toPath();String checksum=artifactChecksum(file);
                 String scope=child.getDependency()==null?"compile":child.getDependency().getScope();boolean optional=child.getDependency()!=null&&child.getDependency().isOptional();
                 var row=new ResolvedDependency(artifact.getGroupId(),artifact.getArtifactId(),artifact.getVersion(),artifact.getClassifier()==null?"":artifact.getClassifier(),scope,depth>0,optional,file,checksum);
                 out.putIfAbsent(row.groupId()+":"+row.artifactId()+":"+row.version()+":"+row.classifier()+":"+scope,row);
             }
             collectDependencies(child,depth+1,out);
         }
+    }
+    static String artifactChecksum(Path file) throws Exception {
+        if(Files.size(file)>MAX_ARTIFACT_BYTES)throw new IOException("Artifact size limit exceeded");
+        var digest=MessageDigest.getInstance("SHA-256");
+        byte[] buffer=new byte[64*1024];long total=0;
+        try(var input=Files.newInputStream(file,LinkOption.NOFOLLOW_LINKS)) {
+            int count;
+            while((count=input.read(buffer))!=-1) {
+                total+=count;
+                if(total>MAX_ARTIFACT_BYTES)throw new IOException("Artifact size limit exceeded");
+                digest.update(buffer,0,count);
+            }
+        }
+        return java.util.HexFormat.of().formatHex(digest.digest());
     }
     public record RepositorySpec(String id,String url,Set<String> approvedHosts) {
         RemoteRepository remote(){
