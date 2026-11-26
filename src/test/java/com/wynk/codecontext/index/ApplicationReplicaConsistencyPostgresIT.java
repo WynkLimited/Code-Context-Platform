@@ -27,6 +27,54 @@ class ApplicationReplicaConsistencyPostgresIT {
     private static final JsonMapper JSON=JsonMapper.builder().build();
     private static final String REPOSITORY="fixture/replica-application";
     private static final String SOURCE="src/main/java/sample/Version.java";
+    @Test void anotherCompleteApplicationRecoversTheActualJobAfterPublisherProcessDeath() throws Exception {
+        try(var fixture=new Fixture(temporary.toRealPath())) {
+            fixture.initialize();
+            Path source=Files.createDirectories(fixture.root.resolve("sources/provider"));
+            String before;
+            try(Git git=Git.init().setDirectory(source.toFile()).setInitialBranch("main").call()) {
+                writeVersion(source,"replicaRevisionOneMarker");before=commit(git,"crash baseline");
+            }
+            var leader=fixture.start("leader",true);
+            var repository=new RepositoryStore(fixture.jdbc).insert("fixture","replica-application",source.toUri().toString(),"replica","main","LIBRARY",fixture.root.resolve("mirrors/fixture/replica-application").toString());
+            fixture.repository=repository.id();
+            fixture.jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES('replica',?)",repository.id());
+            fixture.awaitJob(fixture.enqueue(before));
+            UUID baseline=fixture.jdbc.queryForObject("SELECT id FROM index_generations WHERE repository_id=? AND published",UUID.class,repository.id());
+            Files.createFile(leader.directory().resolve("pause"));
+            String after;
+            try(Git git=Git.open(source.toFile())) {writeVersion(source,"replicaRevisionTwoMarker");after=commit(git,"crashed replacement");}
+            UUID job=fixture.enqueue(after);
+            await(()->Files.exists(leader.directory().resolve("paused")),60,"publisher did not reach its real post-index latch");
+            UUID abandoned=UUID.fromString(Files.readString(leader.directory().resolve("paused")));
+            assertTrue(fixture.jdbc.queryForObject("SELECT lease_expires_at>now() AND lease_expires_at<now()+interval '4 seconds' FROM repository_index_leases WHERE repository_id=?",Boolean.class,repository.id()),"crash fixture must use its isolated short lease, not change production timings");
+            var follower=fixture.start("follower",true);
+            assertNotEquals(leader.process().pid(),follower.process().pid());
+            var client=Session.connect(follower.port());client.read(before,"replicaRevisionOneMarker");
+            await(()->fixture.zoektContains(abandoned,"replicaRevisionTwoMarker"),20,"abandoned candidate must really have a Zoekt shard");
+            client.search(before,"replicaRevisionOneMarker",true);client.search(before,"replicaRevisionTwoMarker",false);
+            leader.process().destroyForcibly();assertTrue(leader.process().waitFor(5,TimeUnit.SECONDS));
+            assertNotEquals(0,leader.process().exitValue());assertTrue(follower.process().isAlive());
+            assertEquals(baseline,fixture.jdbc.queryForObject("SELECT id FROM index_generations WHERE repository_id=? AND published",UUID.class,repository.id()));
+            // Advance only the dead worker's heartbeat age; production polling performs every state transition.
+            assertEquals(1,fixture.jdbc.update("UPDATE index_jobs SET updated_at=now()-interval '11 minutes' WHERE id=? AND state='RUNNING'",job));
+            fixture.awaitJob(job);
+            var recovered=fixture.jdbc.queryForMap("SELECT generation_id,attempt,commit_sha FROM index_jobs WHERE id=?",job);
+            UUID generation=(UUID)recovered.get("generation_id");
+            assertNotNull(generation);assertNotEquals(abandoned,generation);assertNotEquals(baseline,generation);
+            assertEquals(2,((Number)recovered.get("attempt")).intValue());assertEquals(after,recovered.get("commit_sha"));
+            assertEquals(generation,fixture.jdbc.queryForObject("SELECT id FROM index_generations WHERE repository_id=? AND published",UUID.class,repository.id()));
+            assertFalse(fixture.jdbc.queryForObject("SELECT published FROM index_generations WHERE id=?",Boolean.class,abandoned));
+            assertEquals(3,fixture.jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=?",Integer.class,repository.id()));
+            client.read(after,"replicaRevisionTwoMarker");client.search(after,"replicaRevisionTwoMarker",true);
+            var impact=client.tool("impact_analysis",Map.of("contract","","repository",REPOSITORY));
+            assertEquals("INCOMPLETE",impact.path("status").asText(),"unchanged contracts must retain the no-safety-verdict response");
+            assertEquals(before,impact.path("beforeCommit").asText(),"crashed same-SHA candidate must never become the successful baseline");
+            assertEquals(after,impact.path("afterCommit").asText());
+            assertEquals(baseline.toString(),impact.path("beforeGeneration").asText());
+            assertEquals(generation.toString(),impact.path("afterGeneration").asText());
+        }
+    }
     @Test void bothApplicationsReadOnlyPublishedGenerationsWhileAContenderWaits() throws Exception {
         try(var fixture=new Fixture(temporary.toRealPath())) {
             fixture.initialize();
@@ -107,12 +155,15 @@ class ApplicationReplicaConsistencyPostgresIT {
             schemaCreated=true;
         }
         Replica start(String name) throws Exception {
+            return start(name,false);
+        }
+        Replica start(String name,boolean crashTimings) throws Exception {
             Path directory=Files.createDirectory(root.resolve(name));directories.add(directory);
             var command=new ProcessBuilder(Path.of(System.getProperty("java.home"),"bin","java").toString(),"-Xmx512m","-cp",
                     System.getProperty("surefire.test.class.path",System.getProperty("java.class.path")),ReplicaApplicationProcess.class.getName(),directory.toString());
             var env=command.environment();env.clear();
             env.putAll(Map.of("PATH",System.getenv().getOrDefault("PATH","/usr/bin:/bin"),"JAVA_HOME",System.getProperty("java.home"),
-                    "SPRING_PROFILES_ACTIVE","test,replica-consistency-fixture","SERVER_PORT","0","SERVER_ADDRESS","127.0.0.1",
+                    "SPRING_PROFILES_ACTIVE","test,replica-consistency-fixture"+(crashTimings?",replica-crash-fixture":""),"SERVER_PORT","0","SERVER_ADDRESS","127.0.0.1",
                     "SPRING_DATASOURCE_URL",isolated,"SPRING_DATASOURCE_USERNAME",user,"SPRING_DATASOURCE_PASSWORD",password,
                     "SPRING_FLYWAY_DEFAULT_SCHEMA",schema,"CODE_CONTEXT_API_KEYS","replica=replica-integration-token"));
             env.putAll(Map.of("CODE_CONTEXT_ADMIN_API_KEYS","admin=replica-admin-token","REPOSITORY_ROOT",root.resolve("mirrors").toString(),

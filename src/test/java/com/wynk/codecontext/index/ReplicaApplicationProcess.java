@@ -19,10 +19,17 @@ public final class ReplicaApplicationProcess {
     private static Path directory;
     public static void main(String[] args) throws Exception {
         directory=Path.of(args[0]);
-        var application=new SpringApplication(CodeContextApplication.class,PublicationLatch.class);
+        var application=new SpringApplication(CodeContextApplication.class,PublicationLatch.class,CrashLeaseTimings.class);
         var context=application.run();
         int port=((WebServerApplicationContext)context).getWebServer().getPort();
         LeaseWorkerProcess.signal(directory.resolve("ready"),Integer.toString(port));
+    }
+    @TestConfiguration(proxyBeanMethods=false)
+    @org.springframework.context.annotation.Profile("replica-crash-fixture")
+    static class CrashLeaseTimings {
+        @Bean @Primary RepositoryIndexLeaseManager crashFixtureLeases(org.springframework.jdbc.core.JdbcTemplate jdbc) {
+            return new RepositoryIndexLeaseManager(jdbc,java.time.Duration.ofSeconds(3),java.time.Duration.ofMillis(200));
+        }
     }
     @TestConfiguration(proxyBeanMethods=false)
     @org.springframework.context.annotation.Profile("replica-consistency-fixture")

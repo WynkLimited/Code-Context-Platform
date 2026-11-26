@@ -260,9 +260,11 @@ jobs:
           cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
                    for case in ET.parse(path).getroot().findall("testcase")
                    if case.get("classname", "").endswith("ApplicationReplicaConsistencyPostgresIT")]
-          if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
-              raise SystemExit("Full-application replica gate requires exactly one successful, unskipped test")
-          print("ApplicationReplicaConsistencyPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          expected = {"bothApplicationsReadOnlyPublishedGenerationsWhileAContenderWaits",
+                      "anotherCompleteApplicationRecoversTheActualJobAfterPublisherProcessDeath"}
+          if len(cases) != 2 or {case.get("name") for case in cases} != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Full-application replica gate requires exactly two successful, unskipped tests")
+          print("ApplicationReplicaConsistencyPostgresIT: 2 passed, 0 failures, 0 errors, 0 skipped")
           PYCODE
       - name: Verify allowlisted HTTPS Maven model report
         run: |
