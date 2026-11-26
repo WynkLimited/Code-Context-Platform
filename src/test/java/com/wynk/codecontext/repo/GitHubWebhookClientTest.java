@@ -30,7 +30,7 @@ class GitHubWebhookClientTest {
             assertEquals(List.of("push"),json.convertValue(config.path("events"),List.class));
             return json.readTree("{\"id\":7,\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\""+callback+"\"}}");
         });
-        assertEquals(7,client.reconcile(repository));assertEquals(List.of("GET","PATCH"),methods);
+        assertEquals(7,client.reconcile(repository).repositoryHookId());assertEquals(List.of("GET","PATCH"),methods);
     }
     @Test void createsOnlyWhenNoMatchingHookAndRejectsUnconfirmedOrDuplicateProviderResults() throws Exception {
         var methods=new ArrayList<String>();
@@ -38,7 +38,7 @@ class GitHubWebhookClientTest {
             methods.add(method);
             return json.readTree(method.equals("GET")?"[]":"{\"id\":8,\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\""+callback+"\"}}");
         });
-        assertEquals(8,fresh.reconcile(repository));assertEquals(List.of("GET","POST"),methods);
+        assertEquals(8,fresh.reconcile(repository).repositoryHookId());assertEquals(List.of("GET","POST"),methods);
         var unconfirmed=client((method,uri,body)->json.readTree(method.equals("GET")?"[]":"{\"id\":8,\"active\":false}"));
         assertThrows(IllegalStateException.class,()->unconfirmed.reconcile(repository));
         var duplicate=client((method,uri,body)->json.readTree("[{\"id\":7,\"config\":{\"url\":\""+callback+"\"}},{\"id\":8,\"config\":{\"url\":\""+callback+"\"}}]"));

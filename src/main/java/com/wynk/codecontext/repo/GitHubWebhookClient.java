@@ -25,6 +25,9 @@ public final class GitHubWebhookClient {
     private final JsonMapper json;
     private final Exchange exchange;
     private final OutboundUrlGuard.NameResolver resolver;
+    private GitHubAppIntegration githubApp;
+    @Autowired public void githubApp(GitHubAppIntegration app){this.githubApp=app;}
+    public record Hook(String mode,Long repositoryHookId) {}
     private final HttpClient client=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER).build();
     record Settings(String token,String apiBase,String apiHosts,String callbackBase) {
@@ -45,11 +48,25 @@ public final class GitHubWebhookClient {
         this.exchange=exchange==null?this::http:exchange;
         this.resolver=resolver;
     }
-    boolean configured(){return !settings.token().isBlank()&&!settings.callbackBase().isBlank();}
+    boolean configured(){return githubApp!=null&&githubApp.enabled()?githubApp.webhookConfigured():!settings.token().isBlank()&&!settings.callbackBase().isBlank();}
+    String mode(){return githubApp!=null&&githubApp.enabled()?"APP":"REPOSITORY";}
+    String configurationHash() {
+        return digest(mode()+"\n"+settings.callbackBase()+"\n"+properties.webhookSecret());
+    }
+    String signingKeyFingerprint(){return digest(properties.webhookSecret());}
+    private static String digest(String value) {
+        try {return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
+        catch(java.security.NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
+    }
 
-    public long reconcile(RepositoryRecord repository) throws Exception {
+    public Hook reconcile(RepositoryRecord repository) throws Exception {
         if(!configured())throw new IllegalStateException("Separate webhook-management credential and HTTPS callback URL are required");
+        if(githubApp!=null&&githubApp.enabled()) {
+            githubApp.verifyCentralWebhook(repository);return new Hook("APP",null);
+        }
         URI clone=URI.create(repository.cloneUrl());
+        GitHubAppIntegration.requireMatchingProvider(clone,URI.create(settings.apiBase()));
         String path=clone.getPath().replaceFirst("\\.git$","");
         if(!path.equalsIgnoreCase("/"+repository.key()))throw new IllegalArgumentException("Git provider identity differs from the registered repository");
         String callback=callback(repository);
@@ -73,7 +90,7 @@ public final class GitHubWebhookClient {
         if(id<=0||existing!=null&&id!=existing||!result.path("active").asBoolean()||!callback.equals(result.path("config").path("url").asText())
                 ||!result.path("events").isArray()||!hasPush(result.path("events")))
             throw new IllegalStateException("GitHub did not confirm the active push webhook");
-        return id;
+        return new Hook("REPOSITORY",id);
     }
     private static boolean hasPush(JsonNode events) {for(JsonNode event:events)if("push".equals(event.asText()))return true;return false;}
     private String callback(RepositoryRecord repository) {
@@ -83,6 +100,7 @@ public final class GitHubWebhookClient {
         return settings.callbackBase().replaceAll("/+$","")+"/webhooks/github/"+repository.key();
     }
     private URI approved(String address) {
+        OutboundUrlGuard.requireAllowlistedHttps(settings.apiBase(),List.of(settings.apiHosts().split(",")),resolver);
         URI uri=URI.create(address);
         // Queries are constructed here, never accepted from provider pagination links.
         String withoutQuery=uri.getScheme()+"://"+uri.getAuthority()+uri.getPath();

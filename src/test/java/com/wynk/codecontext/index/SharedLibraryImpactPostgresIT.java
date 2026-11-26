@@ -61,6 +61,7 @@ class SharedLibraryImpactPostgresIT {
     @Autowired RepositoryIndexLeaseManager repositoryIndexLeases;
     @Autowired ConsumerContractIndexRefresher contractRefresher;
     @Autowired JsonMapper json;
+    @Autowired com.wynk.codecontext.config.CodeContextProperties config;
     @MockitoSpyBean ZoektIndexer zoektIndexer;
     @MockitoSpyBean org.springframework.ai.embedding.EmbeddingModel embeddingModel;
 
@@ -125,7 +126,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("14", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("15", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -1017,6 +1018,29 @@ FROM semantic_call_sites WHERE id=?
         var hidden=client.send(HttpRequest.newBuilder(URI.create(endpoint+"/Fixture/"+name+"/onboarding"))
                 .header("X-API-Key","isolated-integration-token").GET().build(),HttpResponse.BodyHandlers.ofString());
         assertEquals(404,hidden.statusCode(),"onboarding status must not expose another team's repository/job metadata");
+        // Controlled signed HTTP delivery, not a claim of live GitHub acceptance. Provider casing
+        // must map to the existing canonical registry identity without changing that identity.
+        String sha;try(Git sourceGit=Git.open(source.toFile())){sha=sourceGit.getRepository().resolve("HEAD").name();}
+        String push=json.writeValueAsString(Map.of("after",sha,"ref","refs/heads/main","head_commit",Map.of("timestamp",java.time.Instant.now().toString()),
+                "repository",Map.of("full_name","fixture/"+name)));
+        var mac=javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(config.webhookSecret().getBytes(java.nio.charset.StandardCharsets.UTF_8),"HmacSHA256"));
+        String signature="sha256="+java.util.HexFormat.of().formatHex(mac.doFinal(push.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        UUID delivery=UUID.randomUUID();
+        var hookRequest=HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/webhooks/github"))
+                .header("Content-Type","application/json").header("X-Hub-Signature-256",signature)
+                .header("X-GitHub-Delivery",delivery.toString()).header("X-GitHub-Event","push")
+                .POST(HttpRequest.BodyPublishers.ofString(push)).build();
+        var delivered=client.send(hookRequest,HttpResponse.BodyHandlers.ofString());
+        assertEquals(202,delivered.statusCode(),delivered.body());
+        UUID pushJob=UUID.fromString(json.readTree(delivered.body()).path("jobId").asText());
+        var replay=client.send(hookRequest,HttpResponse.BodyHandlers.ofString());
+        assertEquals(202,replay.statusCode(),replay.body());assertTrue(json.readTree(replay.body()).path("duplicate").asBoolean());
+        awaitSucceeded(pushJob,name);
+        assertEquals(repositories.currentGeneration(repository).orElseThrow(),jdbc.queryForObject("SELECT generation_id FROM index_jobs WHERE id=?",UUID.class,pushJob));
+        String fingerprint=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(config.webhookSecret().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        assertEquals(fingerprint,jdbc.queryForObject("SELECT signing_key_fingerprint FROM webhook_deliveries WHERE delivery_id=?",String.class,delivery));
+        assertEquals("Fixture/"+name,repositories.find("Fixture",name).orElseThrow().key());
     }
 
     private void indexAndAwait(String name) throws Exception {

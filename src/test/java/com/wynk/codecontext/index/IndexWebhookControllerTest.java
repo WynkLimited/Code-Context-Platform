@@ -105,6 +105,12 @@ class IndexWebhookControllerTest {
         assertTrue((Boolean)fixture.controller.github("Fixture","lib",signature(body),delivery,"push",body).get("duplicate"));
         assertEquals(1,fixture.indexing.enqueueCount,"central and per-repository routes must share durable delivery deduplication");
     }
+    @Test void signedAppPingNeedsNoRepositoryAndNeverSchedulesIndexing() throws Exception {
+        var fixture=fixture();byte[] body="{\"zen\":\"controlled fixture\"}".getBytes(StandardCharsets.UTF_8);
+        assertEquals("ping",fixture.controller.githubApp(signature(body),UUID.randomUUID().toString(),"ping",body).get("event"));
+        assertEquals(0,fixture.indexing.enqueueCount);assertEquals(0,fixture.jdbc.insertCount);
+        assertEquals(401,assertThrows(ResponseStatusException.class,()->fixture.controller.githubApp("sha256=00",UUID.randomUUID().toString(),"ping",body)).getStatusCode().value());
+    }
 
     private static Fixture fixture() {
         return fixture(Clock.systemUTC(), Duration.ZERO);
@@ -116,6 +122,9 @@ class IndexWebhookControllerTest {
         RepositoryStore repositories = new RepositoryStore(jdbc) {
             @Override public Optional<RepositoryRecord> find(String owner, String name) {
                 return "Fixture".equals(owner) && "lib".equals(name) ? Optional.of(repository) : Optional.empty();
+            }
+            @Override public Optional<RepositoryRecord> findProviderIdentity(String fullName) {
+                return "Fixture/lib".equalsIgnoreCase(fullName)?Optional.of(repository):Optional.empty();
             }
         };
         CodeContextProperties properties = properties();

@@ -141,7 +141,7 @@ jobs:
           "$RUNNER_TEMP/graphify/bin/pip" install --no-cache-dir 'graphifyy[ollama]==0.9.118'
           echo "$RUNNER_TEMP/graphify/bin" >> "$GITHUB_PATH"
           echo "GRAPHIFY_COMMAND=$RUNNER_TEMP/graphify/bin/graphify" >> "$GITHUB_ENV"
-      - name: PostgreSQL V1-V14 shared-library impact integration
+      - name: PostgreSQL V1-V15 shared-library impact integration
         run: |
           set -o pipefail
           mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log

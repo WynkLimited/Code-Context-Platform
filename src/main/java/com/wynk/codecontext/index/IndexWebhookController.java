@@ -78,6 +78,7 @@ public class IndexWebhookController {
         if (body.length > MAX_PAYLOAD_BYTES) {
             throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "webhook payload exceeds 1 MiB");
         }
+        if("ping".equals(event))return ping(delivery);
         if (!"push".equals(event)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "unsupported GitHub webhook event");
         }
@@ -112,9 +113,9 @@ public class IndexWebhookController {
         String payloadHash = sha256(body);
         return transactions.execute(status -> {
             int inserted = jdbc.update("""
-                    INSERT INTO webhook_deliveries(delivery_id,repository_id,payload_sha256)
-                    VALUES(?,?,?) ON CONFLICT(delivery_id) DO NOTHING
-                    """, deliveryId, repository.id(), payloadHash);
+                    INSERT INTO webhook_deliveries(delivery_id,repository_id,payload_sha256,signing_key_fingerprint)
+                    VALUES(?,?,?,?) ON CONFLICT(delivery_id) DO NOTHING
+                    """, deliveryId, repository.id(), payloadHash,sha256(config.webhookSecret().getBytes(StandardCharsets.UTF_8)));
             if (inserted == 0) {
                 Delivery previous = jdbc.queryForObject("""
                         SELECT repository_id,payload_sha256 FROM webhook_deliveries WHERE delivery_id=?
@@ -148,13 +149,19 @@ public class IndexWebhookController {
             @RequestBody byte[] body) {
         if(!valid(signature,body,config.webhookSecret()))throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"invalid webhook signature");
         if(body.length>MAX_PAYLOAD_BYTES)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"webhook payload exceeds 1 MiB");
+        if("ping".equals(event))return ping(delivery);
         String identity;
         try {identity=json.readTree(body).path("repository").path("full_name").asText("");}
         catch(Exception malformed){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"malformed GitHub push payload");}
         if(!identity.matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}"))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"a valid GitHub repository identity is required");
-        String[] parts=identity.split("/",2);
-        return github(parts[0],parts[1],signature,delivery,event,body);
+        var repository=repositories.findProviderIdentity(identity)
+                .orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"repository not onboarded"));
+        return github(repository.owner(),repository.name(),signature,delivery,event,body);
+    }
+    private Map<String,Object> ping(String delivery) {
+        try {UUID.fromString(delivery);}catch(RuntimeException invalid){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"a valid GitHub delivery ID is required");}
+        return Map.of("accepted",true,"event","ping");
     }
 
     @PostMapping("/api/repositories/{owner}/{name}/index")

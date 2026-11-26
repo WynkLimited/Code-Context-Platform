@@ -34,9 +34,9 @@ public final class RepositoryOnboarding {
         if(!TransactionSynchronizationManager.isActualTransactionActive())
             throw new IllegalStateException("onboarding requires the registration transaction");
         boolean local=repository.cloneUrl().startsWith("file:");
-        int inserted=jdbc.update("INSERT INTO repository_onboarding(repository_id,webhook_state,webhook_error) VALUES(?,?,?) ON CONFLICT DO NOTHING",
+        int inserted=jdbc.update("INSERT INTO repository_onboarding(repository_id,webhook_state,webhook_error,webhook_mode) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
                 repository.id(),local?"NOT_APPLICABLE":webhooks.configured()?"QUEUED":"BLOCKED",
-                local||webhooks.configured()?null:"Configure authorized GitHub webhook management or a verified GitHub App integration.");
+                local||webhooks.configured()?null:"Configure authorized GitHub webhook management or a verified GitHub App integration.",local?"NONE":webhooks.mode());
         if(inserted==0)return;
         var job=indexing.enqueue(repository.owner(),repository.name(),"HEAD","onboarding:"+repository.id());
         jdbc.update("UPDATE repository_onboarding SET initial_job_id=? WHERE repository_id=?",job,repository.id());
@@ -74,10 +74,12 @@ public final class RepositoryOnboarding {
         try(var lease=claim.get()) {
             var repository=jdbc.query("SELECT owner,name FROM repositories WHERE id=? AND enabled",(rs,n)->repositories.find(rs.getString(1),rs.getString(2)).orElseThrow(),id)
                     .stream().findFirst().orElseThrow();
-            long hook=webhooks.reconcile(repository);
+            var hook=webhooks.reconcile(repository);
+            String configuration=webhooks.configurationHash();
             transactions.executeWithoutResult(status->{
                 lease.fenceTransaction();
-                jdbc.update("UPDATE repository_onboarding SET webhook_state='READY',webhook_id=?,webhook_attempt=0,webhook_error=NULL,webhook_claim=NULL,webhook_claim_until=NULL,webhook_available_at=now()+interval '1 hour',updated_at=now() WHERE repository_id=? AND webhook_claim=?",hook,id,token);
+                int changed=jdbc.update("UPDATE repository_onboarding SET webhook_state='READY',webhook_id=?,webhook_mode=?,webhook_verified_at=CASE WHEN webhook_configuration_hash IS DISTINCT FROM ? OR webhook_verified_at IS NULL THEN now() ELSE webhook_verified_at END,webhook_configuration_hash=?,webhook_attempt=0,webhook_error=NULL,webhook_claim=NULL,webhook_claim_until=NULL,webhook_available_at=now()+interval '1 hour',updated_at=now() WHERE repository_id=? AND webhook_claim=?",hook.repositoryHookId(),hook.mode(),configuration,configuration,id,token);
+                if(changed==1)indexing.enqueue(repository.owner(),repository.name(),"HEAD","webhook-catchup:"+repository.id()+":"+configuration);
             });
         }catch(Exception failure) {
             // Persist only the exception category, never provider response bodies or credentials.
@@ -110,11 +112,13 @@ public final class RepositoryOnboarding {
     public Map<String,Object> status(RepositoryRecord repository) {
         var rows=jdbc.queryForList("""
             SELECT o.repository_id,o.initial_job_id,coalesce(j.state,'MISSING') AS indexing_state,
-              j.generation_id,j.error AS indexing_error,o.webhook_state,o.webhook_error,
+              j.generation_id,j.error AS indexing_error,o.webhook_state,o.webhook_error,o.webhook_mode,o.webhook_verified_at,
+              EXISTS(SELECT 1 FROM webhook_deliveries d WHERE d.repository_id=o.repository_id AND d.signing_key_fingerprint=? AND d.received_at>=o.webhook_verified_at) AS webhook_delivery_verified,
+              o.webhook_configuration_hash=? AND o.webhook_mode=? AS webhook_configuration_current,
               o.created_at,o.updated_at
             FROM repository_onboarding o LEFT JOIN index_jobs j ON j.id=o.initial_job_id
             WHERE o.repository_id=?
-            """,repository.id());
+            """,webhooks.signingKeyFingerprint(),webhooks.configurationHash(),webhooks.mode(),repository.id());
         if(rows.isEmpty())return Map.of("repository",repository.key(),"state","LEGACY_REGISTRATION",
                 "action","Submit the unchanged registration to schedule automatic initial indexing.");
         var result=new java.util.LinkedHashMap<>(rows.getFirst());
@@ -123,6 +127,13 @@ public final class RepositoryOnboarding {
         String webhook=String.valueOf(result.get("webhook_state"));
         result.put("state","FAILED".equals(job)?"INDEXING_FAILED":!"SUCCEEDED".equals(job)?"INDEXING":
                 !java.util.Set.of("READY","NOT_APPLICABLE").contains(webhook)?"WEBHOOK_ACTION_REQUIRED":"INDEXED");
+        if("READY".equals(webhook)&&(!webhooks.configured()||!Boolean.TRUE.equals(result.get("webhook_configuration_current")))) {
+            result.put("state","SUCCEEDED".equals(job)?"WEBHOOK_ACTION_REQUIRED":result.get("state"));
+            result.put("action","Webhook configuration or management credentials changed; reconcile the current approved integration.");
+        } else if("READY".equals(webhook)&&!Boolean.TRUE.equals(result.get("webhook_delivery_verified"))) {
+            result.put("state","SUCCEEDED".equals(job)?"WEBHOOK_DELIVERY_UNVERIFIED":result.get("state"));
+            result.put("action","Verify a genuine signed push delivery; provider configuration alone does not prove signing-key agreement.");
+        } else if("BLOCKED".equals(webhook))result.put("action","Configure an approved central GitHub App or separately authorized repository webhook management.");
         return result;
     }
 }

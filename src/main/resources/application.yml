@@ -76,4 +76,4 @@ code-context:
   api-keys: ${TEAM_API_KEYS}
   admin-api-keys: ${ADMIN_API_KEYS}
   webhook-secret: ${WEBHOOK_SECRET}
-  git-access-token: ${GIT_ACCESS_TOKEN}
+  git-access-token: ${GIT_ACCESS_TOKEN:}

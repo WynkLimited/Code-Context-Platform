@@ -36,6 +36,12 @@ INSERT INTO repositories(owner,name,clone_url,team,default_branch,repository_typ
     public Optional<RepositoryRecord> findAny(String owner, String name) {
         return jdbc.query("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE owner=? AND name=?", (rs,n)->map(rs), owner,name).stream().findFirst();
     }
+    /** Provider identities are case-insensitive; preserve the registered identifier in all responses. */
+    public Optional<RepositoryRecord> findProviderIdentity(String fullName) {
+        var matches=jdbc.query("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE lower(owner||'/'||name)=lower(?) AND enabled",(rs,n)->map(rs),fullName);
+        if(matches.size()>1)throw new IllegalStateException("ambiguous registered Git provider identity");
+        return matches.stream().findFirst();
+    }
     public List<RepositoryRecord> findAccessible(String team) {
         return jdbc.query("""
 SELECT r.id,r.owner,r.name,r.clone_url,r.team,r.default_branch,r.repository_type,r.mirror_path

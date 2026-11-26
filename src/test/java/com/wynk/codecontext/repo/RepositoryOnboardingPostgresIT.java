@@ -41,12 +41,13 @@ class RepositoryOnboardingPostgresIT {
             leases=new RepositoryIndexLeaseManager(jdbc);
             indexing=new IndexingService(jdbc,repositories,null,props,null,null,null,tx,null,null,null,null,null,leases);
             var json=JsonMapper.builder().build();var created=new AtomicBoolean();var creates=new AtomicInteger();
-            var client=new GitHubWebhookClient(props,json,new GitHubWebhookClient.Settings("fixture-webhook-token","https://api.github.com","api.github.com","https://context.example"),
-                    (method,uri,body)->{
+            GitHubWebhookClient.Exchange provider=(method,uri,body)->{
                         if(method.equals("GET"))return json.readTree(created.get()?"[{\"id\":91,\"config\":{\"url\":\"https://context.example/webhooks/github/acme/library\"}}]":"[]");
                         if(method.equals("POST")){creates.incrementAndGet();created.set(true);throw new java.io.IOException("simulated lost provider response");}
                         return json.readTree("{\"id\":91,\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"https://context.example/webhooks/github/acme/library\"}}");
-                    },host->new InetAddress[]{InetAddress.getByName("203.0.113.10")});
+                    };
+            var client=new GitHubWebhookClient(props,json,new GitHubWebhookClient.Settings("fixture-webhook-token","https://api.github.com","api.github.com","https://context.example"),
+                    provider,host->new InetAddress[]{InetAddress.getByName("203.0.113.10")});
             first=new RepositoryOnboarding(jdbc,indexing,client,repositories,leases,tx);
             var service=first;
             assertThrows(IllegalStateException.class,()->transactions.executeWithoutResult(status->{
@@ -76,16 +77,39 @@ class RepositoryOnboardingPostgresIT {
             assertEquals(91L,jdbc.queryForObject("SELECT webhook_id FROM repository_onboarding",Long.class));
             assertEquals(0,jdbc.update("UPDATE repository_onboarding SET webhook_state='FAILED' WHERE webhook_claim=?",stale),"late worker token must not mutate the recovered state");
             assertFalse(second.reconcileOne(),"periodic reconciliation must respect the durable next-run time");
+            var confirmed=jdbc.queryForObject("SELECT webhook_verified_at FROM repository_onboarding",java.sql.Timestamp.class);
+            assertEquals(false,second.status(repository).get("webhook_delivery_verified"),"a masked provider secret is not delivery proof");
+            // Controlled database fixture for proof aging/rotation; SharedLibrary IT additionally
+            // exercises a real signed HTTP delivery, and neither is labelled live GitHub acceptance.
+            jdbc.update("INSERT INTO webhook_deliveries(delivery_id,repository_id,payload_sha256,signing_key_fingerprint) VALUES(?,?,?,?)",
+                    UUID.randomUUID(),repository.id(),"a".repeat(64),client.signingKeyFingerprint());
+            assertEquals(true,second.status(repository).get("webhook_delivery_verified"));
+            jdbc.update("UPDATE repository_onboarding SET webhook_available_at=now()-interval '1 second'");
+            assertTrue(second.reconcileOne());
+            assertEquals(confirmed,jdbc.queryForObject("SELECT webhook_verified_at FROM repository_onboarding",java.sql.Timestamp.class),"unchanged periodic verification must retain established delivery proof");
+            var rotatedClient=new GitHubWebhookClient(properties("rotated-fixture-secret"),json,new GitHubWebhookClient.Settings("fixture-webhook-token","https://api.github.com","api.github.com","https://context.example"),
+                    provider,host->new InetAddress[]{InetAddress.getByName("203.0.113.10")});
+            var rotated=new RepositoryOnboarding(jdbc,indexing,rotatedClient,repositories,leases,tx);
+            try {
+                assertEquals(false,rotated.status(repository).get("webhook_configuration_current"));
+                assertEquals(false,rotated.status(repository).get("webhook_delivery_verified"));
+                jdbc.update("UPDATE repository_onboarding SET webhook_available_at=now()-interval '1 second'");
+                assertTrue(rotated.reconcileOne());
+                assertEquals(true,rotated.status(repository).get("webhook_configuration_current"));
+                assertEquals(false,rotated.status(repository).get("webhook_delivery_verified"),"rotation needs a new correctly signed delivery");
+            }finally {rotated.stop();rotatedClient.stop();}
             jdbc.update("UPDATE index_jobs SET state='FAILED'");
             second.retry(repository);
-            assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class));
+            assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class));
             second.retry(repository);
-            assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class),"retrying an already queued initial job must be idempotent");
+            assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class),"retrying an already queued initial job must be idempotent");
+            client.stop();
         } finally {
             if(first!=null)first.stop();if(second!=null)second.stop();if(indexing!=null)indexing.stopWorkers();if(leases!=null)leases.shutdown();
             admin.execute("DROP SCHEMA IF EXISTS "+schema+" CASCADE");
         }
     }
-    private CodeContextProperties properties(){return new CodeContextProperties("/repos","/fixtures","/zoekt","team=key","team=admin","fixture-secret","","github.com","https://context.example",1024,1048576,6000,2,30,
+    private CodeContextProperties properties(){return properties("fixture-secret");}
+    private CodeContextProperties properties(String secret){return new CodeContextProperties("/repos","/fixtures","/zoekt","team=key","team=admin",secret,"","github.com","https://context.example",1024,1048576,6000,2,30,
             new CodeContextProperties.Zoekt("index","clean","http://zoekt"),new CodeContextProperties.Graphify("graphify",false));}
 }

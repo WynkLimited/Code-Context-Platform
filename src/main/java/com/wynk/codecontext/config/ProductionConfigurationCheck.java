@@ -13,7 +13,10 @@ public class ProductionConfigurationCheck {
         return args -> {
             if(java.util.Arrays.asList(env.getActiveProfiles()).contains("production")) {
                 if(p.webhookSecret()==null||p.webhookSecret().length()<32||p.webhookSecret().contains("change-me"))throw new IllegalStateException("production WEBHOOK_SECRET must contain at least 32 non-default characters");
-                if(p.gitAccessToken()==null||p.gitAccessToken().isBlank())throw new IllegalStateException("GIT_ACCESS_TOKEN is required in production");
+                if((p.gitAccessToken()==null||p.gitAccessToken().isBlank())&&
+                        (env.getProperty("GITHUB_APP_PRIVATE_KEY_FILE","").isBlank()||
+                         env.getProperty("GITHUB_APP_CLIENT_ID",env.getProperty("GITHUB_APP_ID","")).isBlank()))
+                    throw new IllegalStateException("A read-only GIT_ACCESS_TOKEN or configured GitHub App is required in production");
                 com.wynk.codecontext.security.ApiKeyRoster.requireProductionStrength(p.apiKeys(),"TEAM_API_KEYS");
                 com.wynk.codecontext.security.ApiKeyRoster.requireProductionStrength(p.adminApiKeys(),"ADMIN_API_KEYS");
                 if(p.mcpAllowedOrigins()==null||p.mcpAllowedOrigins().contains("*")||p.mcpAllowedOrigins().isBlank())throw new IllegalStateException("MCP_ALLOWED_ORIGINS must be an explicit exact allowlist");

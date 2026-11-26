@@ -30,6 +30,8 @@ public class GitRepositoryManager {
     private final CodeContextProperties properties;
     private final ConcurrentHashMap<Path,Object> locks = new ConcurrentHashMap<>();
     private final OutboundUrlGuard.NameResolver nameResolver;
+    private GitHubAppIntegration githubApp;
+    @Autowired(required=false) public void githubApp(GitHubAppIntegration app){this.githubApp=app;}
     @Autowired
     public GitRepositoryManager(CodeContextProperties properties) { this(properties, InetAddressResolver.INSTANCE); }
     /** Test seam for injecting a fake DNS resolver; not a Spring injection point. */
@@ -55,8 +57,8 @@ public class GitRepositoryManager {
                 var configuration=probe.getRepository().getConfig();
                 configuration.setString("remote","origin","url",url);configuration.save();
                 var command=probe.lsRemote().setRemote("origin").setTimeout(properties.gitTimeoutSeconds());
-                if(!properties.gitAccessToken().isBlank())command.setCredentialsProvider(
-                        new UsernamePasswordCredentialsProvider("x-access-token",properties.gitAccessToken()));
+                String credential=credential(url);
+                if(!credential.isBlank())command.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",credential));
                 var refs=command.call();
                 String branch=requested;
                 if(branch==null||branch.isBlank())branch=refs.stream().filter(r->r.getName().equals("HEAD")&&r.isSymbolic())
@@ -93,8 +95,9 @@ public class GitRepositoryManager {
                     config.setString("remote", "origin", "fetch", "+refs/heads/*:refs/remotes/origin/*");
                     config.save();
                     var fetch = git.fetch().setRemote("origin").setTimeout(properties.gitTimeoutSeconds());
-                    if (!properties.gitAccessToken().isBlank()) {
-                        fetch.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token", properties.gitAccessToken()));
+                    String credential=credential(repo.cloneUrl());
+                    if (!credential.isBlank()) {
+                        fetch.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token", credential));
                     }
                     fetch.call();
                     String remoteBranch = "origin/" + repo.defaultBranch();
@@ -111,9 +114,10 @@ public class GitRepositoryManager {
                 if(origins.length!=1||!repo.cloneUrl().equals(origins[0]))
                     throw new IOException("mirror origin does not match registered repository");
                 validateUrl(origins[0]);
-                var fetch=git.fetch().setRemote("origin").setTimeout(properties.gitTimeoutSeconds());if(!properties.gitAccessToken().isBlank())fetch.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",properties.gitAccessToken()));fetch.call();
+                String credential=credential(repo.cloneUrl());
+                var fetch=git.fetch().setRemote("origin").setTimeout(properties.gitTimeoutSeconds());if(!credential.isBlank())fetch.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",credential));fetch.call();
                 git.checkout().setName(repo.defaultBranch()).call();
-                var pull=git.pull().setRemote("origin").setRemoteBranchName(repo.defaultBranch()).setTimeout(properties.gitTimeoutSeconds());if(!properties.gitAccessToken().isBlank())pull.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",properties.gitAccessToken()));pull.call();
+                var pull=git.pull().setRemote("origin").setRemoteBranchName(repo.defaultBranch()).setTimeout(properties.gitTimeoutSeconds());if(!credential.isBlank())pull.setCredentialsProvider(new UsernamePasswordCredentialsProvider("x-access-token",credential));pull.call();
             }
         }
         return root;
@@ -121,6 +125,10 @@ public class GitRepositoryManager {
 
     public String head(Path root) throws IOException {
         try (Git git = Git.open(root.toFile())) { return git.getRepository().resolve("HEAD").name(); }
+    }
+    private String credential(String url) {
+        if("file".equalsIgnoreCase(java.net.URI.create(url).getScheme()))return "";
+        return githubApp!=null&&githubApp.enabled()?githubApp.contentToken(url):properties.gitAccessToken();
     }
 
     /** Removes a repository mirror under the configured root; refuses symlink escapes. */
