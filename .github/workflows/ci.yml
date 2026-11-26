@@ -223,10 +223,12 @@ jobs:
           errors = sum(len(case.findall("error")) for case in cases)
           skipped = sum(len(case.findall("skipped")) for case in cases)
           passed = len(cases) - failures - errors - skipped
-          if len(cases) != 1 or passed != 1 or failures or errors or skipped:
+          expected = {"runsPinnedGraphifyCliAndPersistsGenerationBoundNodesAndEdges",
+                      "indexesStructuralChunksThroughGraphifyOllamaPostgresAndHttpMcpThenReusesAndDeletesVectors"}
+          if len(cases) != 2 or passed != 2 or {case.get("name") for case in cases} != expected or failures or errors or skipped:
               print(f"Graphify gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
               sys.exit(1)
-          print("GraphifyPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped.")
+          print("GraphifyPostgresIT: 2 passed, 0 failures, 0 errors, 0 skipped.")
           PY
       - name: Verify generation retention and fencing report
         run: |

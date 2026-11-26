@@ -52,7 +52,12 @@ class StructuralSourceChunksTest {
             var queue=new java.util.ArrayDeque<com.wynk.codecontext.port.contract.source.NativeSyntax.Node>();queue.add(tree.getRootNode());
             var nodes=new java.util.ArrayList<String>();
             while(!queue.isEmpty()&&nodes.size()<40){var node=queue.remove();nodes.add(node.getType()+"@"+node.getStartByte()+":"+node.getEndByte());queue.addAll(node.getNamedChildren());}
-            return extension+" error="+tree.getRootNode().hasError()+" nodes="+nodes;
+            String direct="";
+            if(extension.equals("lua"))try(var raw=new org.treesitter.TSParser()) {
+                raw.setLanguage(new org.treesitter.TreeSitterLua());
+                try(var parsed=raw.parseString(null,source)){direct=" directUTF8="+parsed.getRootNode();}
+            }
+            return extension+" error="+tree.getRootNode().hasError()+" nodes="+nodes+direct;
         }
     }
     @Test void unicodeByteOffsetsAreConvertedToJavaCharacterOffsets() {

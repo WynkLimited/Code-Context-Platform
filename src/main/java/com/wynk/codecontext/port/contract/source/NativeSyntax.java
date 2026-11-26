@@ -38,7 +38,17 @@ public final class NativeSyntax {
             if(timeoutNanos<1)throw new IllegalArgumentException("parser deadline must be positive");
         }
         public Tree parse(String source) {
-            byte[] input=source.getBytes(StandardCharsets.UTF_16LE);
+            byte[] input=source.getBytes(StandardCharsets.UTF_8);
+            int[] offsets=null;
+            if(input.length!=source.length()) {
+                offsets=new int[input.length+1];
+                for(int chars=0,bytes=0;chars<source.length();) {
+                    int cp=source.codePointAt(chars);
+                    int width=cp<=127?1:cp<=2047?2:cp>=0xd800&&cp<=0xdfff?1:cp<=65535?3:4;
+                    java.util.Arrays.fill(offsets,bytes,bytes+width,chars);
+                    bytes+=width;chars+=Character.charCount(cp);offsets[bytes]=chars;
+                }
+            }
             long deadline=System.nanoTime()+timeoutNanos;
             boolean[] cancelled={false};
             TSParserProgress progress=state->{cancelled[0]=Thread.currentThread().isInterrupted()||System.nanoTime()-deadline>=0;return cancelled[0];};
@@ -47,9 +57,9 @@ public final class NativeSyntax {
                 int count=Math.min(buffer.length,input.length-offset);
                 System.arraycopy(input,offset,buffer,0,count);return count;
             };
-            TSTree tree=parser.parseWithOptions(new byte[4096],null,reader,TSInputEncoding.TSInputEncodingUTF16LE,progress);
+            TSTree tree=parser.parseWithOptions(new byte[4096],null,reader,TSInputEncoding.TSInputEncodingUTF8,progress);
             if(cancelled[0]){tree.close();parser.reset();throw new IllegalStateException("native parser cancelled or deadline exceeded");}
-            return new Tree(tree);
+            return new Tree(tree,offsets);
         }
         @Override public void close(){parser.close();}
         public static final class Builder {
@@ -60,29 +70,28 @@ public final class NativeSyntax {
     }
     public static final class Tree implements AutoCloseable {
         private final TSTree tree;
-        private Tree(TSTree tree){this.tree=tree;}
-        public Node getRootNode(){return new Node(tree.getRootNode());}
+        private final int[] offsets;
+        private Tree(TSTree tree,int[] offsets){this.tree=tree;this.offsets=offsets;}
+        public Node getRootNode(){return new Node(tree.getRootNode(),offsets);}
         @Override public void close(){tree.close();}
     }
     public static final class Node {
         private final TSNode node;
-        private Node(TSNode node){this.node=node;}
+        private final int[] offsets;
+        private Node(TSNode node,int[] offsets){this.node=node;this.offsets=offsets;}
         public String getType(){return node.getType();}
         public boolean hasError(){return node.hasError();}
         public boolean isNull(){return node.isNull();}
         public int getStartByte(){return characters(node.getStartByte());}
         public int getEndByte(){return characters(node.getEndByte());}
-        private static int characters(int offset) {
-            if((offset&1)!=0)throw new IllegalArgumentException("unaligned native UTF-16 range");
-            return offset/2;
-        }
+        private int characters(int offset) {return offsets==null?offset:offsets[offset];}
         public int getChildCount(){return node.getChildCount();}
         public Node getChildByFieldName(String field) {
-            TSNode child=node.getChildByFieldName(field);return child==null||child.isNull()?null:new Node(child);
+            TSNode child=node.getChildByFieldName(field);return child==null||child.isNull()?null:new Node(child,offsets);
         }
         public List<Node> getNamedChildren() {
             var children=new ArrayList<Node>(node.getNamedChildCount());
-            for(int i=0;i<node.getNamedChildCount();i++)children.add(new Node(node.getNamedChild(i)));
+            for(int i=0;i<node.getNamedChildCount();i++)children.add(new Node(node.getNamedChild(i),offsets));
             return children;
         }
         public List<Node> getChildren(){return getNamedChildren();}
