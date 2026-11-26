@@ -251,14 +251,14 @@ Preceding CI failures on `5eda7e6`/`0345a18` were repaired by:
 Domain Micrometer meters (`PlatformMetrics`) and prior contract/security/ops slice are included in this green SHA lineage (`0345a18`→`4ca099f`→`b2346ee`). Overall decision remains **NO-GO** pending remaining ledger depth (OS compiler sandbox, DR drill, rename/dependency incremental PG cases, multi-replica rate limit, cluster smoke).
 
 
-### Semantic structural coverage — 2026-11-26 (generator 1.16.0)
+### Semantic structural coverage — 2026-11-26 (generator 1.17.0)
 
 The pinned Graphify **0.9.118** wheel was inspected directly (SHA-256 `f572453c275e82dcc052f6cf7fa79c0a5a14eaefab08ac9112e31edf7b9d75aa`). Its dispatch has **56 extractor families**, including configuration, documents, forms, and project files; this is not a count of programming languages or proof of structural semantic support. Installed local Graphify 0.8.18 was not used as evidence for the pinned release. Graphify nodes can carry only a start location, so semantic definitions use complete parser ranges instead of guessing ends from the next declaration.
 
 | Meaning-index source family | Structural implementation | Current evidence |
 |---|---|---|
 | Java | JavaParser raw source class headers, methods/constructors, same-scope tiny merging | Existing source tests, real provider acceptance; latest full release gate pending |
-| Kotlin | Bundled Tree-sitter 1.12.0; complete definition/header ranges, shared tiny-group planner | Native grammar and Unicode tests; real Kotlin provider gate pending new epoch |
+| Kotlin | Portable Tree-sitter JNI core0.26.6 with pinned Kotlin grammar0.3.8.1; complete definition/header ranges, shared tiny-group planner | Native grammar and Unicode tests; real Kotlin provider gate pending new epoch |
 | Python | Same native parser pipeline, exact method/header ranges and source gaps | Native fixture; real Ollama/PG/MCP natural-language refund fixture added, execution pending |
 | JavaScript, TypeScript, TSX | Same pipeline, grammar-specific class/method/function nodes | Three native grammar fixtures; broader declaration and framework syntax remains open |
 | Go, Rust, C, C++, C#, Ruby | Same pipeline with native complete callable ranges | Six native grammar fixtures; full language feature matrices and service acceptance remain open |
@@ -267,4 +267,8 @@ The pinned Graphify **0.9.118** wheel was inspected directly (SHA-256 `f572453c2
 
 Imports, intervening state and trailing source are retained as separate source fragments. Unknown grammar, malformed syntax or unavailable native library uses fallback rather than fabricated structural ranges. Parsers/trees for structural chunking are per-file, closed and limited to two seconds and 256 traversal levels. Source offsets use the JNI binding's actual UTF-16 character indices; precomputed physical line starts avoid rescanning the file prefix per declaration.
 
-Native runtime prerequisite: java-tree-sitter1.12 bundles Linux x86_64 and Intel macOS libraries; the macOS dylib is not ARM-compatible. This session validated on a checksum-verified Intel Temurin21.0.13.1 runtime via Rosetta, isolated under target. ARM compilation followed by Intel `mvn surefire:test` ran every default test with no skips. Production/container platform support must match the bundled library; fallback on ARM is not structural-coverage acceptance. No native installation or system Java configuration was changed.
+Native runtime correction: the former seart1.12 artifact was incompatible with both the ARM Mac JVM (Intel-only dylib) and glibc Linux (its .so links libc.musl-x86_64.so.1). The earlier Intel/Rosetta332-test result is historical evidence, not Linux acceptance. Replaced that dependency with platform-specific `io.github.bonede` JNI core0.26.6 and explicitly pinned grammar artifacts in pom.xml. Published grammar jars contain ARM/Intel macOS and GNU Linux binaries. The extracted GNU core requires GLIBC symbols no newer than2.14, compatible with the configured Noble image; actual Linux loading remains a strict CI assertion. No libc shim, system runtime change, native-test skip or architecture-specific bypass was added.
+
+The small NativeSyntax adapter owns/closes parser and tree lifetimes, converts explicit UTF-16LE byte positions to Java character offsets and preserves a two-second parse deadline using the binding's native progress callback plus bounded input-reader checks. Cancellation preserves worker interruption; an aborted parser resets and is reusable. These are actual native tests, not mocks. Primary binding API/platform reference: https://github.com/bonede/tree-sitter-ng. The current local validation uses the normal ARM Java21 runtime; Rosetta is no longer required.
+
+Additional structural grammar coverage: Scala, PHP, Swift, Lua and Bash and pinned-extractor JS/TS/C++/Ruby extension aliases. Eighteen structural cases plus mandatory native Kotlin, existing overload and two native cancellation/reuse cases all pass on ARM Java21 (22 focused cases). Lua's actual bundled AST node is function_definition_statement; this was established from its valid tree rather than inferred from another grammar's selector. All full-service and remaining-family limitations above still apply.

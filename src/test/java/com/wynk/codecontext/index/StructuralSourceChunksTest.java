@@ -34,7 +34,12 @@ class StructuralSourceChunksTest {
             org.junit.jupiter.params.provider.Arguments.of("c","int refund(int amount) { return amount; }","refund"),
             org.junit.jupiter.params.provider.Arguments.of("cpp","class Policy { public: int refund(int amount) { return amount; } };","refund"),
             org.junit.jupiter.params.provider.Arguments.of("cs","class Policy { int refund(int amount) { return amount; } }","refund"),
-            org.junit.jupiter.params.provider.Arguments.of("rb","class Policy\n def refund(amount)\n amount\n end\nend","refund"));
+            org.junit.jupiter.params.provider.Arguments.of("rb","class Policy\n def refund(amount)\n amount\n end\nend","refund"),
+            org.junit.jupiter.params.provider.Arguments.of("scala","object Policy { def refund(amount: Int): Int = amount }","refund"),
+            org.junit.jupiter.params.provider.Arguments.of("php","<?php function refund($amount) { return $amount; }","refund"),
+            org.junit.jupiter.params.provider.Arguments.of("swift","func refund(_ amount: Int) -> Int { return amount }","refund"),
+            org.junit.jupiter.params.provider.Arguments.of("lua","function refund(amount)\n return amount\nend","refund"),
+            org.junit.jupiter.params.provider.Arguments.of("sh","refund() { printf '%s' \"$1\"; }","refund"));
     }
     @Test void unicodeByteOffsetsAreConvertedToJavaCharacterOffsets() {
         String source="class Policy:\n  label = '退款😀'\n  def refund(self, amount):\n    return amount\n";

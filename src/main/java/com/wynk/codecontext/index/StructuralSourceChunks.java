@@ -1,8 +1,8 @@
 package com.wynk.codecontext.index;
 
-import ch.usi.si.seart.treesitter.Language;
-import ch.usi.si.seart.treesitter.Node;
-import ch.usi.si.seart.treesitter.Parser;
+import com.wynk.codecontext.port.contract.source.NativeSyntax.Language;
+import com.wynk.codecontext.port.contract.source.NativeSyntax.Node;
+import com.wynk.codecontext.port.contract.source.NativeSyntax.Parser;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,11 +19,15 @@ final class StructuralSourceChunks {
             Map.entry("mjs","JAVASCRIPT"),Map.entry("ts","TYPESCRIPT"),Map.entry("tsx","TSX"),
             Map.entry("go","GO"),Map.entry("rs","RUST"),Map.entry("c","C"),Map.entry("h","C"),
             Map.entry("cpp","CPP"),Map.entry("cc","CPP"),Map.entry("hpp","CPP"),
-            Map.entry("cs","C_SHARP"),Map.entry("rb","RUBY"));
-    private static final Set<String> CALLABLES=Set.of("function_declaration","function_definition","method_declaration",
-            "method_definition","constructor_declaration","secondary_constructor","function_item","method","singleton_method");
+            Map.entry("cs","C_SHARP"),Map.entry("rb","RUBY"),Map.entry("rake","RUBY"),
+            Map.entry("cjs","JAVASCRIPT"),Map.entry("mts","TYPESCRIPT"),Map.entry("cts","TYPESCRIPT"),
+            Map.entry("cxx","CPP"),Map.entry("cu","CPP"),Map.entry("cuh","CPP"),Map.entry("metal","CPP"),
+            Map.entry("scala","SCALA"),Map.entry("php","PHP"),Map.entry("swift","SWIFT"),
+            Map.entry("lua","LUA"),Map.entry("sh","BASH"),Map.entry("bash","BASH"));
+    private static final Set<String> CALLABLES=Set.of("function_declaration","function_definition_statement","function_definition","method_declaration",
+            "method_definition","method_signature","abstract_method_signature","generator_function_declaration","constructor_declaration","secondary_constructor","function_item","method","singleton_method");
     private static final Set<String> SCOPES=Set.of("class_declaration","class_definition","interface_declaration",
-            "object_declaration","class_specifier","struct_specifier","struct_item","trait_item","impl_item","class","module");
+            "object_declaration","object_definition","trait_definition","enum_definition","given_definition","record_declaration","enum_declaration","protocol_declaration","class_specifier","struct_specifier","struct_item","trait_item","impl_item","class","module");
     record Declaration(String kind,String name,String signature,String owner,JavaSourceText.Slice source) {}
     static List<Declaration> parse(String extension,String source,String path) {
         String language=LANGUAGES.get(extension);
@@ -85,7 +89,7 @@ final class StructuralSourceChunks {
         return start;
     }
     private static boolean loadNative() {
-        try {ch.usi.si.seart.treesitter.LibraryLoader.load();return true;}
+        try {com.wynk.codecontext.port.contract.source.NativeSyntax.requireAvailable();return true;}
         catch(LinkageError|RuntimeException unavailable) {return false;}
     }
     private static String name(Node node,String source) {
@@ -99,8 +103,7 @@ final class StructuralSourceChunks {
             return source.substring(character(child.getStartByte()),character(child.getEndByte()));
         return node.getType();
     }
-    // The JNI binding normalizes its misleadingly named getStartByte/getEndByte to
-    // UTF-16 character indices (Tree.getSource multiplies these indices by two).
+    // NativeSyntax normalizes byte positions to UTF-16 character indices.
     private static int character(int parserOffset) {return parserOffset;}
     private static void addGap(List<Declaration> out,String source,String path,int start,int end,JavaSourceText coordinates) {
         if(!source.substring(start,end).isBlank())out.add(new Declaration("FILE",path,path,null,coordinates.range(start,end)));

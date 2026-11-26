@@ -41,7 +41,25 @@
     <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-transport-http</artifactId><version>${maven-resolver.version}</version></dependency>
     <dependency><groupId>org.jboss.logging</groupId><artifactId>jboss-logging</artifactId><version>3.6.1.Final</version></dependency>
     <dependency><groupId>com.google.protobuf</groupId><artifactId>protobuf-java</artifactId><version>4.33.1</version></dependency>
-    <dependency><groupId>ch.usi.si.seart</groupId><artifactId>java-tree-sitter</artifactId><version>1.12.0</version></dependency>
+    <!-- Platform-specific JNI binaries: glibc Linux and Intel/ARM macOS; parser versions pinned. -->
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter</artifactId><version>0.26.6</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-java</artifactId><version>0.23.5</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-kotlin</artifactId><version>0.3.8.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-python</artifactId><version>0.25.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-javascript</artifactId><version>0.25.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-typescript</artifactId><version>0.23.2</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-tsx</artifactId><version>0.23.2</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-go</artifactId><version>0.25.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-rust</artifactId><version>0.24.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-c</artifactId><version>0.24.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-cpp</artifactId><version>0.23.4</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-c-sharp</artifactId><version>0.23.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-ruby</artifactId><version>0.23.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-scala</artifactId><version>0.24.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-php</artifactId><version>0.24.2</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-swift</artifactId><version>0.5.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-lua</artifactId><version>2.1.3a</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-bash</artifactId><version>0.25.1</version></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
     <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
   </dependencies>

@@ -1,9 +1,9 @@
 package com.wynk.codecontext.port.contract.source;
 
-import ch.usi.si.seart.treesitter.Language;
-import ch.usi.si.seart.treesitter.Node;
-import ch.usi.si.seart.treesitter.Parser;
-import ch.usi.si.seart.treesitter.Tree;
+import com.wynk.codecontext.port.contract.source.NativeSyntax.Language;
+import com.wynk.codecontext.port.contract.source.NativeSyntax.Node;
+import com.wynk.codecontext.port.contract.source.NativeSyntax.Parser;
+import com.wynk.codecontext.port.contract.source.NativeSyntax.Tree;
 import com.wynk.codecontext.port.gnostic.GnosticModels.EvidenceType;
 import com.wynk.codecontext.port.gnostic.GnosticModels.SourceRange;
 import org.jboss.logging.Logger;
@@ -28,7 +28,7 @@ final class TreeSitterMethodParser {
 
     static TreeSitterMethodParser tryCreate() {
         try {
-            ch.usi.si.seart.treesitter.LibraryLoader.load();
+            com.wynk.codecontext.port.contract.source.NativeSyntax.requireAvailable();
             Parser java = Parser.builder().language(Language.JAVA).build();
             Parser kotlin = Parser.builder().language(Language.KOTLIN).build();
             java.setTimeout(2,TimeUnit.SECONDS);
