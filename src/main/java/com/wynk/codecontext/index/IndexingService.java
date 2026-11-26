@@ -82,6 +82,14 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     }
     private void process(UUID jobId) {
         Job job=jdbc.queryForObject("SELECT repository_id,commit_sha,attempt FROM index_jobs WHERE id=?",(rs,n)->new Job(rs.getObject(1,UUID.class),rs.getString(2),rs.getInt(3)),jobId);
+        try(var context=com.wynk.codecontext.ops.IndexingLogContext.open(jobId,job.repositoryId,job.attempt)) {
+            long started=System.nanoTime();
+            LOGGER.info("index.job.dispatch.started");
+            try {processAttempt(jobId,job);}
+            finally {LOGGER.info("index.job.dispatch.finished elapsedMs={}",(System.nanoTime()-started)/1_000_000);}
+        }
+    }
+    private void processAttempt(UUID jobId,Job job) {
         RepositoryIndexLeaseManager.Lease lease;
         try {
             var claimed=repositoryLeases.tryAcquire(job.repositoryId,jobId);
@@ -107,6 +115,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             if(!Boolean.TRUE.equals(enabled)){jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository disabled',updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",jobId,job.attempt);return;}
             RepositoryRecord repo=jdbc.queryForObject("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE id=?",(rs,n)->new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),job.repositoryId);
             Path root=git.sync(repo); String sha=git.head(root);
+            com.wynk.codecontext.ops.IndexingLogContext.commit(sha);
             String published=jdbc.query("SELECT commit_sha FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getString(1),repo.id()).stream().findFirst().orElse(null);
             if(sha.equals(published)) {
                 var currentIndex=contractIndexes.published(repo.id());
@@ -117,6 +126,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             List<GitRepositoryManager.SourceFile> files=git.filesAt(root,sha);
             Long generation=jdbc.queryForObject("SELECT coalesce(max(generation),0)+1 FROM index_generations WHERE repository_id=?",Long.class,repo.id());
             UUID gen=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published) VALUES(?,?,?,false) RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,generation);
+            com.wynk.codecontext.ops.IndexingLogContext.generation(gen);
             UUID previous=jdbc.query("SELECT id FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getObject(1,UUID.class),repo.id()).stream().findFirst().orElse(null);
             if(previous!=null) {
                 var cached=contractIndexes.published(repo.id());

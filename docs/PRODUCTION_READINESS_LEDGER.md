@@ -107,7 +107,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Next |
 |---|---|---|---|
-| OPS-METRICS | Domain meters + alert YAML | PARTIALLY_IMPLEMENTED | Structured servlet correlation verified in df9b83d CI; worker propagation and live scrape/alerts remain open |
+| OPS-METRICS | Domain meters + alert YAML | PARTIALLY_IMPLEMENTED | Structured servlet correlation verified in df9b83d CI; scoped worker identity implemented locally; service evidence and live scrape/alerts remain open |
 | OPS-BACKUP | Scripts + docs | PARTIALLY_IMPLEMENTED | Logical restore CI verified at 0ec1591; production WAL/PITR and volume/application recovery remain external |
 | OPS-K8S | Manifests | PARTIALLY_IMPLEMENTED | Cluster smoke BLOCKED |
 | OPS-PERF | Pilot ≤1 min searchable | PARTIALLY_IMPLEMENTED | Representative benchmark open |
@@ -265,3 +265,10 @@ Java chunks now slice original AST source ranges, retain associated documentatio
 Reproduced a real `OutOfMemoryError` in production artifact hashing with a 64 MiB file and a separate JVM limited to 24 MiB heap. Resolver previously used `Files.readAllBytes` for every persisted dependency checksum despite accepting artifacts up to 512 MiB. It now hashes through a fixed 64 KiB buffer with a no-follow input stream. The existing 512 MiB bound remains enforced before reading and is also checked during streaming, covering file growth. SHA-256 contents, persisted fields and resolver policy/version remain unchanged; no generator or migration change is needed.
 
 Three new regressions exercise the constrained child JVM with an independently computed exact digest, the standard SHA-256 `abc` vector and an equal-size content change, plus sparse oversized-file rejection. Focused suite **15 passed**, including actual HTTPS Maven resolution. Complete Java21 default suite **279 passed**, zero failures/errors/skips (41.486s); `git diff --check` passed. This demonstrates bounded hash-buffer memory, not bounded Maven network downloads, aggregate classpath size or production capacity. Those separate requirements remain open. Preceding semantic-input CI for `edfd9df` is running at https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751313386; new PostgreSQL assertions remain pending until the actual run completes.
+
+
+### Durable worker log identity — 2026-11-26
+
+Indexing attempts now establish a worker-local logging scope with typed UUID job/repository IDs and numeric attempt; the actual synchronized 40-character Git commit and generation UUID are added when known. Structured start/finished events delimit each dispatch, including busy/retry/error exits; finished does not assert successful publication. The scope clears unrelated inherited context, including servlet request identity, and restores the original thread context through try-with-resources. It never copies request headers, arguments, query parameters or source. Existing lease/publication/retry decisions are unchanged.
+
+Three new tests verify exact allowed initial fields, exceptional cleanup/restoration, rejection of unsafe identities and sequential reuse of a real executor thread without previous commit/job leakage. Focused **3 passed**; complete Java21 default suite **282 passed**, zero failures/errors/skips (40.703s); `git diff --check` passed. Actual structured worker events in CI remain IMPLEMENTED_UNVERIFIED until inspection of the next exact-SHA service log. This is durable-job correlation, not arbitrary Reactor propagation or distributed tracing. No migrations/security/tool contracts changed. Source-integrity and checksum PR runs remain in progress; do not claim their new PostgreSQL assertions accepted yet.
