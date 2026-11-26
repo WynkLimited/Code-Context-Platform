@@ -13,7 +13,7 @@ import java.util.regex.Pattern;
 /** Source slices retain physical line coordinates; pretty-printed AST text does not. */
 final class JavaSourceText {
     private static final Pattern NEWLINE=Pattern.compile("\\r\\n|\\r|\\n");
-    record Slice(String text,int firstLine,int lastLine) {}
+    record Slice(String text,int firstLine,int lastLine,int startOffset,int endOffset) {}
     private final String source;
     private final int[] lines;
     JavaSourceText(String source) {
@@ -56,7 +56,7 @@ final class JavaSourceText {
         if(end<start||end>source.length())throw new IllegalArgumentException("invalid source range");
         String text=source.substring(start,end).stripTrailing();
         int lineCount=(int)NEWLINE.matcher(text).results().count();
-        return new Slice(text,begin.line,begin.line+lineCount);
+        return new Slice(text,begin.line,begin.line+lineCount,start,start+text.length());
     }
     private int offset(Position position) {
         if(position.line<1||position.line>lines.length||position.column<1)throw new IllegalArgumentException("invalid source position");

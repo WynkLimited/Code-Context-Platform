@@ -208,13 +208,15 @@ class SharedLibraryImpactPostgresIT {
         assertEquals(providerV1Commit,manualStatus.path("commit_sha").asText());
         assertEquals(providerV1Generation.toString(),manualStatus.path("generation_id").asText());
         assertFalse(manualStatus.path("generation_provenance_unverified").asBoolean(true));
-        var sourceChunks=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/org/acme/Money.java' AND symbol='convert(String)'",providerV1Generation);
-        assertEquals(1,sourceChunks.size(),"the inline provider method must have one persisted source chunk");
+        var sourceChunks=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/org/acme/Money.java' AND symbol='convert(String) | convert(Integer)'",providerV1Generation);
+        assertEquals(1,sourceChunks.size(),"adjacent tiny provider overloads must share one exact source chunk");
         assertEquals(3,((Number)sourceChunks.getFirst().get("start_line")).intValue());
-        assertEquals(3,((Number)sourceChunks.getFirst().get("end_line")).intValue(),
-                "pretty-printing must not invent source lines for an inline method");
+        assertEquals(4,((Number)sourceChunks.getFirst().get("end_line")).intValue(),
+                "merged overloads must retain both actual source lines");
+        assertEquals(List.of("3:3","4:4"),jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_nodes WHERE generation_id=? AND file_path='src/main/java/org/acme/Money.java' AND node_type='METHOD' ORDER BY start_line",String.class,providerV1Generation),
+                "merging retrieval chunks must not merge graph declarations or invent definition ranges");
         assertTrue(sourceChunks.getFirst().get("content").toString().contains("\nclass: org.acme.Money\n"));
-        assertEquals("public String convert(String value) { return value; }",
+        assertEquals("public String convert(String value) { return value; }\n    public String convert(Integer value) { return value.toString(); }",
                 sourceChunks.getFirst().get("content").toString().split("\n---\n",2)[1]);
         var fallbackWindows=jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='docs/fallback-notes.txt' ORDER BY start_line",String.class,providerV1Generation);
         assertTrue(fallbackWindows.size()>3,"token-heavy fallback windows must be subdivided without dropping lines");

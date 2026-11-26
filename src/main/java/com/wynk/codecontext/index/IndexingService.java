@@ -229,20 +229,31 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
             var sourceText=new JavaSourceText(file.content());
             for(var c:cu.findAll(ClassOrInterfaceDeclaration.class)) {
                 var text=sourceText.classHeader(c);
-                symbols.add(new Symbol("CLASS",c.getNameAsString(),c.getFullyQualifiedName().orElse(c.getNameAsString()),line(c.getBegin()),line(c.getEnd()),text.text(),text.firstLine(),null));
+                symbols.add(new Symbol("CLASS",c.getNameAsString(),c.getFullyQualifiedName().orElse(c.getNameAsString()),line(c.getBegin()),line(c.getEnd()),text.text(),text.firstLine(),null,text.startOffset(),text.endOffset()));
             }
             for(var m:cu.findAll(MethodDeclaration.class)) {
                 var text=sourceText.definition(m);
-                symbols.add(new Symbol("METHOD",m.getNameAsString(),m.getSignature().asString(),line(m.getBegin()),line(m.getEnd()),text.text(),text.firstLine(),JavaSourceText.ownerOf(m)));
+                symbols.add(new Symbol("METHOD",m.getNameAsString(),m.getSignature().asString(),line(m.getBegin()),line(m.getEnd()),text.text(),text.firstLine(),JavaSourceText.ownerOf(m),text.startOffset(),text.endOffset()));
             }
             for(var c:cu.findAll(com.github.javaparser.ast.body.ConstructorDeclaration.class)) {
                 var text=sourceText.definition(c);
-                symbols.add(new Symbol("CONSTRUCTOR",c.getNameAsString(),c.getSignature().asString(),line(c.getBegin()),line(c.getEnd()),text.text(),text.firstLine(),JavaSourceText.ownerOf(c)));
+                symbols.add(new Symbol("CONSTRUCTOR",c.getNameAsString(),c.getSignature().asString(),line(c.getBegin()),line(c.getEnd()),text.text(),text.firstLine(),JavaSourceText.ownerOf(c),text.startOffset(),text.endOffset()));
             }
         } catch(RuntimeException ignored) { symbols.clear(); /* malformed source falls back to a source-file chunk */ }
         if(symbols.isEmpty()) symbols.add(new Symbol("FILE",file.path(),file.path(),1,Math.max(1,(int)file.content().lines().count()),file.content()));
         for(Symbol symbol:symbols) {
             long node=jdbc.queryForObject("INSERT INTO code_nodes(generation_id,node_type,symbol,qualified_name,file_path,start_line,end_line,language,metadata) VALUES(?,?,?,?,?,?,?,?,jsonb_build_object('blobSha',?)) RETURNING id",Long.class,gen,symbol.type,symbol.name,symbol.qualified,file.path(),symbol.start,symbol.end,ext,file.blobSha());
+        }
+        // Graph declarations stay independent; only the retrieval/embedding plan is merged.
+        var chunkSymbols=new ArrayList<>(symbols.stream().filter(s->s.owner==null).toList());
+        var declarations=symbols.stream().filter(s->s.owner!=null).map(s->new TinyChunkGroups.Definition(s.type,s.qualified,s.owner,
+                new JavaSourceText.Slice(s.text,s.textStart,s.textStart+(int)s.text.lines().count()-1,s.offsetStart,s.offsetEnd))).toList();
+        for(var group:TinyChunkGroups.merge(file.content(),declarations,props.maxChunkChars())) {
+            var first=group.members().getFirst();var text=group.source();
+            chunkSymbols.add(new Symbol(group.members().size()==1?first.kind():"METHODS",group.signatures(),group.signatures(),
+                    text.firstLine(),text.lastLine(),text.text(),text.firstLine(),first.owner(),text.startOffset(),text.endOffset()));
+        }
+        for(Symbol symbol:chunkSymbols) {
             var chunks=symbol.type.equals("FILE")
                     ?DocumentChunks.split(file.path(),symbol.text,symbol.textStart,props.maxChunkChars()).stream()
                             .map(piece->new Chunk(piece.text(),piece.firstLine(),piece.lastLine())).toList()
@@ -514,8 +525,8 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
     }
     private static String truncate(String s){if(s==null)return "indexing failed";return s.substring(0,Math.min(s.length(),1500));}
     private record Job(UUID repositoryId,String sha,int attempt){}
-    private record Symbol(String type,String name,String qualified,int start,int end,String text,int textStart,String owner){
-        private Symbol(String type,String name,String qualified,int start,int end,String text){this(type,name,qualified,start,end,text,start,null);}
+    private record Symbol(String type,String name,String qualified,int start,int end,String text,int textStart,String owner,int offsetStart,int offsetEnd){
+        private Symbol(String type,String name,String qualified,int start,int end,String text){this(type,name,qualified,start,end,text,start,null,-1,-1);}
     }
     private record Chunk(String text,int start,int end){}
 }
