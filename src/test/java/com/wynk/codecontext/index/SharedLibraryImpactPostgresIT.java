@@ -59,6 +59,7 @@ class SharedLibraryImpactPostgresIT {
     @Autowired ConsumerContractIndexRefresher contractRefresher;
     @Autowired JsonMapper json;
     @MockitoSpyBean ZoektIndexer zoektIndexer;
+    @MockitoSpyBean org.springframework.ai.embedding.EmbeddingModel embeddingModel;
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
@@ -121,7 +122,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("11", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("12", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -1066,13 +1067,20 @@ FROM semantic_call_sites WHERE id=?
         Path javaFile=consumerSource.resolve("src/main/java/app/ConsumerC.java");
         Path temporaryFile=consumerSource.resolve("src/main/java/app/Temporary.java");
         UUID initialGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        String unchangedClassChunk=jdbc.queryForObject("SELECT content FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java' AND symbol='app.ConsumerC'",String.class,initialGeneration);
         Files.writeString(javaFile,Files.readString(javaFile).replace("    return money.convert(Integer.valueOf(1));",
                 "    // changed source must be reprocessed\n    return money.convert(Integer.valueOf(1));"));
         Files.writeString(temporaryFile,"package app; class Temporary { int value() { return 1; } }\n");
         try(Git git=Git.open(consumerSource.toFile())){commit(git,"incremental source change and addition");}
+        org.mockito.Mockito.clearInvocations(embeddingModel);
         indexAndAwait("consumer-service-c");
         UUID changedGeneration=repositories.currentGeneration(consumer).orElseThrow();
         assertNotEquals(initialGeneration,changedGeneration);
+        var embeddedInputs=embeddedInputs();
+        assertEquals(3,embeddedInputs.size(),"only the changed method and new file's class/method must call real Ollama");
+        assertFalse(embeddedInputs.contains(unchangedClassChunk),"unchanged chunk inside the edited file must reuse its vector");
+        assertTrue(embeddedInputs.stream().anyMatch(text->text.contains("// changed source must be reprocessed")));
+        assertEquals(unchangedClassChunk,jdbc.queryForObject("SELECT content FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java' AND symbol='app.ConsumerC'",String.class,changedGeneration));
         assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM generation_files WHERE generation_id=? AND file_path='src/main/java/app/Temporary.java'",Integer.class,changedGeneration));
         Set<String> changedChunkHashes=new java.util.HashSet<>(jdbc.queryForList("SELECT content_hash FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/app/ConsumerC.java'",String.class,changedGeneration));
         assertTrue(changedChunkHashes.size()>0,"changed Java method must be chunked again");
@@ -1130,6 +1138,23 @@ FROM semantic_call_sites WHERE id=?
         assertNotEquals(rebuiltGeneration,upgradedGeneration);
         assertEquals(incrementalSnapshot,indexedGenerationSnapshot(upgradedGeneration),
                 "generator upgrade must not copy legacy chunks merely because file blobs match");
+
+        // A different/legacy embedding space must force real embedding even for identical Git blobs.
+        int expectedEmbeddings=jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=?",Integer.class,upgradedGeneration);
+        jdbc.update("UPDATE index_generations SET embedding_fingerprint=? WHERE id=?","0".repeat(64),upgradedGeneration);
+        org.mockito.Mockito.clearInvocations(embeddingModel);
+        indexAndAwait("consumer-service-c","embedding-space-upgrade-"+UUID.randomUUID());
+        UUID spaceGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        assertNotEquals(upgradedGeneration,spaceGeneration);
+        assertEquals(expectedEmbeddings,embeddedInputs().size(),"embedding-space mismatch must re-embed every source chunk");
+        assertEquals(incrementalSnapshot,indexedGenerationSnapshot(spaceGeneration));
+        assertTrue(jdbc.queryForObject("SELECT embedding_fingerprint ~ '^[0-9a-f]{64}$' AND embedding_fingerprint<>? AND embedding_metadata->>'digest' ~ '^[0-9a-f]{64}$' AND (embedding_metadata->>'dimensions')::int=1024 FROM index_generations WHERE id=?",Boolean.class,"0".repeat(64),spaceGeneration));
+    }
+
+    private List<String> embeddedInputs() {
+        return org.mockito.Mockito.mockingDetails(embeddingModel).getInvocations().stream()
+                .filter(invocation->invocation.getMethod().getName().equals("embed")&&invocation.getArguments().length==1&&invocation.getArgument(0) instanceof String)
+                .map(invocation->invocation.<String>getArgument(0)).toList();
     }
 
     private List<String> indexedGenerationSnapshot(UUID generation) {
@@ -1382,13 +1407,21 @@ FROM semantic_call_sites WHERE id=?
         assertTrue(neighbors.toString().contains("SEMANTIC_RESOLVED"),"get_neighbors must expose the persisted resolved call edge: "+neighbors);
         assertTrue(neighbors.toString().contains(repositories.currentCommit(repositories.id("Fixture","consumer-service-a")).orElseThrow()),"get_neighbors must include commit evidence: "+neighbors);
         JsonNode semantic=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",8,"method","tools/call","params",Map.of("name","semantic_search","arguments",Map.of("query","a representation that changes character input into textual output","repository","Fixture/common-library","limit",50))));
-        assertFalse(semantic.path("isError").asBoolean(false),"semantic_search MCP call failed: "+semantic);
+        assertFalse(semantic.path("result").path("isError").asBoolean(false),"semantic_search MCP call failed: "+semantic);
         JsonNode semanticResults=structuredToolPayload(semantic);
         assertTrue(semanticResults.isArray(),"semantic_search should return JSON result rows: "+semanticResults);
         assertTrue(semanticResults.toString().contains("src/main/java/org/acme/Money.java"),"semantic retrieval missed the matching method: "+semanticResults);
         assertTrue(semanticResults.toString().contains("convert"),"semantic retrieval omitted symbol evidence: "+semanticResults);
         assertTrue(semanticResults.toString().contains(repositories.currentCommit(repositories.id("Fixture","common-library")).orElseThrow()),"semantic retrieval omitted commit provenance: "+semanticResults);
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_chunks c JOIN index_generations g ON g.id=c.generation_id AND g.published WHERE g.repository_id=? AND c.embedding IS NOT NULL",Integer.class,repositories.id("Fixture","common-library"))>0,"real Ollama vectors must be persisted in PostgreSQL");
+        UUID semanticGeneration=repositories.currentGeneration(repositories.id("Fixture","common-library")).orElseThrow();
+        String fingerprint=jdbc.queryForObject("SELECT embedding_fingerprint FROM index_generations WHERE id=?",String.class,semanticGeneration);
+        assertNotNull(fingerprint);assertTrue(fingerprint.matches("[0-9a-f]{64}"));
+        jdbc.update("UPDATE index_generations SET embedding_fingerprint=NULL WHERE id=?",semanticGeneration);
+        try {
+            var stale=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",81,"method","tools/call","params",Map.of("name","semantic_search","arguments",Map.of("query","money conversion","repository","Fixture/common-library","limit",10))));
+            assertTrue(stale.path("result").path("isError").asBoolean(false)||stale.path("error").isObject(),"legacy vectors must require reindexing instead of mixing embedding spaces: "+stale);
+        } finally {jdbc.update("UPDATE index_generations SET embedding_fingerprint=? WHERE id=?",fingerprint,semanticGeneration);}
         verifyOtherTeamIsolation(endpoint);
         return post(client,endpoint,session,Map.of("jsonrpc","2.0","id",9,"method","tools/call","params",Map.of("name","impact_analysis","arguments",Map.of("contract","","repository",repository))));
     }

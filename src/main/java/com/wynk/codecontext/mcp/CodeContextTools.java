@@ -124,6 +124,12 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,source.symbol A
         if(query==null||query.isBlank())throw new IllegalArgumentException("semantic search query is required");
         if(query.length()>1024)throw new IllegalArgumentException("semantic search query exceeds 1024 characters");
         String owner=null,name=null;if(repository!=null&&!repository.isBlank()){RepositoryRecord r=allowed(repository);owner=r.owner();name=r.name();}
+        var space=com.wynk.codecontext.index.EmbeddingSpace.current(embeddings,props.embeddingDimensions());
+        String staleSql="SELECT count(*) FROM index_generations g JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=? WHERE g.published AND r.enabled AND g.embedding_fingerprint IS DISTINCT FROM ?";
+        if(owner!=null)staleSql+=" AND r.owner=? AND r.name=?";
+        Integer stale=owner==null?jdbc.queryForObject(staleSql,Integer.class,team(),space.fingerprint())
+                :jdbc.queryForObject(staleSql,Integer.class,team(),space.fingerprint(),owner,name);
+        if(stale!=null&&stale>0)throw new IllegalStateException("semantic indexes require reindexing for the configured embedding model");
         float[] v=embeddings.embed(query);if(v.length!=props.embeddingDimensions())throw new IllegalStateException("embedding model dimension mismatch");
         for(float value:v)if(!Float.isFinite(value))throw new IllegalStateException("embedding model returned a non-finite vector");
         String vec="["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";
@@ -132,10 +138,12 @@ SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,source.symbol A
 SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.symbol,c.start_line,c.end_line,c.content,
             1-(c.embedding <=> ?::vector) AS similarity FROM code_chunks c JOIN index_generations g ON g.id=c.generation_id AND g.published
             JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=?
-            WHERE c.embedding IS NOT NULL""";
+            WHERE r.enabled AND c.embedding IS NOT NULL AND g.embedding_fingerprint=?""";
+
         if(owner!=null)sql+=" AND r.owner=? AND r.name=?";
         sql+=" ORDER BY c.embedding <=> ?::vector LIMIT "+n;
-        List<?> rows=owner==null?jdbc.queryForList(sql,vec,team(),vec):jdbc.queryForList(sql,vec,team(),owner,name,vec);
+        List<?> rows=owner==null?jdbc.queryForList(sql,vec,team(),space.fingerprint(),vec):jdbc.queryForList(sql,vec,team(),space.fingerprint(),owner,name,vec);
+        space.requireCurrent(embeddings);
         return objectMapper.writeValueAsString(rows);
         } catch(RuntimeException e){ error=true; throw e; }
         finally { metrics.recordMcp(sample,error); }

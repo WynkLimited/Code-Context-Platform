@@ -116,8 +116,10 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             RepositoryRecord repo=jdbc.queryForObject("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE id=?",(rs,n)->new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),job.repositoryId);
             Path root=git.sync(repo); String sha=git.head(root);
             com.wynk.codecontext.ops.IndexingLogContext.commit(sha);
+            EmbeddingSpace embeddingSpace=EmbeddingSpace.current(embeddings,props.embeddingDimensions());
             String published=jdbc.query("SELECT commit_sha FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getString(1),repo.id()).stream().findFirst().orElse(null);
-            if(sha.equals(published)) {
+            String publishedSpace=jdbc.query("SELECT embedding_fingerprint FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getString(1),repo.id()).stream().filter(java.util.Objects::nonNull).findFirst().orElse(null);
+            if(sha.equals(published)&&embeddingSpace.fingerprint().equals(publishedSpace)) {
                 var currentIndex=contractIndexes.published(repo.id());
                 if(currentIndex.isPresent() && contractIndexes.freshness(currentIndex.get())==ContractModels.IndexFreshness.CURRENT) {
                     transactions.execute(status->{lease.fenceTransaction(); markSucceeded(jobId,job.attempt); return null;});return;
@@ -125,18 +127,19 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             }
             List<GitRepositoryManager.SourceFile> files=git.filesAt(root,sha);
             Long generation=jdbc.queryForObject("SELECT coalesce(max(generation),0)+1 FROM index_generations WHERE repository_id=?",Long.class,repo.id());
-            UUID gen=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published) VALUES(?,?,?,false) RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,generation);
+            UUID gen=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published,embedding_fingerprint,embedding_metadata) VALUES(?,?,?,false,?,?::jsonb) RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,generation,embeddingSpace.fingerprint(),objectMapper.writeValueAsString(embeddingSpace.metadata()));
             com.wynk.codecontext.ops.IndexingLogContext.generation(gen);
             UUID previous=jdbc.query("SELECT id FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getObject(1,UUID.class),repo.id()).stream().findFirst().orElse(null);
             if(previous!=null) {
                 var cached=contractIndexes.published(repo.id());
                 if(cached.isEmpty()||!previous.equals(cached.get().generationId())
-                        ||!ContractModels.GENERATOR_VERSION.equals(cached.get().index().generatorVersion()))previous=null;
+                        ||!ContractModels.GENERATOR_VERSION.equals(cached.get().index().generatorVersion())
+                        ||!embeddingSpace.fingerprint().equals(publishedSpace))previous=null;
             }
             jdbc.batchUpdate("INSERT INTO generation_files(generation_id,file_path,blob_sha) VALUES(?,?,?)",files,500,(ps,f)->{ps.setObject(1,gen);ps.setString(2,f.path());ps.setString(3,f.blobSha());});
             Map<String,String> oldFiles=previous==null?Map.of():jdbc.query("SELECT file_path,blob_sha FROM generation_files WHERE generation_id=?",rs->{Map<String,String> m=new HashMap<>();while(rs.next())m.put(rs.getString(1),rs.getString(2));return m;},previous);
             for(var f:files) {
-                if(!f.blobSha().equals(oldFiles.get(f.path())))indexFile(repo,gen,f);
+                if(!f.blobSha().equals(oldFiles.get(f.path())))indexFile(repo,gen,f,previous,embeddingSpace);
             }
             if(previous!=null)copyUnchangedFiles(previous,gen);
             if(props.graphify().enabled()) {
@@ -149,6 +152,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             var kotlinAbi=buildAndPersistSemanticCallSites(repo,gen,files,sha);
             buildAndPersistContractIndex(repo,gen,files,sha,kotlinAbi);
             zoekt.index(repo,root,gen);
+            embeddingSpace.requireCurrent(embeddings);
             // Atomic visibility: previous generation stays published until every stage above succeeds.
             lease.assertOwned();
             transactions.execute(status->{lease.fenceTransaction();
@@ -203,7 +207,7 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
           JOIN code_nodes nt ON nt.generation_id=? AND nt.file_path=ot.file_path AND nt.qualified_name=ot.qualified_name AND nt.start_line=ot.start_line
           WHERE e.generation_id=? AND NOT jsonb_exists(os.metadata,'id') AND NOT jsonb_exists(ot.metadata,'id') ON CONFLICT DO NOTHING""",next,next,next,previous);
     }
-    private void indexFile(RepositoryRecord repo,UUID gen,GitRepositoryManager.SourceFile file) throws Exception {
+    private void indexFile(RepositoryRecord repo,UUID gen,GitRepositoryManager.SourceFile file,UUID previous,EmbeddingSpace space) throws Exception {
         String ext=file.path().contains(".")?file.path().substring(file.path().lastIndexOf('.')+1):"";
         List<Symbol> symbols=new ArrayList<>();
         if(ext.equals("java")) try {
@@ -231,7 +235,15 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
                     :split(symbol.text,symbol.textStart,props.maxChunkChars());
             for(Chunk part:chunks) {
                 String chunk="repo: "+repo.key()+" | file: "+file.path()+"\n"+(symbol.owner==null?"":"class: "+symbol.owner+"\n")+symbol.type.toLowerCase()+": "+symbol.qualified+"\n---\n"+part.text;
-                String hash=sha256(chunk);float[] vector=embeddings.embed(chunk);
+                String hash=sha256(chunk);
+                if(previous!=null&&jdbc.update("""
+INSERT INTO code_chunks(generation_id,file_path,symbol,start_line,end_line,content_hash,embedding,content)
+SELECT ?,?,?,?,?,?,old.embedding,? FROM code_chunks old JOIN index_generations g ON g.id=old.generation_id
+WHERE old.generation_id=? AND g.repository_id=? AND g.embedding_fingerprint=? AND old.file_path=?
+  AND old.content_hash=? AND old.content=? AND old.embedding IS NOT NULL
+ON CONFLICT DO NOTHING
+""",gen,file.path(),symbol.qualified,part.start,part.end,hash,chunk,previous,repo.id(),space.fingerprint(),file.path(),hash,chunk)==1)continue;
+                float[] vector=embeddings.embed(chunk);
                 if(vector.length!=props.embeddingDimensions())throw new IllegalStateException("embedding dimension mismatch: expected "+props.embeddingDimensions()+" got "+vector.length);
                 jdbc.update("INSERT INTO code_chunks(generation_id,file_path,symbol,start_line,end_line,content_hash,embedding,content) VALUES(?,?,?,?,?,?,?::vector,?) ON CONFLICT DO NOTHING",gen,file.path(),symbol.qualified,part.start,part.end,hash,vectorLiteral(vector),chunk);
             }

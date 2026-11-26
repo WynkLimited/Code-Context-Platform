@@ -37,10 +37,17 @@ public class OllamaEmbeddingConfiguration {
         return model;
     }
     /** Generic EMPTY options otherwise lose provider-specific defaults in Spring AI 2.0.2's merge. */
-    private static final class ContextAwareEmbeddingModel extends OllamaEmbeddingModel {
+    private static final class ContextAwareEmbeddingModel extends OllamaEmbeddingModel implements com.wynk.codecontext.index.EmbeddingSpace.IdentifiedModel {
         private final OllamaEmbeddingOptions defaults;
+        private final OllamaApi api;
         ContextAwareEmbeddingModel(OllamaApi api,OllamaEmbeddingOptions options,ObservationRegistry observations,ModelManagementOptions initialization) {
-            super(api,options,observations,initialization);this.defaults=options;
+            super(api,options,observations,initialization);this.defaults=options;this.api=api;
+        }
+        @Override public com.wynk.codecontext.index.EmbeddingSpace embeddingSpace(int dimensions) {
+            String configured=defaults.getModel();String canonical=configured.lastIndexOf(':')>configured.lastIndexOf('/')?configured:configured+":latest";
+            var matches=api.listModels().models().stream().filter(model->canonical.equals(model.name())||canonical.equals(model.model())).toList();
+            if(matches.size()!=1)throw new IllegalStateException("configured embedding model provenance unavailable or ambiguous");
+            return new com.wynk.codecontext.index.EmbeddingSpace(canonical,matches.getFirst().digest(),dimensions,defaults.getNumCtx());
         }
         @Override public org.springframework.ai.embedding.EmbeddingResponse call(org.springframework.ai.embedding.EmbeddingRequest request) {
             var options=request.getOptions();

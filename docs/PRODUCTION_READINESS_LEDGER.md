@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `69b5f3df3ce3d4131a7df30b9a39d4cd0235b32e` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751860449 |
+| Last green mandatory CI SHA | `dbffc97c67c6d8d155aea78aebcc867383f56d25` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45752620646 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -44,8 +44,8 @@ Status vocabulary (this ledger):
 | CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | CI b2346ee |
 | CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested+cross-file OpenAPI `$ref` (1.3.0); Avro MCP evolution @ f905835 |
 | CTX-4 | Semantic retrieval | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama; all subsequent seven-case PG gates retained |
-| CTX-4A | Semantic chunk construction | Accurate source ranges, bounded structural/heading chunks | PARTIALLY_IMPLEMENTED | `JavaSourceText`, `BoundedTextChunks`, `IndexingService` | Original design PDF pp. 3–4; Java/source ranges and generator invalidation verified at edfd9df; fallback 60-line windows implemented locally, pending CI; tiny-piece merges, heading/config sections and token-aware splitting remain open |
-| CTX-4B | Embedding provenance/reuse | Reuse unchanged chunks inside edited files with model/config identity | PARTIALLY_IMPLEMENTED | Existing unchanged-file copying; generator epoch invalidation | Original PDF incremental promise; model digest/config provenance and safe cross-file-edit chunk reuse remain actionable |
+| CTX-4A | Semantic chunk construction | Accurate source ranges, bounded structural/heading chunks | PARTIALLY_IMPLEMENTED | `JavaSourceText`, `BoundedTextChunks`, `IndexingService` | Original design PDF pp. 3–4; Java/source ranges, generator invalidation, 60-line fallback and Markdown/large YAML sections service-verified through dbffc97; tiny-piece merges and token-aware/blank-line splitting remain open |
+| CTX-4B | Embedding provenance/reuse | Reuse unchanged chunks inside edited files with model/config identity | PARTIALLY_IMPLEMENTED | `EmbeddingSpace`, generation provenance, exact prior-generation chunk copying | Original PDF incremental promise; model digest/config guards and edited-file reuse implemented locally; actual PG/Ollama acceptance pending |
 
 ### MCP tools
 
@@ -116,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 69b5f3d: 282 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | dbffc97: 290 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -295,3 +295,16 @@ Two additional regressions require exact windows 1–60, 51–110 and 101–121 
 `DocumentChunks` uses CommonMark 0.32.0 block source spans for top-level ATX/setext headings; headings inside fenced/indented code and quotations do not split document sections. Preamble and physical blank lines are retained. Large YAML/JSON configuration uses parser source marks for top-level mapping sections without object construction or reserialization; small configuration stays one character-bounded chunk. Composition has explicit depth, alias and code-point budgets; malformed/nonmapping input retains safe fallback windows. Raw source text is embedded, not executed or fetched. CommonMark block/inline nesting are explicitly bounded at 100. Parser source-span API/release was checked against https://github.com/commonmark/commonmark-java and its changelog; the actual released artifact resolved successfully.
 
 A focused regression found loss of a real trailing blank line at a section boundary. Fixed source-slice termination while preserving the original exact line assertions. Six new cases cover heading/code/quotation/preamble distinctions, a single long heading section, large YAML raw source/coordinates, small multi-line configuration and malformed fallback. Focused combined suite **11 passed**; full Java21 default suite **290 passed**, zero failures/errors/skips (42.611s); `git diff --check` passed. Generator 1.11.0 invalidates older chunk epochs. The real PostgreSQL provider fixture additionally requires exact Markdown and large-configuration section ranges; these new assertions remain IMPLEMENTED_UNVERIFIED until the next exact-SHA CI. Fallback e5566ec CI is still running. Tiny structural merges, tokenizer-aware/blank-line splitting, model provenance and edited-file chunk reuse remain actionable; no overall readiness claim.
+
+
+### Document chunk gates accepted — 2026-11-26
+
+`e5566eccbf9729da2280779fc2e9a9c8fbe86337` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45752085930: **284 unit + seven PostgreSQL + one real HTTPS**, zero failures/errors/skips, with the exact 60-line persisted-window assertion. `dbffc97c67c6d8d155aea78aebcc867383f56d25` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45752620646: **290 unit + seven PostgreSQL + one real HTTPS**, same zero counts, with exact Markdown and large-YAML persisted source ranges. Both passed shell and actual logical restore gates. Artifacts downloaded under `target/ci-e5566ec-reports` and `target/ci-dbffc97-reports`. These results close the preceding pending document-window service checks.
+
+### Model provenance and edited-file chunk reuse — 2026-11-26
+
+V12 is a new additive migration (V1–V11 unchanged), recording generation `embedding_fingerprint` and JSON metadata. The application obtains the configured model's actual digest from Ollama `/api/tags` and fingerprints it with canonical model name, expected dimensions, configured context, truncation policy and request-policy epoch. Missing/ambiguous/malformed provenance fails closed. The provider is checked again before publication and after semantic query completion. It does not rely on a mutable model tag alone. JSON metadata stores the digest and effective configuration without server credentials or source. Keep model provisioning immutable while serving/indexing; before/after checks are not a transactional model-management API or a guarantee against an administrator swapping a tag away and back during one operation. Different serving replicas must use the same model/options.
+
+An edited file is still parsed into current source chunks and gets current nodes/line ranges. Matching chunk text/hash from the same repository, exact prior generation and embedding fingerprint reuses only its vector; changed/new chunks call actual Ollama. No cross-repository or arbitrary filesystem vector cache is used. Generator or embedding-space changes disable old-file copying; an embedding-space change also prevents same-commit job short-circuiting. Failed candidates retain the last published generation. Semantic search enforces team ACL, enabled repository and exact embedding space; legacy/mismatched authorized indexes produce an explicit reindexing error before embedding/searching, rather than mixing vectors or silently returning empty results.
+
+Five new identity/search regressions plus expanded actual Ollama tags wire tests passed (focused **8**). Final complete Java21 default suite: **295 passed**, zero failures/errors/skips (38.883s). Workflow YAML and `git diff --check` passed. New real-service assertions require exactly three embedding calls for the changed method plus added file while reusing the edited file's unchanged class chunk; a forced embedding-space mismatch must re-embed every chunk at the same commit. HTTP MCP additionally rejects legacy fingerprint-null vectors and retains positive semantic retrieval and all original impact/security checks. These new PostgreSQL/Ollama and V12 restricted-role migration assertions are **IMPLEMENTED_UNVERIFIED** until the next exact-SHA CI. No local database success claim. No model mutation is performed against a real server by the test; it mutates only isolated fixture metadata and uses controlled wire-server mutation in unit coverage. Production model-rollout, staging/performance and broader remaining requirements remain open.

@@ -17,8 +17,14 @@ import static org.junit.jupiter.api.Assertions.*;
 class OllamaEmbeddingConfigurationTest {
     @Test void sendsTheConfiguredContextAndRefusesSilentInputTruncation() throws Exception {
         var received=new AtomicReference<JsonNode>();
+        var digest=new AtomicReference<>("a".repeat(64));
         var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
         try {
+            server.createContext("/api/tags",exchange->{
+                byte[] response=("{\"models\":[{\"name\":\"wire-model:latest\",\"model\":\"wire-model:latest\",\"digest\":\""+digest.get()+"\"}]}").getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type","application/json");
+                exchange.sendResponseHeaders(200,response.length);exchange.getResponseBody().write(response);exchange.close();
+            });
             server.createContext("/api/embed",exchange->{
                 received.set(JsonMapper.builder().build().readTree(exchange.getRequestBody().readAllBytes()));
                 byte[] response="{\"model\":\"wire-model\",\"embeddings\":[[0.1,0.2,0.3]],\"prompt_eval_count\":1}".getBytes(StandardCharsets.UTF_8);
@@ -42,6 +48,14 @@ class OllamaEmbeddingConfigurationTest {
                         assertEquals(8192,received.get().path("options").path("num_ctx").asInt());
                         assertFalse(received.get().path("truncate").asBoolean(true));
                         assertEquals("5m",received.get().path("keep_alive").asText());
+                        var model=context.getBean(EmbeddingModel.class);
+                        var space=com.wynk.codecontext.index.EmbeddingSpace.current(model,3);
+                        assertEquals("a".repeat(64),space.digest());assertEquals(8192,space.contextTokens());
+                        space.requireCurrent(model);
+                        digest.set("b".repeat(64));
+                        assertThrows(IllegalStateException.class,()->space.requireCurrent(model));
+                        digest.set("invalid");
+                        assertThrows(IllegalArgumentException.class,()->com.wynk.codecontext.index.EmbeddingSpace.current(model,3));
                     });
         } finally {server.stop(0);}
     }
