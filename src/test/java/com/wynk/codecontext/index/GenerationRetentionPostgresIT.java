@@ -43,7 +43,9 @@ class GenerationRetentionPostgresIT {
                     .placeholders(Map.of("vectorDimensions","1024")).load().migrate();
             assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM index_jobs WHERE repository_id=? AND requested_commit_sha=commit_sha AND generation_id IS NULL AND generation_provenance_unverified",Integer.class,legacyRepo),
                     "forward migration must preserve legacy request refs without guessing generation success");
-            jdbc.update("DELETE FROM repositories WHERE id=?",legacyRepo);
+            assertEquals(2,jdbc.update("DELETE FROM index_jobs WHERE repository_id=?",legacyRepo));
+            assertEquals(1,jdbc.update("DELETE FROM index_generations WHERE repository_id=?",legacyRepo));
+            assertEquals(1,jdbc.update("DELETE FROM repositories WHERE id=?",legacyRepo));
             UUID repo=jdbc.queryForObject("INSERT INTO repositories(owner,name,clone_url,team,mirror_path) VALUES('fixture','retention','','team','') RETURNING id",UUID.class);
             UUID obsolete=generation(jdbc,repo,1,false);
             UUID baseline=generation(jdbc,repo,2,false);

@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `b2d0b706114411907f6de51c247e9beb52747043` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45755008129 |
+| Last green mandatory CI SHA | `9a08737ba799add9315744b33238b384cb96d74d` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45758588962 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -28,7 +28,7 @@ Status vocabulary (this ledger):
 **Next executable actions (priority):**
 
 1. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
-2. Full-application multi-instance crash/heartbeat drills (IDX-1/2) beyond the verified separate-JVM lease/publication workers.
+2. Full-application crash/network fault drills (IDX-1/2) beyond the now-verified two-application contention/publication/heartbeat/read consistency and separate-JVM lease-worker crash fixtures.
 3. Semantic chunk correctness, model provenance and reuse within edited files; safe Gradle resolution (XRI-GRADLE), Maven reactor visibility and lifecycle onboarding depth.
 4. External blockers: OS sandbox, production DR/PITR drill, k8s smoke and representative pilot capacity/client evidence.
 
@@ -116,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | b2d0b70: 301 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 9a08737: 301 unit + eight PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -365,3 +365,10 @@ New forward-only V13 (V1–V12 unchanged) preserves `requested_commit_sha`, adds
 Legacy association is never guessed. Recorded requests are retained, and temporally plausible legacy history is held conservatively by retention while provenance remains unverified. A legacy symbolic ref such as HEAD holds only historical generations created by its recorded completion time; future generations do not accrue that hold. Verified jobs retain their proof marker when later retention clears an expired generation FK. Operators may review and release a legacy retention hold without manufacturing a successful association. Homogeneous-version rollout/rebaselining is required; mixed old/new generator workers are not certified.
 
 Validation: focused job/freshness/impact suite **14 passed**; final full Java21 default suite **303 passed**, zero failures/errors/skips (44.193s). Subsequent acceptance compilation passed (4.418s); workflow YAML and `git diff --check` passed. Added actual PostgreSQL checks for V12→V13 legacy migration, preservation/release of legacy retention holds, matched-attempt rejection of an unpublished same-SHA generation, actual HTTP manual indexing/job-status requested HEAD versus resolved SHA, and successful same-SHA recovery selecting the last genuine published baseline. All original rollback and exact impact assertions remain and execute before recovery. These V13 service/migration assertions are **IMPLEMENTED_UNVERIFIED** until the next exact-SHA CI. The independently repaired full-application gate for 9a08737 is still running; retain its exact outcome separately.
+
+
+### Full applications accepted; legacy fixture cleanup repair — 2026-11-26
+
+`9a08737ba799add9315744b33238b384cb96d74d` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45758588962. Downloaded XML: **301 unit + eight PostgreSQL + one HTTPS = 310 passed**, zero failures/errors/skips, plus shell and real restore gates. The full-application case passed with two independent JVMs, real services, exact six-tool HTTP registration, actual production heartbeat, real contender rejection, positive baseline file/text visibility during a real candidate shard pause, zero candidate file matches and exact new-commit reads/search after publication. This verifies the stated consistency scope; full application crash/network and cross-host storage remain open. Artifact: `target/ci-9a08737-reports`.
+
+V13 run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45759170474 at 8eb0b44 had **312 cases, zero failures, one error, zero skips**. All three SharedLibrary cases (including new manual HTTP HEAD audit and same-SHA recovery), full applications, fresh thirteen-migration restricted-role, Graphify, lease recovery and HTTPS passed. The retention case completed its actual V12→V13 legacy-field checks, then its temporary legacy-repository cleanup incorrectly assumed cascading parent deletion. PostgreSQL rejected `DELETE FROM repositories` with constraint `index_jobs_repository_id_fkey`. Corrected only fixture cleanup to delete its exact two jobs, one generation and one repository in child-first order, asserting each count. Existing foreign keys and migrations remain intact. Compilation and `git diff --check` passed. Main retention/legacy-hold checks and overall V13/restore acceptance still require the next green run; no successful production-readiness claim is made from the partial run. Artifact: `target/ci-8eb0b44-reports`.
