@@ -22,7 +22,7 @@ public class RepositoryStore {
             return jdbc.queryForObject("""
 INSERT INTO repositories(owner,name,clone_url,team,default_branch,repository_type,mirror_path)
                 VALUES(?,?,?,?,?,?,?) ON CONFLICT(owner,name) DO UPDATE SET clone_url=excluded.clone_url,
-                default_branch=excluded.default_branch,repository_type=excluded.repository_type,mirror_path=excluded.mirror_path,enabled=true
+                default_branch=excluded.default_branch,repository_type=excluded.repository_type,mirror_path=excluded.mirror_path,enabled=true,desired_enabled=true
                 WHERE repositories.team=excluded.team
                 RETURNING id,owner,name,clone_url,team,default_branch,repository_type,mirror_path""", (rs,n)->map(rs), owner,name,url,team,branch,type,path);
         } catch(org.springframework.dao.EmptyResultDataAccessException contested) {
@@ -50,7 +50,7 @@ SELECT r.id,r.owner,r.name,r.clone_url,r.team,r.default_branch,r.repository_type
     }
     public UUID id(String owner,String name) { return find(owner,name).orElseThrow().id(); }
     public void disable(UUID repositoryId) {
-        jdbc.update("UPDATE repositories SET enabled=false WHERE id=?",repositoryId);
+        jdbc.update("UPDATE repositories SET enabled=false,desired_enabled=false WHERE id=?",repositoryId);
         jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository disabled',updated_at=now() WHERE repository_id=? AND state='QUEUED'",repositoryId);
         jdbc.update("DELETE FROM contract_links l USING contracts p,index_generations pg WHERE l.provider_contract=p.id AND p.generation_id=pg.id AND pg.repository_id=?",repositoryId);
         jdbc.update("DELETE FROM contract_links l USING contracts c,index_generations cg WHERE l.consumer_contract=c.id AND c.generation_id=cg.id AND cg.repository_id=?",repositoryId);
@@ -61,7 +61,7 @@ SELECT r.id,r.owner,r.name,r.clone_url,r.team,r.default_branch,r.repository_type
      * generation, then removes PostgreSQL state (chunks/embeddings/contracts cascade from generations).
      */
     public int purge(UUID repositoryId) {
-        jdbc.update("UPDATE repositories SET enabled=false WHERE id=?",repositoryId);
+        jdbc.update("UPDATE repositories SET enabled=false,desired_enabled=false WHERE id=?",repositoryId);
         jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository purged',updated_at=now() WHERE repository_id=? AND state IN ('QUEUED','RUNNING')",repositoryId);
         jdbc.update("DELETE FROM contract_links l USING contracts p,index_generations pg WHERE l.provider_contract=p.id AND p.generation_id=pg.id AND pg.repository_id=?",repositoryId);
         jdbc.update("DELETE FROM contract_links l USING contracts c,index_generations cg WHERE l.consumer_contract=c.id AND c.generation_id=cg.id AND cg.repository_id=?",repositoryId);

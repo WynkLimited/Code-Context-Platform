@@ -37,7 +37,7 @@ class GitHubAppIntegrationTest {
             requests.incrementAndGet();
             if(uri.getPath().equals("/installation/repositories")) {
                 assertEquals(TOKEN,credential);
-                return json.readTree("{\"total_count\":1,\"repositories\":[{\"full_name\":\"acme/library\"}]}");
+                return json.readTree("{\"total_count\":1,\"repositories\":[{\"id\":81,\"full_name\":\"acme/library\"}]}");
             }
             String[] jwt=credential.split("\\.");assertEquals(3,jwt.length);
             var claims=json.readTree(Base64.getUrlDecoder().decode(jwt[1]));
@@ -69,7 +69,7 @@ class GitHubAppIntegrationTest {
         Path pem=writeKey(key,temp.resolve("key.pem"));
         for(boolean wide:List.of(false,true)) {
             var app=app(pem,(method,uri,credential,body)->json.readTree(uri.getPath().equals("/installation/repositories")
-                    ?"{\"total_count\":2,\"repositories\":[{\"full_name\":\"acme/library\"},{\"full_name\":\"acme/secret\"}]}"
+                    ?"{\"total_count\":2,\"repositories\":[{\"id\":81,\"full_name\":\"acme/library\"},{\"full_name\":\"acme/secret\"}]}"
                     :method.equals("POST")?issued(wide?"read":"write"):INSTALLATION));
             try {assertThrows(IllegalStateException.class,()->app.contentToken("https://github.com/acme/library.git"));}finally{app.stop();}
         }
@@ -87,9 +87,11 @@ class GitHubAppIntegrationTest {
         Path pem=writeKey(generator.generateKeyPair().getPrivate().getEncoded(),temp.resolve("key.pem"));
         var calls=new AtomicInteger();
         var app=app(pem,(method,uri,credential,body)->{
-            assertEquals("GET",method,"central App mode must never create a repository hook");calls.incrementAndGet();
+            assertTrue(method.equals("GET")||method.equals("POST")&&uri.getPath().equals("/app/installations/17/access_tokens"),"central App mode must never create a repository hook");calls.incrementAndGet();
             return json.readTree(switch(uri.getPath()) {
                 case "/repos/acme/library/installation" -> INSTALLATION;
+                case "/app/installations/17/access_tokens" -> issued("read");
+                case "/installation/repositories" -> "{\"total_count\":1,\"repositories\":[{\"id\":81,\"full_name\":\"acme/library\"}]}";
                 case "/app" -> "{\"events\":[\"push\"],\"permissions\":{\"contents\":\"read\",\"metadata\":\"read\"}}";
                 case "/app/hook/config" -> "{\"url\":\"https://context.example/webhooks/github\",\"content_type\":\"json\",\"insecure_ssl\":\"0\",\"secret\":\"********\"}";
                 default -> throw new AssertionError("unexpected App request");
@@ -100,7 +102,7 @@ class GitHubAppIntegrationTest {
         webhook.githubApp(app);
         try {
             var result=webhook.reconcile(new RepositoryRecord(UUID.randomUUID(),"acme","library","https://github.com/acme/library.git","team","main","LIBRARY","/repos/acme/library"));
-            assertEquals("APP",result.mode());assertNull(result.repositoryHookId());assertEquals(3,calls.get());
+            assertEquals("APP",result.mode());assertNull(result.repositoryHookId());assertEquals(6,calls.get());assertEquals(81,result.providerRepositoryId());
         }finally{webhook.stop();app.stop();}
     }
     private GitHubAppIntegration app(Path pem,GitHubAppIntegration.Exchange exchange){return new GitHubAppIntegration(props(),json,settings(pem),Clock.fixed(NOW,ZoneOffset.UTC),exchange,

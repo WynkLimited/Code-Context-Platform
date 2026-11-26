@@ -81,7 +81,7 @@ public class CodeContextTools {
 SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,n.node_type,n.symbol,n.qualified_name,n.file_path,n.start_line,n.end_line
           FROM code_nodes n JOIN index_generations g ON g.id=n.generation_id AND g.published=true
           JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=?
-          WHERE (n.symbol ILIKE ? OR coalesce(n.qualified_name,'') ILIKE ?)""";
+          WHERE r.enabled AND (n.symbol ILIKE ? OR coalesce(n.qualified_name,'') ILIKE ?)""";
         if(repository!=null&&!repository.isBlank()){sql+=" AND r.owner||'/'||r.name=?";args.add(repository);}
         sql+=" ORDER BY 1,n.start_line LIMIT 100";
         return objectMapper.writeValueAsString(jdbc.queryForList(sql,args.toArray()));

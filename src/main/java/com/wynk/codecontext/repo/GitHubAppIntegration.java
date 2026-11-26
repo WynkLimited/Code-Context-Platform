@@ -32,7 +32,7 @@ public final class GitHubAppIntegration {
         @Override public String toString(){return "GitHubAppSettings[credentials redacted]";}
     }
     @FunctionalInterface interface Exchange {JsonNode send(String method,URI address,String credential,String body)throws Exception;}
-    private record Credential(String token,Instant expires) {
+    private record Credential(String token,Instant expires,long repositoryId) {
         @Override public String toString(){return "GitHubAppCredential[redacted]";}
     }
     private final Settings settings;
@@ -62,6 +62,13 @@ public final class GitHubAppIntegration {
     public boolean enabled(){return !settings.clientId().isBlank()||!settings.privateKeyFile().isBlank();}
     public boolean configured(){return !settings.clientId().isBlank()&&!settings.privateKeyFile().isBlank();}
     boolean webhookConfigured(){return configured()&&!settings.callbackBase().isBlank();}
+    String configurationIdentity(){return settings.clientId()+"\n"+settings.apiBase();}
+    String callbackUrl() {
+        URI callback=URI.create(settings.callbackBase());
+        if(!"https".equals(callback.getScheme())||callback.getHost()==null||callback.getUserInfo()!=null||callback.getQuery()!=null||callback.getFragment()!=null)
+            throw new IllegalArgumentException("GitHub App callback base must be HTTPS without credentials, query or fragment");
+        return settings.callbackBase().replaceAll("/+$","")+"/webhooks/github";
+    }
     @jakarta.annotation.PostConstruct public void validateKeyConfiguration() {
         if(!enabled())return;
         try {jwt();}catch(Exception invalid){throw new IllegalStateException("GitHub App identifier and mounted RSA PKCS8 key configuration are invalid");}
@@ -88,11 +95,13 @@ public final class GitHubAppIntegration {
             if(scope.path("total_count").asInt()!=1||!scope.path("repositories").isArray()||scope.path("repositories").size()!=1
                     ||!repository.equalsIgnoreCase(scope.path("repositories").get(0).path("full_name").asText()))
                 throw new IllegalStateException("GitHub installation credential is not restricted to the requested repository");
+            long repositoryId=scope.path("repositories").get(0).path("id").asLong();
+            if(repositoryId<=0)throw new IllegalStateException("GitHub did not identify the scoped repository");
             Instant until=expiry.minusSeconds(60).isBefore(now.plusSeconds(300))?expiry.minusSeconds(60):now.plusSeconds(300);
-            tokens.put(repository,new Credential(token,until));return token;
+            tokens.put(repository,new Credential(token,until,repositoryId));return token;
         }catch(Exception failure){throw new IllegalStateException("GitHub App read-only repository authorization failed ("+failure.getClass().getSimpleName()+")");}
     }
-    public void verifyCentralWebhook(RepositoryRecord record)throws Exception {
+    public synchronized long verifyCentralWebhook(RepositoryRecord record)throws Exception {
         requireConfigured();String repository=repository(record.cloneUrl());
         if(!repository.equalsIgnoreCase(record.key()))throw new IllegalArgumentException("GitHub App repository identity differs from registration");
         String jwt=jwt();installation(repository,jwt);
@@ -100,14 +109,13 @@ public final class GitHubAppIntegration {
         if(!hasPush(app.path("events")))throw new IllegalStateException("GitHub App must subscribe to push events");
         requireReadOnly(app.path("permissions"));
         var hook=call("GET","/app/hook/config",jwt,null);
-        URI callback=URI.create(settings.callbackBase());
-        if(!"https".equals(callback.getScheme())||callback.getHost()==null||callback.getUserInfo()!=null||callback.getQuery()!=null||callback.getFragment()!=null)
-            throw new IllegalArgumentException("GitHub App callback base must be HTTPS without credentials, query or fragment");
-        String expected=settings.callbackBase().replaceAll("/+$","")+"/webhooks/github";
+        String expected=callbackUrl();
         if(!expected.equals(hook.path("url").asText())||!"json".equals(hook.path("content_type").asText())
                 ||!"0".equals(hook.path("insecure_ssl").asText())||hook.path("secret").asText("").isBlank())
             throw new IllegalStateException("GitHub App central webhook configuration needs operator correction");
         // The provider masks its secret. Only a fresh HMAC-verified delivery can prove key agreement.
+        contentToken(record.cloneUrl());
+        return tokens.get(repository).repositoryId();
     }
     private long installation(String repository,String jwt)throws Exception {
         var installation=call("GET","/repos/"+repository+"/installation",jwt,null);

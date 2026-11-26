@@ -43,6 +43,11 @@ public class GitRepositoryManager {
     public void validateRegistrationUrl(String url) {
         try {validateUrl(url);}catch(IOException failure){throw new IllegalArgumentException("repository URL is not accessible",failure);}
     }
+    public static void requireProviderIdentity(String url,String owner,String name) {
+        var uri=java.net.URI.create(url);
+        if("https".equalsIgnoreCase(uri.getScheme())&&!uri.getPath().replaceFirst("\\.git$","").equalsIgnoreCase("/"+owner+"/"+name))
+            throw new IllegalArgumentException("registered repository identity must match its Git provider URL");
+    }
 
     /** Read-only ref advertisement verifies access and discovers symbolic HEAD without build execution. */
     public String verifyAccessAndBranch(String url,String requested) {
@@ -132,6 +137,15 @@ public class GitRepositoryManager {
     }
 
     /** Removes a repository mirror under the configured root; refuses symlink escapes. */
+    public void deleteMirrorIfOriginMatches(RepositoryRecord repo)throws IOException {
+        Path root=safeRoot();Path mirror=root.resolve(safeComponent(repo.owner())).resolve(safeComponent(repo.name())).normalize();
+        PathContainment.rejectSymlinkAncestors(root,mirror.resolve(".git/config"));
+        if(Files.exists(mirror.resolve(".git")))try(Git checkout=Git.open(mirror.toFile())) {
+            if(!repo.cloneUrl().equals(checkout.getRepository().getConfig().getString("remote","origin","url")))
+                throw new IOException("old mirror origin changed");
+        }
+        deleteMirror(repo);
+    }
     public void deleteMirror(RepositoryRecord repo) throws IOException {
         Path root = safeRoot();
         Path mirror = root.resolve(safeComponent(repo.owner())).resolve(safeComponent(repo.name())).normalize();

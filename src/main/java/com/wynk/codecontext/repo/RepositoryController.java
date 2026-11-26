@@ -22,26 +22,32 @@ public class RepositoryController {
     private final GitRepositoryManager git; private final RepositoryIndexLeaseManager leases;
     private final GenerationRetentionService retention; private final TransactionTemplate transactions;
     private final RepositoryOnboarding onboarding;
+    private final RepositoryLifecycle lifecycle;
     @org.springframework.beans.factory.annotation.Autowired
     public RepositoryController(RepositoryStore s, CodeContextProperties p, JdbcTemplate j, GitRepositoryManager git,
                                 RepositoryIndexLeaseManager leases, GenerationRetentionService retention,
-                                PlatformTransactionManager tx, RepositoryOnboarding onboarding) {
+                                PlatformTransactionManager tx, RepositoryOnboarding onboarding,RepositoryLifecycle lifecycle) {
         store=s;props=p;jdbc=j;this.git=git;this.leases=leases;this.retention=retention;
         this.transactions=new TransactionTemplate(tx);
         this.onboarding=onboarding;
+        this.lifecycle=lifecycle;
     }
     @PostMapping public RepositoryRecord onboard(@Valid @RequestBody OnboardRequest request, Authentication auth) {
         if(auth.getAuthorities().stream().noneMatch(a->a.getAuthority().equals("ROLE_ADMIN")))throw new org.springframework.security.access.AccessDeniedException("repository onboarding requires an administrator key");
         if(!request.owner().matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")||!request.name().matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")||request.owner().equals("..")||request.name().equals(".."))throw new IllegalArgumentException("owner and name must be safe repository components");
         if(request.type()!=null&&!java.util.Set.of("SERVICE","LIBRARY").contains(request.type().toUpperCase(java.util.Locale.ROOT)))throw new IllegalArgumentException("repository type must be SERVICE or LIBRARY");
         String team=(String)auth.getPrincipal();
+        GitRepositoryManager.requireProviderIdentity(request.cloneUrl(),request.owner(),request.name());
         git.validateRegistrationUrl(request.cloneUrl());
         String branch=git.verifyAccessAndBranch(request.cloneUrl(),request.defaultBranch());
         Path mirror=Path.of(props.repositoryRoot()).toAbsolutePath().normalize().resolve(request.owner()).resolve(request.name());
         return transactions.execute(status->{
             // Serialize duplicate registrations before testing configuration, including across replicas.
             jdbc.queryForObject("SELECT pg_advisory_xact_lock(hashtextextended(?,0))",Object.class,request.owner()+"/"+request.name());
-            boolean reactivated=store.findAny(request.owner(),request.name()).isPresent()&&store.find(request.owner(),request.name()).isEmpty();
+            lifecycle.requireMirrorAvailable(mirror,null);
+            var previous=store.findAny(request.owner(),request.name());
+            previous.ifPresent(repository->lifecycle.requireSettled(repository.id()));
+            boolean reactivated=previous.isPresent()&&store.find(request.owner(),request.name()).isEmpty();
             store.find(request.owner(),request.name()).ifPresent(existing->{
                 if(!existing.cloneUrl().equals(request.cloneUrl())||!existing.defaultBranch().equals(branch)
                         ||!existing.repositoryType().equalsIgnoreCase(request.type()==null?"SERVICE":request.type()))
@@ -51,8 +57,8 @@ public class RepositoryController {
             RepositoryRecord repo=store.insert(request.owner(),request.name(),request.cloneUrl(),team,branch,
                     request.type()==null?"SERVICE":request.type().toUpperCase(java.util.Locale.ROOT),mirror.toString());
             jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES(?,?) ON CONFLICT DO NOTHING",team,repo.id());
-            onboarding.schedule(repo);
-            if(reactivated)onboarding.restart(repo);
+            if(reactivated)lifecycle.reactivate(previous.orElseThrow(),repo);
+            else onboarding.schedule(repo);
             return repo;
         });
     }
@@ -70,12 +76,28 @@ public class RepositoryController {
         return store.find(owner,name).filter(r->jdbc.queryForObject("SELECT count(*) FROM team_repository_access WHERE team=? AND repository_id=?",Integer.class,auth.getPrincipal(),r.id())>0)
                 .orElseThrow(()->new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND,"repository not found or access denied"));
     }
+    @PatchMapping("/{owner}/{name}") public Map<String,Object> update(@PathVariable String owner,@PathVariable String name,
+            @RequestBody RepositoryLifecycle.Update request,Authentication auth) {
+        requireAdmin(auth);
+        var repository=store.findAny(owner,name).orElseThrow(()->new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND));
+        return lifecycle.update(repository.id(),String.valueOf(auth.getPrincipal()),request);
+    }
+    @GetMapping("/by-id/{id}/lifecycle") public Map<String,Object> lifecycleStatus(@PathVariable UUID id,Authentication auth) {
+        requireAdmin(auth);return lifecycle.status(id,String.valueOf(auth.getPrincipal()));
+    }
+    @PostMapping("/by-id/{id}/lifecycle/retry") public Map<String,Object> retryLifecycle(@PathVariable UUID id,Authentication auth) {
+        requireAdmin(auth);lifecycle.retry(id,String.valueOf(auth.getPrincipal()));return lifecycle.status(id,String.valueOf(auth.getPrincipal()));
+    }
+    private static void requireAdmin(Authentication auth) {
+        if(auth.getAuthorities().stream().noneMatch(a->a.getAuthority().equals("ROLE_ADMIN")))
+            throw new org.springframework.security.access.AccessDeniedException("repository lifecycle updates require an administrator key");
+    }
     @DeleteMapping("/{owner}/{name}") public Map<String,Object> disable(@PathVariable String owner,@PathVariable String name,
                                                                         @RequestParam(defaultValue="false") boolean purge,
                                                                         Authentication auth) throws Exception {
         if(auth.getAuthorities().stream().noneMatch(a->a.getAuthority().equals("ROLE_ADMIN")))throw new org.springframework.security.access.AccessDeniedException("repository removal requires an administrator key");
         if(purge) return hardPurge(owner,name);
-        RepositoryRecord repo=store.find(owner,name).orElseThrow();
+        RepositoryRecord repo=store.findAny(owner,name).orElseThrow();
         transactions.executeWithoutResult(status->store.disable(repo.id()));
         return Map.of("repository",repo.key(),"status","DISABLED","historyPreserved",true);
     }

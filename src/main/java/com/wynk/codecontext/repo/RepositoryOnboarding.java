@@ -10,6 +10,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Map;
+import java.util.UUID;
 
 /** Registration and the initial job are committed together; existing durable workers recover it. */
 @Service
@@ -75,10 +76,10 @@ public final class RepositoryOnboarding {
             var repository=jdbc.query("SELECT owner,name FROM repositories WHERE id=? AND enabled",(rs,n)->repositories.find(rs.getString(1),rs.getString(2)).orElseThrow(),id)
                     .stream().findFirst().orElseThrow();
             var hook=webhooks.reconcile(repository);
-            String configuration=webhooks.configurationHash();
+            String configuration=webhooks.configurationHash(repository);
             transactions.executeWithoutResult(status->{
                 lease.fenceTransaction();
-                int changed=jdbc.update("UPDATE repository_onboarding SET webhook_state='READY',webhook_id=?,webhook_mode=?,webhook_verified_at=CASE WHEN webhook_configuration_hash IS DISTINCT FROM ? OR webhook_verified_at IS NULL THEN now() ELSE webhook_verified_at END,webhook_configuration_hash=?,webhook_attempt=0,webhook_error=NULL,webhook_claim=NULL,webhook_claim_until=NULL,webhook_available_at=now()+interval '1 hour',updated_at=now() WHERE repository_id=? AND webhook_claim=?",hook.repositoryHookId(),hook.mode(),configuration,configuration,id,token);
+                int changed=jdbc.update("UPDATE repository_onboarding SET webhook_state='READY',webhook_id=?,webhook_mode=?,webhook_callback_url=?,provider_repository_id=?,webhook_verified_at=CASE WHEN webhook_configuration_hash IS DISTINCT FROM ? OR webhook_verified_at IS NULL THEN now() ELSE webhook_verified_at END,webhook_configuration_hash=?,webhook_attempt=0,webhook_error=NULL,webhook_claim=NULL,webhook_claim_until=NULL,webhook_available_at=now()+interval '1 hour',updated_at=now() WHERE repository_id=? AND webhook_claim=?",hook.repositoryHookId(),hook.mode(),hook.callbackUrl(),hook.providerRepositoryId(),configuration,configuration,id,token);
                 if(changed==1)indexing.enqueue(repository.owner(),repository.name(),"HEAD","webhook-catchup:"+repository.id()+":"+configuration);
             });
         }catch(Exception failure) {
@@ -98,14 +99,19 @@ public final class RepositoryOnboarding {
                 var job=indexing.enqueue(repository.owner(),repository.name(),"HEAD","onboarding-retry:"+java.util.UUID.randomUUID());
                 jdbc.update("UPDATE repository_onboarding SET initial_job_id=?,updated_at=now() WHERE repository_id=?",job,repository.id());
             }
-            jdbc.update("UPDATE repository_onboarding SET webhook_state=?,webhook_attempt=0,webhook_available_at=now(),webhook_error=NULL,updated_at=now() WHERE repository_id=? AND webhook_state IN ('FAILED','BLOCKED')",
+            jdbc.update("UPDATE repository_onboarding SET webhook_state=?,webhook_attempt=0,webhook_available_at=now(),webhook_error=NULL,updated_at=now() WHERE repository_id=? AND webhook_state IN ('FAILED','BLOCKED','READY')",
                     webhooks.configured()?"QUEUED":"BLOCKED",repository.id());
         });
     }
-    public void restart(RepositoryRecord repository) {
-        if(!TransactionSynchronizationManager.isActualTransactionActive())throw new IllegalStateException("reactivation requires the registration transaction");
-        var job=indexing.enqueue(repository.owner(),repository.name(),"HEAD","onboarding-reactivate:"+java.util.UUID.randomUUID());
-        jdbc.update("UPDATE repository_onboarding SET initial_job_id=?,updated_at=now() WHERE repository_id=?",job,repository.id());
+    public void trackTransition(RepositoryRecord repository,UUID job) {
+        if(!TransactionSynchronizationManager.isActualTransactionActive())throw new IllegalStateException("configuration transition requires a transaction");
+        boolean local=repository.cloneUrl().startsWith("file:");
+        jdbc.update("""
+            INSERT INTO repository_onboarding(repository_id,initial_job_id,webhook_state,webhook_mode)
+            VALUES(?,?,?,?) ON CONFLICT(repository_id) DO UPDATE SET initial_job_id=excluded.initial_job_id,
+              webhook_state=excluded.webhook_state,webhook_mode=excluded.webhook_mode,webhook_attempt=0,
+              webhook_available_at=now(),webhook_error=NULL,updated_at=now()
+            """,repository.id(),job,local?"NOT_APPLICABLE":webhooks.configured()?"QUEUED":"BLOCKED",local?"NONE":webhooks.mode());
     }
     @jakarta.annotation.PreDestroy public void stop(){worker.shutdownNow();}
 
@@ -118,7 +124,7 @@ public final class RepositoryOnboarding {
               o.created_at,o.updated_at
             FROM repository_onboarding o LEFT JOIN index_jobs j ON j.id=o.initial_job_id
             WHERE o.repository_id=?
-            """,webhooks.signingKeyFingerprint(),webhooks.configurationHash(),webhooks.mode(),repository.id());
+            """,webhooks.signingKeyFingerprint(),webhooks.configurationHash(repository),webhooks.mode(),repository.id());
         if(rows.isEmpty())return Map.of("repository",repository.key(),"state","LEGACY_REGISTRATION",
                 "action","Submit the unchanged registration to schedule automatic initial indexing.");
         var result=new java.util.LinkedHashMap<>(rows.getFirst());

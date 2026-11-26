@@ -42,6 +42,7 @@ class RepositoryOnboardingPostgresIT {
             indexing=new IndexingService(jdbc,repositories,null,props,null,null,null,tx,null,null,null,null,null,leases);
             var json=JsonMapper.builder().build();var created=new AtomicBoolean();var creates=new AtomicInteger();
             GitHubWebhookClient.Exchange provider=(method,uri,body)->{
+                        if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":81,\"full_name\":\"acme/library\"}");
                         if(method.equals("GET"))return json.readTree(created.get()?"[{\"id\":91,\"config\":{\"url\":\"https://context.example/webhooks/github/acme/library\"}}]":"[]");
                         if(method.equals("POST")){creates.incrementAndGet();created.set(true);throw new java.io.IOException("simulated lost provider response");}
                         return json.readTree("{\"id\":91,\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"https://context.example/webhooks/github/acme/library\"}}");

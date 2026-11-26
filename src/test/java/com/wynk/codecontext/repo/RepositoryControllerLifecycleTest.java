@@ -33,6 +33,7 @@ class RepositoryControllerLifecycleTest {
         AtomicBoolean disabled=new AtomicBoolean();
         var store=new RepositoryStore(new JdbcTemplate()) {
             @Override public Optional<RepositoryRecord> find(String owner,String name){return Optional.of(repo);}
+            @Override public Optional<RepositoryRecord> findAny(String owner,String name){return Optional.of(repo);}
             @Override public void disable(UUID repositoryId){assertEquals(id,repositoryId);disabled.set(true);}
         };
         var controller=controller(store,null,null,null);
@@ -113,7 +114,7 @@ class RepositoryControllerLifecycleTest {
                 git==null?new GitRepositoryManager(props()):git,
                 leases==null?mock(RepositoryIndexLeaseManager.class):leases,
                 retention==null?mock(GenerationRetentionService.class):retention,
-                syncTx,mock(RepositoryOnboarding.class));
+                syncTx,mock(RepositoryOnboarding.class),mock(RepositoryLifecycle.class));
     }
     private static CodeContextProperties props() {
         return new CodeContextProperties("/tmp/repos","/tmp/local","/tmp/zoekt","t=t","a=a","","","github.com","http://localhost",

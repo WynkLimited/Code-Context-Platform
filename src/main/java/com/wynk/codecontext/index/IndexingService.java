@@ -68,7 +68,10 @@ public class IndexingService {
         metrics.leaseExpired(expired);
         while(slots.tryAcquire()) {
             List<UUID> ids=jdbc.query("""
-WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_at<=now() ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1)
+WITH candidate AS (SELECT j.id FROM index_jobs j JOIN repositories r ON r.id=j.repository_id
+              WHERE j.state='QUEUED' AND j.available_at<=now() AND r.enabled
+                AND NOT EXISTS(SELECT 1 FROM repository_lifecycle_work w WHERE w.repository_id=j.repository_id AND w.state<>'DONE')
+              ORDER BY j.available_at,j.created_at FOR UPDATE OF j SKIP LOCKED LIMIT 1)
               UPDATE index_jobs SET state='RUNNING',attempt=attempt+1,updated_at=now() WHERE id=(SELECT id FROM candidate) RETURNING id""",(rs,n)->rs.getObject(1,UUID.class));
             if(ids.isEmpty()){slots.release();break;}
             metrics.indexClaimed();
@@ -79,6 +82,13 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
         RepositoryRecord repo=repos.find(owner,name).orElseThrow();
         String key=(delivery==null||delivery.isBlank()?repo.id()+":"+sha:delivery);
         return jdbc.queryForObject("INSERT INTO index_jobs(repository_id,commit_sha,requested_commit_sha,idempotency_key,state) VALUES(?,?,?,?,'QUEUED') ON CONFLICT(idempotency_key) DO UPDATE SET idempotency_key=excluded.idempotency_key RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,sha,key);
+    }
+    public UUID enqueueConfigurationChange(UUID repository,long revision) {
+        return jdbc.queryForObject("""
+            INSERT INTO index_jobs(repository_id,commit_sha,requested_commit_sha,idempotency_key,state)
+            SELECT id,'HEAD','HEAD',?,'QUEUED' FROM repositories WHERE id=? AND configuration_revision=?
+            ON CONFLICT(idempotency_key) DO UPDATE SET idempotency_key=excluded.idempotency_key RETURNING id
+            """,UUID.class,"configuration:"+repository+":"+revision,repository,revision);
     }
     private void process(UUID jobId) {
         Job job=jdbc.queryForObject("SELECT repository_id,commit_sha,attempt FROM index_jobs WHERE id=?",(rs,n)->new Job(rs.getObject(1,UUID.class),rs.getString(2),rs.getInt(3)),jobId);
@@ -111,9 +121,9 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     }
     private void processLocked(UUID jobId,Job job,RepositoryIndexLeaseManager.Lease lease) {
         try {
-            Boolean enabled=jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,job.repositoryId);
-            if(!Boolean.TRUE.equals(enabled)){jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository disabled',updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",jobId,job.attempt);return;}
-            RepositoryRecord repo=jdbc.queryForObject("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE id=?",(rs,n)->new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),job.repositoryId);
+            var snapshots=jdbc.query("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path,configuration_revision FROM repositories WHERE id=? AND enabled",(rs,n)->new RepositorySnapshot(new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),rs.getLong(9)),job.repositoryId);
+            if(snapshots.isEmpty()){jdbc.update("UPDATE index_jobs SET state='FAILED',error='repository disabled',updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",jobId,job.attempt);return;}
+            var repositorySnapshot=snapshots.getFirst();RepositoryRecord repo=repositorySnapshot.repository();
             Path root=git.sync(repo); String sha=git.head(root);
             lease.assertOwned();
             recordActualCommit(jobId,job.attempt,sha);
@@ -124,12 +134,12 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             if(sha.equals(published)&&embeddingSpace.fingerprint().equals(publishedSpace)) {
                 var currentIndex=contractIndexes.published(repo.id());
                 if(currentIndex.isPresent() && contractIndexes.freshness(currentIndex.get())==ContractModels.IndexFreshness.CURRENT) {
-                    transactions.execute(status->{lease.fenceTransaction(); markSucceeded(jobId,job.attempt,currentIndex.get().generationId()); return null;});return;
+                    transactions.execute(status->{lease.fenceTransaction(); requireConfiguration(repo.id(),repositorySnapshot.revision());markSucceeded(jobId,job.attempt,currentIndex.get().generationId()); return null;});return;
                 }
             }
             List<GitRepositoryManager.SourceFile> files=git.filesAt(root,sha);
             Long generation=jdbc.queryForObject("SELECT coalesce(max(generation),0)+1 FROM index_generations WHERE repository_id=?",Long.class,repo.id());
-            UUID gen=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published,embedding_fingerprint,embedding_metadata) VALUES(?,?,?,false,?,?::jsonb) RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,generation,embeddingSpace.fingerprint(),objectMapper.writeValueAsString(embeddingSpace.metadata()));
+            UUID gen=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published,embedding_fingerprint,embedding_metadata,repository_revision) VALUES(?,?,?,false,?,?::jsonb,?) RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,generation,embeddingSpace.fingerprint(),objectMapper.writeValueAsString(embeddingSpace.metadata()),repositorySnapshot.revision());
             com.wynk.codecontext.ops.IndexingLogContext.generation(gen);
             UUID previous=jdbc.query("SELECT id FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getObject(1,UUID.class),repo.id()).stream().findFirst().orElse(null);
             if(previous!=null) {
@@ -157,7 +167,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             embeddingSpace.requireCurrent(embeddings);
             // Atomic visibility: previous generation stays published until every stage above succeeds.
             lease.assertOwned();
-            transactions.execute(status->{lease.fenceTransaction();
+            transactions.execute(status->{lease.fenceTransaction();requireConfiguration(repo.id(),repositorySnapshot.revision());
                 jdbc.update("UPDATE index_generations SET published=false WHERE repository_id=?",repo.id());
                 int publishedRows=jdbc.update("UPDATE index_generations SET published=true WHERE id=? AND EXISTS(SELECT 1 FROM repositories r WHERE r.id=index_generations.repository_id AND r.enabled=true)",gen);
                 if(publishedRows!=1)throw new IllegalStateException("repository disabled before generation publication");
@@ -181,6 +191,10 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
         if(commit==null||!commit.matches("[0-9a-fA-F]{40}"))throw new IllegalArgumentException("invalid resolved indexing commit");
         int changed=jdbc.update("UPDATE index_jobs SET commit_sha=?,updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",commit,jobId,attempt);
         if(changed!=1)throw new IllegalStateException("index job attempt ownership changed before commit capture");
+    }
+    private void requireConfiguration(UUID repository,long revision) {
+        var current=jdbc.query("SELECT configuration_revision FROM repositories WHERE id=? AND enabled FOR SHARE",(rs,n)->rs.getLong(1),repository);
+        if(current.isEmpty()||current.getFirst()!=revision)throw new IllegalStateException("repository configuration changed before publication");
     }
     void markSucceeded(UUID jobId,int attempt,UUID generation) {
         java.util.Objects.requireNonNull(generation,"successful indexing requires an exact generation");
@@ -530,6 +544,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
     }
     private static String truncate(String s){if(s==null)return "indexing failed";return s.substring(0,Math.min(s.length(),1500));}
     private record Job(UUID repositoryId,String sha,int attempt){}
+    private record RepositorySnapshot(RepositoryRecord repository,long revision){}
     private record Symbol(String type,String name,String qualified,int start,int end,String text,int textStart,String owner,int offsetStart,int offsetEnd){
         private Symbol(String type,String name,String qualified,int start,int end,String text){this(type,name,qualified,start,end,text,start,null,-1,-1);}
     }

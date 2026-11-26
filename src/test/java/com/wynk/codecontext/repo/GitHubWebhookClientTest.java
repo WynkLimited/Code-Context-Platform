@@ -22,6 +22,7 @@ class GitHubWebhookClientTest {
         var client=client((method,uri,body)->{
             methods.add(method);
             assertEquals("api.github.com",uri.getHost());
+            if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":81,\"full_name\":\"acme/library\"}");
             if(method.equals("GET"))return json.readTree("[{\"id\":7,\"config\":{\"url\":\""+callback+"\"}}]");
             assertEquals("/repos/acme/library/hooks/7",uri.getPath());
             var config=json.readTree(body);
@@ -30,18 +31,19 @@ class GitHubWebhookClientTest {
             assertEquals(List.of("push"),json.convertValue(config.path("events"),List.class));
             return json.readTree("{\"id\":7,\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\""+callback+"\"}}");
         });
-        assertEquals(7,client.reconcile(repository).repositoryHookId());assertEquals(List.of("GET","PATCH"),methods);
+        assertEquals(7,client.reconcile(repository).repositoryHookId());assertEquals(List.of("GET","GET","PATCH"),methods);
     }
     @Test void createsOnlyWhenNoMatchingHookAndRejectsUnconfirmedOrDuplicateProviderResults() throws Exception {
         var methods=new ArrayList<String>();
         var fresh=client((method,uri,body)->{
             methods.add(method);
+            if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":81,\"full_name\":\"acme/library\"}");
             return json.readTree(method.equals("GET")?"[]":"{\"id\":8,\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\""+callback+"\"}}");
         });
-        assertEquals(8,fresh.reconcile(repository).repositoryHookId());assertEquals(List.of("GET","POST"),methods);
-        var unconfirmed=client((method,uri,body)->json.readTree(method.equals("GET")?"[]":"{\"id\":8,\"active\":false}"));
+        assertEquals(8,fresh.reconcile(repository).repositoryHookId());assertEquals(List.of("GET","GET","POST"),methods);
+        var unconfirmed=client((method,uri,body)->json.readTree(uri.getPath().equals("/repos/acme/library")?"{\"id\":81,\"full_name\":\"acme/library\"}":method.equals("GET")?"[]":"{\"id\":8,\"active\":false}"));
         assertThrows(IllegalStateException.class,()->unconfirmed.reconcile(repository));
-        var duplicate=client((method,uri,body)->json.readTree("[{\"id\":7,\"config\":{\"url\":\""+callback+"\"}},{\"id\":8,\"config\":{\"url\":\""+callback+"\"}}]"));
+        var duplicate=client((method,uri,body)->json.readTree(uri.getPath().equals("/repos/acme/library")?"{\"id\":81,\"full_name\":\"acme/library\"}":"[{\"id\":7,\"config\":{\"url\":\""+callback+"\"}},{\"id\":8,\"config\":{\"url\":\""+callback+"\"}}]"));
         assertThrows(IllegalStateException.class,()->duplicate.reconcile(repository));
     }
     @Test void rejectsIdentityMismatchAndNeverBorrowsReadOnlyGitCredential() {
@@ -61,6 +63,30 @@ class GitHubWebhookClientTest {
         body.onNext(List.of(java.nio.ByteBuffer.wrap(new byte[]{1})));
         assertTrue(cancelled.get());
         assertThrows(java.util.concurrent.CompletionException.class,()->body.getBody().toCompletableFuture().join());
+    }
+    @Test void retiresOnlyThePreviouslyOwnedCallbackAndDoesNotInferAbsenceFromRepositoryDenial() throws Exception {
+        var methods=new ArrayList<String>();
+        var owned=client((method,uri,body)->{
+            methods.add(method);
+            if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":81,\"full_name\":\"acme/library\"}");
+            if(method.equals("GET"))return json.readTree("{\"id\":7,\"config\":{\"url\":\""+callback+"\"}}");
+            assertEquals("DELETE",method);assertEquals("/repos/acme/library/hooks/7",uri.getPath());return json.readTree("null");
+        });
+        assertEquals(GitHubWebhookClient.Retirement.DELETED,owned.retireOwnedHook(repository,7,callback,81L,true));
+        assertEquals(List.of("GET","GET","DELETE"),methods);
+        var otherCallback=client((method,uri,body)->{
+            assertNotEquals("DELETE",method,"a different callback must never be deleted");
+            return json.readTree(uri.getPath().equals("/repos/acme/library")?"{\"id\":81,\"full_name\":\"acme/library\"}":"{\"id\":7,\"config\":{\"url\":\"https://other.example/hooks\"}}");
+        });
+        assertThrows(IllegalStateException.class,()->otherCallback.retireOwnedHook(repository,7,callback,81L,true));
+        var denied=client((method,uri,body)->{throw new GitHubWebhookClient.ProviderFailure(404);});
+        assertThrows(GitHubWebhookClient.ProviderFailure.class,()->denied.retireOwnedHook(repository,7,callback,81L,true),"repository 404 may mean permission denial, not a deleted hook");
+        var absent=client((method,uri,body)->{
+            if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":81,\"full_name\":\"acme/library\"}");
+            throw new GitHubWebhookClient.ProviderFailure(404);
+        });
+        assertEquals(GitHubWebhookClient.Retirement.ABSENT,absent.retireOwnedHook(repository,7,callback,81L,true));
+        assertThrows(GitHubWebhookClient.ProviderFailure.class,()->absent.retireOwnedHook(repository,7,callback,81L,false));
     }
     private GitHubWebhookClient client(GitHubWebhookClient.Exchange exchange) {
         return new GitHubWebhookClient(props(),json,new GitHubWebhookClient.Settings("separate-management-token","https://api.github.com","api.github.com","https://context.example"),exchange,
