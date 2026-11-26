@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `fc6026f6f998efb34a6a64af20a2b90a82e2e697` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45685301216 |
+| Last green mandatory CI SHA | `edfd9df399bffd18d8603bcf923d0c5a7418588d` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751313386 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -44,7 +44,7 @@ Status vocabulary (this ledger):
 | CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | CI b2346ee |
 | CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested+cross-file OpenAPI `$ref` (1.3.0); Avro MCP evolution @ f905835 |
 | CTX-4 | Semantic retrieval | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama; all subsequent seven-case PG gates retained |
-| CTX-4A | Semantic chunk construction | Accurate source ranges, bounded structural/heading chunks | PARTIALLY_IMPLEMENTED | `JavaSourceText`, `BoundedTextChunks`, `IndexingService` | Original design PDF pp. 3–4; Java/source-window regressions pass locally, new persisted-range assertions await CI; tiny-piece merges, heading/config sections and token-aware splitting remain open |
+| CTX-4A | Semantic chunk construction | Accurate source ranges, bounded structural/heading chunks | PARTIALLY_IMPLEMENTED | `JavaSourceText`, `BoundedTextChunks`, `IndexingService` | Original design PDF pp. 3–4; Java/source ranges and generator invalidation verified at edfd9df; fallback 60-line windows implemented locally, pending CI; tiny-piece merges, heading/config sections and token-aware splitting remain open |
 | CTX-4B | Embedding provenance/reuse | Reuse unchanged chunks inside edited files with model/config identity | PARTIALLY_IMPLEMENTED | Existing unchanged-file copying; generator epoch invalidation | Original PDF incremental promise; model digest/config provenance and safe cross-file-edit chunk reuse remain actionable |
 
 ### MCP tools
@@ -116,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | fc6026f: 265 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | edfd9df: 276 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -272,3 +272,15 @@ Three new regressions exercise the constrained child JVM with an independently c
 Indexing attempts now establish a worker-local logging scope with typed UUID job/repository IDs and numeric attempt; the actual synchronized 40-character Git commit and generation UUID are added when known. Structured start/finished events delimit each dispatch, including busy/retry/error exits; finished does not assert successful publication. The scope clears unrelated inherited context, including servlet request identity, and restores the original thread context through try-with-resources. It never copies request headers, arguments, query parameters or source. Existing lease/publication/retry decisions are unchanged.
 
 Three new tests verify exact allowed initial fields, exceptional cleanup/restoration, rejection of unsafe identities and sequential reuse of a real executor thread without previous commit/job leakage. Focused **3 passed**; complete Java21 default suite **282 passed**, zero failures/errors/skips (40.703s); `git diff --check` passed. Actual structured worker events in CI remain IMPLEMENTED_UNVERIFIED until inspection of the next exact-SHA service log. This is durable-job correlation, not arbitrary Reactor propagation or distributed tracing. No migrations/security/tool contracts changed. Source-integrity and checksum PR runs remain in progress; do not claim their new PostgreSQL assertions accepted yet.
+
+
+### Semantic integrity accepted in services — 2026-11-26
+
+Exact SHA `edfd9df399bffd18d8603bcf923d0c5a7418588d` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751313386. Downloaded artifact `target/ci-edfd9df-reports` has **284 successful test cases: 276 unit + seven PostgreSQL + one real HTTPS**, zero failures/errors/skips. SharedLibraryImpactPostgresIT has three passed cases and executed the new inline source-content/line assertions and legacy-generator rebuild assertions, together with existing six-tool registration, authentication, real HTTP impact, incremental equivalence and rollback scenarios. Actual Ollama requests under the application-owned model completed. Five shell tests and the real PostgreSQL logical restore passed, preserving all public-table fingerprints and the pre-mutation JSON/vector witness. This closes the pending service validation for the semantic-integrity slice; broader model provenance, reuse and chunking requirements remain partial.
+
+
+### Fallback source windows — 2026-11-26
+
+Original design's 60-line fallback with ten-line overlap is now applied to FILE chunks, including unsupported languages and parser fallback. Java structural method/class chunks retain their structural boundaries and existing character limit. `BoundedTextChunks` enforces both bounds, reduces overlap when required by character size, advances even for a one-line budget and retains exact physical ranges. Generator 1.10.0 rebuilds prior chunk epochs through the accepted invalidation path.
+
+Two additional regressions require exact windows 1–60, 51–110 and 101–121 for 121 short lines and single-line window progression. Focused **5 passed**; complete Java21 default suite **284 passed**, zero failures/errors/skips (40.881s). The provider fixture now includes a tracked plain-text file and requires those exact PostgreSQL-persisted windows. Those new service assertions remain IMPLEMENTED_UNVERIFIED until the next exact-SHA CI. Existing impact, tool, security and rollback assertions remain intact. `git diff --check` passed. This does not implement Markdown/config sections, tiny structural merges, exact token counting or model provenance/reuse; CTX-4 remains partial.

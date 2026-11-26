@@ -8,6 +8,10 @@ import java.util.List;
 final class BoundedTextChunks {
     record Piece(String text,int firstLine,int lastLine) {}
     static List<Piece> split(String text,int startLine,int maxChars) {
+        return split(text,startLine,maxChars,Integer.MAX_VALUE);
+    }
+    static List<Piece> split(String text,int startLine,int maxChars,int maxLines) {
+        if(maxLines<1)throw new IllegalArgumentException("chunk line limit must be positive");
         int limit=Math.max(512,maxChars),overlapChars=Math.min(300,limit/10);
         String[] lines=text.split("\\r\\n|\\r|\\n",-1);
         // String.lines()/read_file count the terminating delimiter, not a fictitious extra line.
@@ -29,9 +33,9 @@ final class BoundedTextChunks {
                 }
                 blockStart=i+1;continue;
             }
-            if(!block.isEmpty()&&size+1+line.length()>limit) {
+            if(!block.isEmpty()&&(size+1+line.length()>limit||block.size()>=maxLines)) {
                 emit(out,block,startLine+blockStart);
-                int carry=Math.min(10,block.size());
+                int carry=Math.min(10,Math.min(block.size(),maxLines-1));
                 block=new ArrayList<>(block.subList(block.size()-carry,block.size()));
                 size=length(block);
                 while(!block.isEmpty()&&size+1+line.length()>limit) {block.removeFirst();size=length(block);}

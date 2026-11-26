@@ -190,6 +190,9 @@ class SharedLibraryImpactPostgresIT {
         assertTrue(sourceChunks.getFirst().get("content").toString().contains("\nclass: org.acme.Money\n"));
         assertEquals("public String convert(String value) { return value; }",
                 sourceChunks.getFirst().get("content").toString().split("\n---\n",2)[1]);
+        var fallbackWindows=jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='docs/fallback-notes.txt' ORDER BY start_line",String.class,providerV1Generation);
+        assertEquals(List.of("1:60","51:110","101:121"),fallbackWindows,
+                "plain text must persist exact 60-line windows with ten-line overlap");
         assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
                 "Zoekt must expose the indexed provider v1 generation before replacement");
 
@@ -935,6 +938,8 @@ FROM semantic_call_sites WHERE id=?
                 : "[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"owner\",\"type\":\"string\"}]";
         var files = new java.util.LinkedHashMap<String,String>();
         files.put("pom.xml", pom(version, null).replace("fixture","org.acme"));
+        files.put("docs/fallback-notes.txt",java.util.stream.IntStream.rangeClosed(1,121)
+                .mapToObj(line->"Fallback fixture note "+line).collect(java.util.stream.Collectors.joining("\n")));
         files.put("src/main/java/org/acme/Money.java", librarySource(api));
         files.put("src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\""+route+"\") Object find(String id) { return null; } }\n");
         files.put("src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\""+topic+"\", \"payload\"); } }\n");

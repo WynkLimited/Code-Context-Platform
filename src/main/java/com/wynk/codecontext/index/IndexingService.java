@@ -225,7 +225,11 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
         if(symbols.isEmpty()) symbols.add(new Symbol("FILE",file.path(),file.path(),1,Math.max(1,(int)file.content().lines().count()),file.content()));
         for(Symbol symbol:symbols) {
             long node=jdbc.queryForObject("INSERT INTO code_nodes(generation_id,node_type,symbol,qualified_name,file_path,start_line,end_line,language,metadata) VALUES(?,?,?,?,?,?,?,?,jsonb_build_object('blobSha',?)) RETURNING id",Long.class,gen,symbol.type,symbol.name,symbol.qualified,file.path(),symbol.start,symbol.end,ext,file.blobSha());
-            for(Chunk part:split(symbol.text,symbol.textStart,props.maxChunkChars())) {
+            var chunks=symbol.type.equals("FILE")
+                    ?BoundedTextChunks.split(symbol.text,symbol.textStart,props.maxChunkChars(),60).stream()
+                            .map(piece->new Chunk(piece.text(),piece.firstLine(),piece.lastLine())).toList()
+                    :split(symbol.text,symbol.textStart,props.maxChunkChars());
+            for(Chunk part:chunks) {
                 String chunk="repo: "+repo.key()+" | file: "+file.path()+"\n"+(symbol.owner==null?"":"class: "+symbol.owner+"\n")+symbol.type.toLowerCase()+": "+symbol.qualified+"\n---\n"+part.text;
                 String hash=sha256(chunk);float[] vector=embeddings.embed(chunk);
                 if(vector.length!=props.embeddingDimensions())throw new IllegalStateException("embedding dimension mismatch: expected "+props.embeddingDimensions()+" got "+vector.length);
