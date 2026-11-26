@@ -59,9 +59,8 @@ class ApplicationReplicaConsistencyPostgresIT {
             await(()->fixture.zoektContains(candidate,"replicaRevisionTwoMarker"),20,"real Zoekt did not load the unpublished candidate shard");
             for(var session:List.of(first,second)) {
                 session.read(before,"replicaRevisionOneMarker");
-                var search=session.tool("search_code",Map.of("query","replicaRevisionTwoMarker"));
-                assertEquals("COMPLETE",search.path("status").asText());assertTrue(search.path("errors").isEmpty());
-                assertTrue(search.path("results").isEmpty(),"HTTP search must exclude the candidate even after its real shard loads: "+search);
+                session.search(before,"replicaRevisionOneMarker",true);
+                session.search(before,"replicaRevisionTwoMarker",false);
             }
             // Production 30-second heartbeat runs while the indexing thread is held, in a real JVM.
             await(()->fixture.jdbc.queryForObject("SELECT updated_at>? AND state='RUNNING' FROM index_jobs WHERE id=?",Boolean.class,heartbeat,publisher),45,"full application did not renew the active job heartbeat");
@@ -71,9 +70,7 @@ class ApplicationReplicaConsistencyPostgresIT {
             assertEquals(2,fixture.jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=?",Integer.class,repository.id()),"same-commit contender must reuse the freshly published generation");
             for(var session:List.of(first,second)) {
                 session.read(after,"replicaRevisionTwoMarker");
-                var search=session.tool("search_code",Map.of("query","replicaRevisionTwoMarker"));
-                assertEquals("COMPLETE",search.path("status").asText());assertTrue(search.path("errors").isEmpty());
-                assertFalse(search.path("results").isEmpty());assertTrue(search.toString().contains(after));
+                session.search(after,"replicaRevisionTwoMarker",true);
             }
         }
     }
@@ -186,6 +183,22 @@ class ApplicationReplicaConsistencyPostgresIT {
         void read(String commit,String marker) throws Exception {
             var result=tool("read_file",Map.of("repository",REPOSITORY,"path",SOURCE,"startLine",1,"endLine",1));
             assertEquals(commit,result.path("commit").asText());assertTrue(result.path("content").asText().contains(marker),result.toString());
+        }
+        void search(String commit,String query,boolean expectedMatches) throws Exception {
+            var result=tool("search_code",Map.of("query",query));
+            assertEquals("COMPLETE",result.path("status").asText());assertTrue(result.path("errors").isEmpty());
+            assertEquals(1,result.path("results").size(),result.toString());
+            var repository=result.path("results").get(0);
+            assertEquals(REPOSITORY,repository.path("repository").asText());assertEquals(commit,repository.path("commit").asText());
+            var matches=repository.path("matches");var files=matches.path("Files");
+            if(expectedMatches) {
+                assertTrue(matches.path("MatchCount").asInt(-1)>0,"published text must remain searchable: "+result);
+                assertTrue(files.isArray()&&!files.isEmpty(),result.toString());
+                assertEquals(SOURCE,files.get(0).path("FileName").asText());
+            } else {
+                assertEquals(0,matches.path("MatchCount").asInt(-1),"candidate matches must remain invisible: "+result);
+                assertTrue(files.isNull()||(files.isArray()&&files.isEmpty()),"candidate file matches must remain invisible: "+result);
+            }
         }
         JsonNode tool(String name,Map<String,Object> arguments) throws Exception {
             var response=post(Map.of("jsonrpc","2.0","id",sequence++,"method","tools/call","params",Map.of("name",name,"arguments",arguments)));
