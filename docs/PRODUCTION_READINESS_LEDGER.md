@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `78f033922af1b8f955bb36a4794886372bf19be9` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45682228272 |
+| Last green mandatory CI SHA | `fc6026f6f998efb34a6a64af20a2b90a82e2e697` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45685301216 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -23,13 +23,14 @@ Status vocabulary (this ledger):
 
 **Session progress (this closure):** Ledger + MultiRepo parity; proposed-change MCP; independence gate; webhook freshness+PG dedupe; nested+cross-file OpenAPI; Avro/OpenAPI MCP evolution; hop incompleteness flags; admin key status; REST ambiguity PG; subprocess env scrub; mandatory CI green @ `f0a36ad`.
 
-**Overall:** **NOT READY FOR PRODUCTION** — external blockers remain (OS sandbox, DR/PITR, k8s, Gradle, representative perf, multi-JVM crash drills).
+**Overall:** **NOT READY FOR PRODUCTION** — actionable implementation gaps (including Gradle, arbitrary cross-repository method propagation, semantic chunk reuse/provenance and full-application concurrency drills) remain separate from external staging, OS containment, production recovery and representative pilot validation.
 
 **Next executable actions (priority):**
 
 1. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
 2. Full-application multi-instance crash/heartbeat drills (IDX-1/2) beyond the verified separate-JVM lease/publication workers.
-3. External blockers: OS sandbox, DR/PITR drill, k8s smoke, Gradle (XRI-GRADLE), representative perf.
+3. Semantic chunk correctness, model provenance and reuse within edited files; safe Gradle resolution (XRI-GRADLE), Maven reactor visibility and lifecycle onboarding depth.
+4. External blockers: OS sandbox, production DR/PITR drill, k8s smoke and representative pilot capacity/client evidence.
 
 ---
 
@@ -42,7 +43,9 @@ Status vocabulary (this ledger):
 | CTX-1 | Text index | Zoekt exact/regex search with evidence | VERIFIED_PRODUCTION_READY | `ZoektSearchService`, `ZoektIndexer` | CI b2346ee SharedLibrary IT |
 | CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | CI b2346ee |
 | CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested+cross-file OpenAPI `$ref` (1.3.0); Avro MCP evolution @ f905835 |
-| CTX-4 | Semantic index | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama |
+| CTX-4 | Semantic retrieval | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama; all subsequent seven-case PG gates retained |
+| CTX-4A | Semantic chunk construction | Accurate source ranges, bounded structural/heading chunks | PARTIALLY_IMPLEMENTED | `JavaSourceText`, `BoundedTextChunks`, `IndexingService` | Original design PDF pp. 3–4; Java/source-window regressions pass locally, new persisted-range assertions await CI; tiny-piece merges, heading/config sections and token-aware splitting remain open |
+| CTX-4B | Embedding provenance/reuse | Reuse unchanged chunks inside edited files with model/config identity | PARTIALLY_IMPLEMENTED | Existing unchanged-file copying; generator epoch invalidation | Original PDF incremental promise; model digest/config provenance and safe cross-file-edit chunk reuse remain actionable |
 
 ### MCP tools
 
@@ -60,6 +63,7 @@ Status vocabulary (this ledger):
 | ID | Requirement | Status | Next |
 |---|---|---|---|
 | LIFE-1 | Onboard / mirror / index | VERIFIED_PRODUCTION_READY | CI shared fixture |
+| LIFE-1A | Automatic webhook registration / GitHub App ingress | PARTIALLY_IMPLEMENTED | Path-specific webhook ingestion is verified; original design onboarding promises automatic registration. Registration/global App ingress not found; implement and test locally, actual provider installation requires operator credentials |
 | LIFE-2 | Soft disable / re-onboard | VERIFIED_PRODUCTION_READY | GenerationRetentionPostgresIT |
 | LIFE-3 | Authorized hard purge | VERIFIED_PRODUCTION_READY | CI b2346ee purge+reclaim |
 | LIFE-4 | Cross-team re-onboard ACL depth | PARTIALLY_IMPLEMENTED | Expand ACL adversarial cases |
@@ -112,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 5c83562: 244 unit + seven PostgreSQL cases, including separate-JVM recovery |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | fc6026f: 265 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -241,3 +245,16 @@ Maven Resolver modules upgraded together from 1.9.22 to 1.9.26 because the suppo
 A new controlled corruption test reproduced warning-only checksum acceptance before the policy change (`/tmp/ccp-checksum-before.log`). Downloads now use FAIL checksum policy. Both mismatched and absent checksum variants fail, including retries against the same cache. Policy epoch 3 avoids reusing earlier transport-policy caches; generator 1.8.0 invalidates older persisted evidence, and V6 metadata names the actual resolver/policy version. No applied migrations were changed.
 
 Final focused validation: **13 passed** (11 Maven classpath/policy tests, one actual redirect transport test, one actual HTTPS integration). Complete default Java21 suite: **265 passed**, zero failures/errors/skips, 41.807s. POM parsed, dependency tree inspected, CI YAML parsed and `git diff --check` passed. CI now requires exactly one successful/unskipped MavenRemoteModelIT in addition to all existing gates. This new gate is IMPLEMENTED_UNVERIFIED in CI until the next pushed SHA passes; local real HTTPS execution has passed. Full private-repository authentication, declared reactor sibling-source visibility, transitive scope correctness, bounded aggregate transfers, Gradle and arbitrary cross-repository caller propagation remain actionable; no overall readiness claim.
+
+
+### Semantic input integrity — 2026-11-26
+
+**Accepted preceding baseline:** exact SHA `fc6026f6f998efb34a6a64af20a2b90a82e2e697`, run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45685301216 succeeded. Downloaded Surefire XML contains **265 unit + seven PostgreSQL + one real HTTPS case**, all successful with zero skips; shell boundary and actual logical restore gates also passed. This verifies the previously pending secure HTTPS parent/BOM gate.
+
+Reconciled the complete 14-page original design PDF (`Code-Context-Platform-How-Context-Is-Built-and-Used.pdf`, Nov 22 design) against current code. Its chunking, edited-file chunk reuse, webhook onboarding and pilot criteria are product requirements, not evidence that this implementation satisfies them. Prototype latency/capacity figures are not production measurements. Split CTX-4 so accepted semantic retrieval remains verified while incomplete construction/reuse requirements stay visible.
+
+**Implementation:** real HTTP request regression reproduced ignored `spring.ai.ollama.embedding.num-ctx` under Spring AI 2.0.2. Provider property metadata lacks this binding; generic embedding options also lose provider defaults during its merge. `OllamaEmbeddingConfiguration` supplies one model using the existing auto-configured API, preserves model/keep-alive, model initialization and observation settings, explicitly sets context and refuses silent truncation. A request adapter translates generic options to provider options. Wire assertions require configured model, context, keep-alive and `truncate=false`, not just a bean's presence.
+
+Java chunks now slice original AST source ranges, retain associated documentation and actual physical line numbers, and include the declaring class in method chunk identity. Overlap shrinks when necessary to obey the character budget; terminal delimiters do not invent lines; long-line fragmentation preserves surrogate pairs. Node identities/ranges and public MCP contracts are unchanged. Generator 1.9.0 invalidates earlier cached source chunks without deleting the last published generation; a new acceptance case poisons a legacy chunk while retaining unchanged Git blob records and requires a clean rebuild. A separate persisted inline-method assertion requires exact original text and line 3→3.
+
+**Validation:** eleven focused regressions and complete Java21 default suite **276 passed**, zero failures/errors/skips (46.889s). `git diff --check` passed. New PostgreSQL range/generator assertions are **IMPLEMENTED_UNVERIFIED** until the exact-SHA CI passes. No local PostgreSQL acceptance claim; Docker service execution remains on CI. No migrations, authentication, tool registration or reference repository changed. Full token-aware chunking, tiny-piece merging, Markdown/config sections, model digest/config provenance and edited-file chunk reuse remain open, not external blockers. Overall NOT READY FOR PRODUCTION.

@@ -182,6 +182,14 @@ class SharedLibraryImpactPostgresIT {
             assertEquals("SUCCEEDED",jdbc.queryForObject("SELECT state FROM index_jobs WHERE id=?",String.class,attemptJob));
         } finally { jdbc.update("DELETE FROM index_jobs WHERE id=?",attemptJob); }
         UUID providerV1Generation = repositories.currentGeneration(provider).orElseThrow();
+        var sourceChunks=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/org/acme/Money.java' AND symbol='convert(String)'",providerV1Generation);
+        assertEquals(1,sourceChunks.size(),"the inline provider method must have one persisted source chunk");
+        assertEquals(3,((Number)sourceChunks.getFirst().get("start_line")).intValue());
+        assertEquals(3,((Number)sourceChunks.getFirst().get("end_line")).intValue(),
+                "pretty-printing must not invent source lines for an inline method");
+        assertTrue(sourceChunks.getFirst().get("content").toString().contains("\nclass: org.acme.Money\n"));
+        assertEquals("public String convert(String value) { return value; }",
+                sourceChunks.getFirst().get("content").toString().split("\n---\n",2)[1]);
         assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
                 "Zoekt must expose the indexed provider v1 generation before replacement");
 
@@ -1102,6 +1110,15 @@ FROM semantic_call_sites WHERE id=?
         assertNotEquals(dependencyGeneration,rebuiltGeneration);
         assertEquals(incrementalSnapshot,indexedGenerationSnapshot(rebuiltGeneration),
                 "full reprocessing and incremental indexing must produce the same stable records");
+
+        // A generator upgrade must rebuild cached source even when the Git blobs are unchanged.
+        jdbc.update("UPDATE contract_index_metadata SET generator_version='legacy-chunk-generator' WHERE generation_id=?",rebuiltGeneration);
+        jdbc.update("UPDATE code_chunks SET content_hash='legacy-poisoned-chunk',content='legacy content' WHERE id=(SELECT id FROM code_chunks WHERE generation_id=? ORDER BY id LIMIT 1)",rebuiltGeneration);
+        indexAndAwait("consumer-service-c","generator-upgrade-"+UUID.randomUUID());
+        UUID upgradedGeneration=repositories.currentGeneration(consumer).orElseThrow();
+        assertNotEquals(rebuiltGeneration,upgradedGeneration);
+        assertEquals(incrementalSnapshot,indexedGenerationSnapshot(upgradedGeneration),
+                "generator upgrade must not copy legacy chunks merely because file blobs match");
     }
 
     private List<String> indexedGenerationSnapshot(UUID generation) {

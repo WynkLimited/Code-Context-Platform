@@ -21,7 +21,9 @@ spring:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       embedding:
         model: ${EMBEDDING_MODEL:qwen3-embedding:0.6b}
+        # Bound explicitly by OllamaEmbeddingConfiguration; provider properties omit numCtx in 2.0.2.
         num-ctx: 8192
+        truncate: false
     vectorstore.pgvector:
       initialize-schema: false
       dimensions: ${EMBEDDING_DIMENSIONS:1024}

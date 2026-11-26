@@ -118,6 +118,11 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
             Long generation=jdbc.queryForObject("SELECT coalesce(max(generation),0)+1 FROM index_generations WHERE repository_id=?",Long.class,repo.id());
             UUID gen=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published) VALUES(?,?,?,false) RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,generation);
             UUID previous=jdbc.query("SELECT id FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getObject(1,UUID.class),repo.id()).stream().findFirst().orElse(null);
+            if(previous!=null) {
+                var cached=contractIndexes.published(repo.id());
+                if(cached.isEmpty()||!previous.equals(cached.get().generationId())
+                        ||!ContractModels.GENERATOR_VERSION.equals(cached.get().index().generatorVersion()))previous=null;
+            }
             jdbc.batchUpdate("INSERT INTO generation_files(generation_id,file_path,blob_sha) VALUES(?,?,?)",files,500,(ps,f)->{ps.setObject(1,gen);ps.setString(2,f.path());ps.setString(3,f.blobSha());});
             Map<String,String> oldFiles=previous==null?Map.of():jdbc.query("SELECT file_path,blob_sha FROM generation_files WHERE generation_id=?",rs->{Map<String,String> m=new HashMap<>();while(rs.next())m.put(rs.getString(1),rs.getString(2));return m;},previous);
             for(var f:files) {
@@ -193,15 +198,25 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
         List<Symbol> symbols=new ArrayList<>();
         if(ext.equals("java")) try {
             var cu=StaticJavaParser.parse(file.content());
-            for(var c:cu.findAll(ClassOrInterfaceDeclaration.class)) symbols.add(new Symbol("CLASS",c.getNameAsString(),c.getFullyQualifiedName().orElse(c.getNameAsString()),line(c.getBegin()),line(c.getEnd()),classHeader(c)));
-            for(var m:cu.findAll(MethodDeclaration.class)) symbols.add(new Symbol("METHOD",m.getNameAsString(),m.getSignature().asString(),line(m.getBegin()),line(m.getEnd()),m.toString()));
-            for(var c:cu.findAll(com.github.javaparser.ast.body.ConstructorDeclaration.class)) symbols.add(new Symbol("CONSTRUCTOR",c.getNameAsString(),c.getSignature().asString(),line(c.getBegin()),line(c.getEnd()),c.toString()));
-        } catch(RuntimeException ignored) { /* malformed source remains searchable and semantically chunked */ }
+            var sourceText=new JavaSourceText(file.content());
+            for(var c:cu.findAll(ClassOrInterfaceDeclaration.class)) {
+                var text=sourceText.classHeader(c);
+                symbols.add(new Symbol("CLASS",c.getNameAsString(),c.getFullyQualifiedName().orElse(c.getNameAsString()),line(c.getBegin()),line(c.getEnd()),text.text(),text.firstLine(),null));
+            }
+            for(var m:cu.findAll(MethodDeclaration.class)) {
+                var text=sourceText.definition(m);
+                symbols.add(new Symbol("METHOD",m.getNameAsString(),m.getSignature().asString(),line(m.getBegin()),line(m.getEnd()),text.text(),text.firstLine(),JavaSourceText.ownerOf(m)));
+            }
+            for(var c:cu.findAll(com.github.javaparser.ast.body.ConstructorDeclaration.class)) {
+                var text=sourceText.definition(c);
+                symbols.add(new Symbol("CONSTRUCTOR",c.getNameAsString(),c.getSignature().asString(),line(c.getBegin()),line(c.getEnd()),text.text(),text.firstLine(),JavaSourceText.ownerOf(c)));
+            }
+        } catch(RuntimeException ignored) { symbols.clear(); /* malformed source falls back to a source-file chunk */ }
         if(symbols.isEmpty()) symbols.add(new Symbol("FILE",file.path(),file.path(),1,Math.max(1,(int)file.content().lines().count()),file.content()));
         for(Symbol symbol:symbols) {
             long node=jdbc.queryForObject("INSERT INTO code_nodes(generation_id,node_type,symbol,qualified_name,file_path,start_line,end_line,language,metadata) VALUES(?,?,?,?,?,?,?,?,jsonb_build_object('blobSha',?)) RETURNING id",Long.class,gen,symbol.type,symbol.name,symbol.qualified,file.path(),symbol.start,symbol.end,ext,file.blobSha());
-            for(Chunk part:split(symbol.text,symbol.start,props.maxChunkChars())) {
-                String chunk="repo: "+repo.key()+" | file: "+file.path()+"\n"+symbol.type.toLowerCase()+": "+symbol.qualified+"\n---\n"+part.text;
+            for(Chunk part:split(symbol.text,symbol.textStart,props.maxChunkChars())) {
+                String chunk="repo: "+repo.key()+" | file: "+file.path()+"\n"+(symbol.owner==null?"":"class: "+symbol.owner+"\n")+symbol.type.toLowerCase()+": "+symbol.qualified+"\n---\n"+part.text;
                 String hash=sha256(chunk);float[] vector=embeddings.embed(chunk);
                 if(vector.length!=props.embeddingDimensions())throw new IllegalStateException("embedding dimension mismatch: expected "+props.embeddingDimensions()+" got "+vector.length);
                 jdbc.update("INSERT INTO code_chunks(generation_id,file_path,symbol,start_line,end_line,content_hash,embedding,content) VALUES(?,?,?,?,?,?,?::vector,?) ON CONFLICT DO NOTHING",gen,file.path(),symbol.qualified,part.start,part.end,hash,vectorLiteral(vector),chunk);
@@ -413,17 +428,9 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
     }
     private static String contentHash(String key, String hash) { return hash == null || hash.isBlank() ? sha256(key) : hash; }
     private static int line(Optional<com.github.javaparser.Position> p){return p.map(x->x.line).orElse(1);}
-    private static String classHeader(ClassOrInterfaceDeclaration c){StringBuilder s=new StringBuilder("class ").append(c.getNameAsString());if(!c.getExtendedTypes().isEmpty())s.append(" extends ").append(c.getExtendedTypes());if(!c.getImplementedTypes().isEmpty())s.append(" implements ").append(c.getImplementedTypes());return s.toString();}
     private static List<Chunk> split(String text,int startLine,int maxChars){
-        int limit=Math.max(512,maxChars),overlapChars=Math.min(300,limit/10);String[] lines=text.split("\\R",-1);List<Chunk> out=new ArrayList<>();List<String> block=new ArrayList<>();int blockStart=0,size=0;
-        for(int i=0;i<lines.length;i++){
-            String line=lines[i];
-            if(line.length()>limit){if(!block.isEmpty()){out.add(new Chunk(String.join("\n",block),startLine+blockStart,startLine+i-1));block.clear();size=0;}int pos=0;while(pos<line.length()){int end=Math.min(line.length(),pos+limit);out.add(new Chunk(line.substring(pos,end),startLine+i,startLine+i));if(end==line.length())break;pos=Math.max(pos+1,end-overlapChars);}blockStart=i+1;continue;}
-            if(size+line.length()+1>limit&&!block.isEmpty()){int carry=Math.min(10,block.size());out.add(new Chunk(String.join("\n",block),startLine+blockStart,startLine+blockStart+block.size()-1));List<String> tail=new ArrayList<>(block.subList(block.size()-carry,block.size()));blockStart=blockStart+block.size()-carry;block=tail;size=block.stream().mapToInt(String::length).sum()+Math.max(0,block.size()-1);}
-            if(block.isEmpty())blockStart=i;block.add(line);size+=line.length()+1;
-        }
-        if(!block.isEmpty())out.add(new Chunk(String.join("\n",block),startLine+blockStart,startLine+blockStart+block.size()-1));
-        return out.isEmpty()?List.of(new Chunk("",startLine,startLine)):List.copyOf(out);
+        return BoundedTextChunks.split(text,startLine,maxChars).stream()
+                .map(piece->new Chunk(piece.text(),piece.firstLine(),piece.lastLine())).toList();
     }
     private static String sha256(String s) { try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8))); } catch(Exception e) { throw new IllegalStateException(e); } }
     private static String vectorLiteral(float[] v){return "["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";}
@@ -468,6 +475,8 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
     }
     private static String truncate(String s){if(s==null)return "indexing failed";return s.substring(0,Math.min(s.length(),1500));}
     private record Job(UUID repositoryId,String sha,int attempt){}
-    private record Symbol(String type,String name,String qualified,int start,int end,String text){}
+    private record Symbol(String type,String name,String qualified,int start,int end,String text,int textStart,String owner){
+        private Symbol(String type,String name,String qualified,int start,int end,String text){this(type,name,qualified,start,end,text,start,null);}
+    }
     private record Chunk(String text,int start,int end){}
 }
