@@ -73,21 +73,32 @@ public final class RepositoryOnboarding {
             return true;
         }
         try(var lease=claim.get()) {
-            var repository=jdbc.query("SELECT owner,name FROM repositories WHERE id=? AND enabled",(rs,n)->repositories.find(rs.getString(1),rs.getString(2)).orElseThrow(),id)
-                    .stream().findFirst().orElseThrow();
-            var hook=webhooks.reconcile(repository);
-            String configuration=webhooks.configurationHash(repository);
             transactions.executeWithoutResult(status->{
+                // Serialize provider side effects with configuration changes. Keep the lease row
+                // unlocked during HTTP so its independent heartbeat can continue renewing it.
+                var repository=jdbc.query("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE id=? AND enabled FOR SHARE",
+                        (rs,n)->new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),id)
+                        .stream().findFirst().orElseThrow();
+                var claims=jdbc.queryForList("SELECT repository_id FROM repository_onboarding WHERE repository_id=? AND webhook_claim=?",id,token);
+                if(claims.isEmpty())return;
+                GitHubWebhookClient.Hook hook;
+                try {hook=webhooks.reconcile(repository);}
+                catch(Exception failure){throw new ReconciliationFailure(failure);}
+                String configuration=webhooks.configurationHash(repository);
                 lease.fenceTransaction();
                 int changed=jdbc.update("UPDATE repository_onboarding SET webhook_state='READY',webhook_id=?,webhook_mode=?,webhook_callback_url=?,provider_repository_id=?,webhook_verified_at=CASE WHEN webhook_configuration_hash IS DISTINCT FROM ? OR webhook_verified_at IS NULL THEN now() ELSE webhook_verified_at END,webhook_configuration_hash=?,webhook_attempt=0,webhook_error=NULL,webhook_claim=NULL,webhook_claim_until=NULL,webhook_available_at=now()+interval '1 hour',updated_at=now() WHERE repository_id=? AND webhook_claim=?",hook.repositoryHookId(),hook.mode(),hook.callbackUrl(),hook.providerRepositoryId(),configuration,configuration,id,token);
                 if(changed==1)indexing.enqueue(repository.owner(),repository.name(),"HEAD","webhook-catchup:"+repository.id()+":"+configuration);
             });
         }catch(Exception failure) {
             // Persist only the exception category, never provider response bodies or credentials.
+            var category=failure instanceof ReconciliationFailure?failure.getCause():failure;
             jdbc.update("UPDATE repository_onboarding SET webhook_state=CASE WHEN webhook_attempt>=4 THEN 'FAILED' ELSE 'QUEUED' END,webhook_attempt=webhook_attempt+1,webhook_error=?,webhook_available_at=now()+interval '1 minute',webhook_claim=NULL,webhook_claim_until=NULL,updated_at=now() WHERE repository_id=? AND webhook_claim=?",
-                    "Webhook reconciliation failed ("+failure.getClass().getSimpleName()+"); verify provider permissions, callback URL and connectivity, then retry.",id,token);
+                    "Webhook reconciliation failed ("+category.getClass().getSimpleName()+"); verify provider permissions, callback URL and connectivity, then retry.",id,token);
         }
         return true;
+    }
+    private static final class ReconciliationFailure extends RuntimeException {
+        ReconciliationFailure(Exception cause){super("Provider reconciliation failed",cause);}
     }
 
     public void retry(RepositoryRecord repository) {

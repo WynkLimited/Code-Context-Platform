@@ -41,7 +41,14 @@ class RepositoryOnboardingPostgresIT {
             leases=new RepositoryIndexLeaseManager(jdbc);
             indexing=new IndexingService(jdbc,repositories,null,props,null,null,null,tx,null,null,null,null,null,leases);
             var json=JsonMapper.builder().build();var created=new AtomicBoolean();var creates=new AtomicInteger();
+            var holdProvider=new AtomicBoolean();
+            var providerEntered=new java.util.concurrent.CountDownLatch(1);
+            var providerRelease=new java.util.concurrent.CountDownLatch(1);
             GitHubWebhookClient.Exchange provider=(method,uri,body)->{
+                        if(holdProvider.compareAndSet(true,false)) {
+                            providerEntered.countDown();
+                            assertTrue(providerRelease.await(5,java.util.concurrent.TimeUnit.SECONDS),"release the controlled provider within its bounded deadline");
+                        }
                         if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":81,\"full_name\":\"acme/library\"}");
                         if(method.equals("GET"))return json.readTree(created.get()?"[{\"id\":91,\"config\":{\"url\":\"https://context.example/webhooks/github/acme/library\"}}]":"[]");
                         if(method.equals("POST")){creates.incrementAndGet();created.set(true);throw new java.io.IOException("simulated lost provider response");}
@@ -86,7 +93,23 @@ class RepositoryOnboardingPostgresIT {
                     UUID.randomUUID(),repository.id(),"a".repeat(64),client.signingKeyFingerprint());
             assertEquals(true,second.status(repository).get("webhook_delivery_verified"));
             jdbc.update("UPDATE repository_onboarding SET webhook_available_at=now()-interval '1 second'");
-            assertTrue(second.reconcileOne());
+            holdProvider.set(true);
+            var active=second;
+            try(var workers=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+                var reconciliation=workers.submit(active::reconcileOne);
+                try {
+                    assertTrue(providerEntered.await(5,java.util.concurrent.TimeUnit.SECONDS));
+                    var blocked=assertThrows(org.springframework.dao.DataAccessException.class,()->transactions.executeWithoutResult(status->{
+                        jdbc.execute("SET LOCAL lock_timeout='200ms'");
+                        jdbc.update("UPDATE repositories SET configuration_revision=configuration_revision+1,enabled=false WHERE id=?",repository.id());
+                    }));
+                    Throwable root=blocked;while(root.getCause()!=null)root=root.getCause();
+                    assertInstanceOf(java.sql.SQLException.class,root);assertEquals("55P03",((java.sql.SQLException)root).getSQLState(),"configuration mutation must wait for the provider side effect and its persisted provenance");
+                }finally{providerRelease.countDown();}
+                assertTrue(reconciliation.get(5,java.util.concurrent.TimeUnit.SECONDS));
+            }
+            assertEquals(1L,jdbc.queryForObject("SELECT configuration_revision FROM repositories WHERE id=?",Long.class,repository.id()));
+            assertEquals("READY",jdbc.queryForObject("SELECT webhook_state FROM repository_onboarding",String.class));
             assertEquals(confirmed,jdbc.queryForObject("SELECT webhook_verified_at FROM repository_onboarding",java.sql.Timestamp.class),"unchanged periodic verification must retain established delivery proof");
             var rotatedClient=new GitHubWebhookClient(properties("rotated-fixture-secret"),json,new GitHubWebhookClient.Settings("fixture-webhook-token","https://api.github.com","api.github.com","https://context.example"),
                     provider,host->new InetAddress[]{InetAddress.getByName("203.0.113.10")});

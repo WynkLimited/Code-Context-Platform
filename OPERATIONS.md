@@ -184,3 +184,6 @@ Owned per-repository hook retirement is reported separately. Missing authorizati
 
 
 Repository registration rejects a case alias of an existing provider namespace, including soft-disabled registrations. Use the exact registered owner/name for API paths; the platform preserves that spelling. Stable-UUID lifecycle updates may change spelling, but cannot claim another UUID's alias. Pending old mirror paths remain reserved across case variants until preparation completes. Pre-existing ambiguous legacy aliases require explicit operator reconciliation; this guard does not merge repository history or IDs.
+
+
+Webhook reconciliation serializes provider calls with repository configuration updates. A configuration PATCH or soft disable can wait for an in-flight bounded provider request before its metadata change is acknowledged; hard purge retains its existing busy-lease rejection. The repository lease heartbeat continues independently; provider error bodies and credentials are not persisted. After a client-side timeout, reload the lifecycle revision/status before retrying. Remote provider success followed by database failure still requires the durable discovery/recovery path; a successful controlled-provider fixture is not live-provider certification.
