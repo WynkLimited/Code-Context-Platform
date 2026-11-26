@@ -21,16 +21,19 @@ Status vocabulary (this ledger):
 
 ## Resume checkpoint
 
-**Session progress (this closure):** Ledger + MultiRepo parity; proposed-change MCP; independence gate; webhook freshness+PG dedupe; nested+cross-file OpenAPI; Avro/OpenAPI MCP evolution; hop incompleteness flags; admin key status; REST ambiguity PG; subprocess env scrub; mandatory CI green @ `f0a36ad`.
+**Current master-directive phase:** Phase1 semantic chunking. Tiny grouping, complete-input conservative token bounds, multiple native structural grammars and integrated Graphify/Ollama/PostgreSQL/HTTP MCP acceptance are implemented. Current native repair is generator1.18.0; see the latest dated evidence below. The accepted CI baseline remains c5894be until the repaired exact-SHA workflow passes.
 
-**Overall:** **NOT READY FOR PRODUCTION** — actionable implementation gaps (including Gradle, arbitrary cross-repository method propagation, semantic chunk reuse/provenance and full-application concurrency drills) remain separate from external staging, OS containment, production recovery and representative pilot validation.
+**Overall:** **NOT READY FOR PRODUCTION** — automatic onboarding/webhook provisioning, complete reactor/Gradle intelligence, general cross-repository method chains, remaining language/contract coverage and required operational/deployment/benchmark/client acceptance remain open. Earlier chunk reuse/provenance and specific application recovery assertions have passed; do not reopen those without new evidence.
 
-**Next executable actions (priority):**
+**Next executable actions (mandatory directive order):**
 
-1. Method-chain multi-hop beyond re-export candidates (XRI-HOP) — incompleteness flags already exposed.
-2. Full-application crash/network fault drills (IDX-1/2) beyond the now-verified two-application contention/publication/heartbeat/read consistency and separate-JVM lease-worker crash fixtures.
-3. Semantic chunk correctness, model provenance and reuse within edited files; safe Gradle resolution (XRI-GRADLE), Maven reactor visibility and lifecycle onboarding depth.
-4. External blockers: OS sandbox, production DR/PITR drill, k8s smoke and representative pilot capacity/client evidence.
+1. Finish exact-SHA CI and local full acceptance for the verified native repair; complete remaining promised structural language/declaration coverage.
+2. Integrated automatic onboarding, initial indexing and least-privilege webhook provisioning/recovery.
+3. Complete Maven reactors and safe Gradle resolution, guided by early read-only reference inspection.
+4. General bounded cross-repository method chains and independent parity acceptance.
+5. Remaining contracts/security, representative performance/accuracy, real distributed/storage/PITR drills and actual advertised clients.
+
+Docker Desktop now runs locally with isolated owned fixtures; lack of a daemon is no longer a blocker. The 16GB Mac is functional-test hardware, not the specified32GB representative pilot environment. External organizational approvals and representative deployment/client evidence remain distinct from actionable code gaps.
 
 ---
 
@@ -448,3 +451,22 @@ Run45779507700 (3f0b5ea) supplied the actual Linux Lua AST: the GNU library load
 Added a second mandatory GraphifyPostgresIT case using the complete production indexing pipeline with Graphify enabled, actual Ollama, PostgreSQL/pgvector and authenticated Streamable HTTP MCP in one scenario. Real Java/Kotlin/Python/TypeScript source must have Graphify records, native METHOD declarations and actual method chunks (class headers/fallback alone cannot pass). It checks exact tiny Java group lines4–8, every line9–111 of a large Unicode method, full-input byte budgets, all hashes/vectors, exact model fingerprint and job/generation/repository/commit provenance. A natural-language cancellation/refund question must retrieve the labelled implementation through HTTP MCP. Editing one tiny member must call real embed(String) exactly once and preserve every other vector; deleting Python must remove its graph/chunks and eliminate it from search through the same MCP session. Existing direct Graphify node/edge case remains mandatory. The workflow now requires both exact method names, two passes and zero failure/error/skip nodes; ten PostgreSQL cases plus separate HTTPS remain required. No service, previous assertion or gate bypassed.
 
 Local ARM Java21 default suite **339 passed**, zero failures/errors/skips,56.107s (`/tmp/ccp-semantic-e2e-full.log`). Final added provenance/range checks compile. Ruby workflow YAML parse and `git diff --check` passed. New real-service case is **IMPLEMENTED_UNVERIFIED** until exact-SHA CI; no local Docker/service acceptance or full Phase1/PRD readiness claim. Subsequent deployment/operational/other capability phases remain open.
+
+
+### Upstream Lua grammar repair and real local acceptance — 2026-11-26
+
+**Confirmed cause:** the published bonede Lua2.1.3a ABI13 GNU binary rejects unchanged valid Lua under the binding's direct UTF-8 parser, independent of our adapter. Reproduced locally on GNU Linux; the same artifact accepts it on Mac. Three released parser-core versions (0.25.3,0.26.3,0.26.3.1) reproduce the GNU failure. Canonical UTF-8 alone did not fix it. Upstream Lua v0.4.1 ABI15 parses the same fixture correctly in both environments.
+
+Removed that defective Maven grammar artifact. Packaged pure grammar libraries from exact upstream commit816840c592ab973500ae9750763c707b447e7fef, source SHA256 a73791322252c6917aee75bd371290c0cc748a04450ea57a161c8773bba0520a, with the complete MIT license and source attribution. The maintainer script checks source hash before compiling only trusted upstream C, rebuilds four Mac/GNU architectures, and emits SHA256SUMS. Its full rebuild procedure was executed successfully, not only syntax checked. Normal builds/application startup need no compiler or network download. BundledLuaGrammar bounds resource size, verifies the selected binary's SHA256, uses a private temporary directory/read-only library file and the standard language-load API. Mac install names are portable @rpath names, with no workstation output paths. Generator1.18.0 safely invalidates previous chunks.
+
+**Actual validation:** full local ARM Java21 default suite339 passed, zero failures/errors/skips (50.642s, /tmp/ccp-upstream-lua-full.log). Final native matrix22 passed on Mac ARM and Intel, GNU ARM and GNU x86; GNU x86 runs under local Docker emulation, not a throughput claim. Logs: target/native-junit-arm64.log, target/native-junit-amd64.log, target/native-junit-macos-x86_64-final.log and /tmp/ccp-final-native-bundle.log. All cases discovered and executed; none aborted/skipped. Source-script syntax and git diff checks passed.
+
+Docker Desktop was started successfully. Isolated loopback-only PostgreSQL17+pgvector, pinned Zoekt image and Ollama0.13.3 with both pinned model names now support real local acceptance. The integrated Graphify suite passed **2/2**, zero failures/errors/skips (83.60s initial run;97.26s in the full suite). It executed actual Graphify0.9.118, model embeddings, structural method/source bounds, exact tiny grouping, hashes/model provenance, authenticated HTTP semantic retrieval, one-input re-embedding and deleted-vector exclusion. This is functional fixture evidence, not representative scale or overall production certification.
+
+The first complete local profile ran11 cases:9 passed,2 failed. Both full-application failures were traced to the untracked local Docker indexer wrapper rejecting exact JUnit temporary mirror paths outside the project target directory (exit2, native Git objects valid). The wrapper now permits only those controlled mirror roots and mounts only the selected source read-only; production code/assertions/timeouts are unchanged. A complete rerun is in progress in target/local-complete-postgres-final.log. No claim that the full profile or new CI passed until its actual reports are inspected. Local model/provider resources remain owned test fixtures, not a production deployment.
+
+### Deterministic acceptance snapshots and complete local acceptance — 2026-11-26
+
+The previous full/incremental snapshot failure contained the same36 records; nested Kotlin invocations sharing source line and caller were returned in different physical order. Appended invocation,resolution_status,resolved_signature to the existing semantic_call_sites snapshot ORDER BY. No rows, values, joins, filters, classifications or assertions changed. Fixture purge now waits for repository ownership, fences the purge and uses the existing durable cleanup outbox instead of racing post-publication/global Zoekt cleanup; every fixture generation must have QUEUED/DONE cleanup ownership and the repository must be absent.
+
+Complete local Java21 real-service acceptance **11 passed, zero failures/errors/skips** (`target/local-acceptance-ordering-final.log`): restricted-role1, retention1, Graphify2, complete application consistency/recovery2, SharedLibrary3, HTTPS Maven1 and separate-JVM lease1. The SharedLibrary scenarios executed authenticated HTTP MCP impact, exact provider/consumer/version/symbol assertions, full-vs-incremental equivalence, model-space rebuilds and rollback. Both application JVM recovery assertions executed. No acceptance criteria or existing indexing deadlines were relaxed. Full default339 and final four-platform native22 evidence remain as recorded above. Workflow YAML, maintainer script syntax and git diff checks passed. The next exact-SHA CI still must pass before treating this checkpoint as CI-accepted. Overall production-readiness work remains incomplete.

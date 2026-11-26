@@ -251,7 +251,7 @@ Preceding CI failures on `5eda7e6`/`0345a18` were repaired by:
 Domain Micrometer meters (`PlatformMetrics`) and prior contract/security/ops slice are included in this green SHA lineage (`0345a18`→`4ca099f`→`b2346ee`). Overall decision remains **NO-GO** pending remaining ledger depth (OS compiler sandbox, DR drill, rename/dependency incremental PG cases, multi-replica rate limit, cluster smoke).
 
 
-### Semantic structural coverage — 2026-11-26 (generator 1.17.0)
+### Semantic structural coverage — 2026-11-26 (generator 1.18.0)
 
 The pinned Graphify **0.9.118** wheel was inspected directly (SHA-256 `f572453c275e82dcc052f6cf7fa79c0a5a14eaefab08ac9112e31edf7b9d75aa`). Its dispatch has **56 extractor families**, including configuration, documents, forms, and project files; this is not a count of programming languages or proof of structural semantic support. Installed local Graphify 0.8.18 was not used as evidence for the pinned release. Graphify nodes can carry only a start location, so semantic definitions use complete parser ranges instead of guessing ends from the next declaration.
 
@@ -272,3 +272,10 @@ Native runtime correction: the former seart1.12 artifact was incompatible with b
 The small NativeSyntax adapter owns/closes parser and tree lifetimes, feeds canonical UTF-8 and maps native byte positions to exact Java character offsets (ASCII identity fast path, precomputed map otherwise) and preserves a two-second parse deadline using the binding's native progress callback plus bounded input-reader checks. Cancellation preserves worker interruption; an aborted parser resets and is reusable. These are actual native tests, not mocks. Primary binding API/platform reference: https://github.com/bonede/tree-sitter-ng. The current local validation uses the normal ARM Java21 runtime; Rosetta is no longer required.
 
 Additional structural grammar coverage: Scala, PHP, Swift, Lua and Bash and pinned-extractor JS/TS/C++/Ruby extension aliases. Eighteen structural cases plus mandatory native Kotlin, existing overload and two native cancellation/reuse cases all pass on ARM Java21 (22 focused cases). Lua's actual bundled AST node is function_definition_statement; this was established from its valid tree rather than inferred from another grammar's selector. All full-service and remaining-family limitations above still apply.
+
+
+#### Lua runtime and local semantic verification
+
+The bonede2.1.3a GNU Lua grammar itself is defective: direct UTF-8 parsing of a valid unchanged fixture fails under multiple core versions. It is replaced by checksum-verified pure grammar libraries from upstream v0.4.1, exact commit816840c592ab973500ae9750763c707b447e7fef. Source attribution, full MIT license, all four architecture hashes and rebuild instructions are in src/main/resources/native/lua-v0.4.1/. The checked-in rebuild script was executed. No runtime compiler, libc shim, parser-test skip or permissive selector is used.
+
+Twenty-two actual native tests pass on each Mac ARM/Intel and GNU ARM/x86 runtime. The integrated Graphify/Ollama/pgvector/HTTP MCP case also passes locally with Java/Kotlin/Python/TypeScript method chunks, tiny grouping, large Unicode input bounds, model/vector provenance, changed-input-only embedding and deletion visibility. Full default Java21 suite339 passed. Other language/scale/release requirements remain separately tracked; full exact-SHA CI still must pass.

@@ -27,9 +27,10 @@ class GraphifyPostgresIT {
     @Autowired GraphifyIndexer graphify;
     @Autowired JdbcTemplate jdbc;
     @Autowired IndexingService indexing;
+    @Autowired RepositoryIndexLeaseManager leases;
+    @Autowired GenerationRetentionService retention;
     @Autowired com.wynk.codecontext.config.CodeContextProperties config;
     @Autowired com.wynk.codecontext.repo.RepositoryStore repositories;
-    @Autowired com.wynk.codecontext.search.ZoektIndexer zoekt;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @org.springframework.boot.test.web.server.LocalServerPort int port;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean org.springframework.ai.embedding.EmbeddingModel embeddings;
@@ -193,13 +194,26 @@ class GraphifyPostgresIT {
     @AfterEach
     void cleanFixture() throws Exception {
         if(repository!=null) {
-            var identity=jdbc.queryForList("SELECT owner,name FROM repositories WHERE id=?",repository);
-            if(!identity.isEmpty()) {
-                var repo=repositories.findAny(identity.getFirst().get("owner").toString(),identity.getFirst().get("name").toString()).orElseThrow();
-                for(UUID id:jdbc.queryForList("SELECT id FROM index_generations WHERE repository_id=?",UUID.class,repository))zoekt.removeGeneration(repo,id);
+            // SUCCEEDED means publication is visible; post-publication shard cleanup may still
+            // own the lease. Teardown must not race that worker or the global Zoekt cleaner.
+            RepositoryIndexLeaseManager.Lease cleanupLease=null;
+            long deadline=System.nanoTime()+java.time.Duration.ofSeconds(15).toNanos();
+            while(cleanupLease==null&&System.nanoTime()<deadline) {
+                cleanupLease=leases.tryAcquire(repository,UUID.randomUUID()).orElse(null);
+                if(cleanupLease==null)Thread.sleep(100);
             }
-            new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status->repositories.purge(repository));
-            zoekt.removeRepositoryMetadata(repository);
+            org.junit.jupiter.api.Assertions.assertNotNull(cleanupLease,"publisher must release ownership before fixture purge");
+            var generations=jdbc.queryForList("SELECT id FROM index_generations WHERE repository_id=?",UUID.class,repository);
+            try(var owned=cleanupLease) {
+                new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status->{owned.fenceTransaction();repositories.purge(repository);});
+            }
+            retention.removeRepositoryMetadata(repository);
+            // Follow production's durable retry path for a busy global cleaner; do not suppress
+            // an exception from a direct competing removeGeneration call.
+            for(int i=0;i<generations.size();i++)if(!retention.cleanOne())break;
+            for(UUID id:generations)org.junit.jupiter.api.Assertions.assertEquals(1,jdbc.queryForObject(
+                    "SELECT count(*) FROM generation_cleanup_outbox WHERE generation_id=? AND state IN ('QUEUED','DONE')",Integer.class,id),"every fixture shard must have durable cleanup ownership");
+            org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM repositories WHERE id=?",Integer.class,repository));
         }
         if (fixture != null && Files.exists(fixture)) {
             try (var paths = Files.walk(fixture)) {

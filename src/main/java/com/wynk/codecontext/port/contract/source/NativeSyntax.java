@@ -17,7 +17,7 @@ public final class NativeSyntax {
         JAVASCRIPT(TreeSitterJavascript::new), TYPESCRIPT(TreeSitterTypescript::new), TSX(TreeSitterTsx::new),
         GO(TreeSitterGo::new), RUST(TreeSitterRust::new), C(TreeSitterC::new), CPP(TreeSitterCpp::new),
         C_SHARP(TreeSitterCSharp::new), RUBY(TreeSitterRuby::new), SCALA(TreeSitterScala::new),
-        PHP(TreeSitterPhp::new), SWIFT(TreeSitterSwift::new), LUA(TreeSitterLua::new), BASH(TreeSitterBash::new);
+        PHP(TreeSitterPhp::new), SWIFT(TreeSitterSwift::new), LUA(BundledLuaGrammar::load), BASH(TreeSitterBash::new);
         final Supplier<TSLanguage> grammar;
         Language(Supplier<TSLanguage> grammar){this.grammar=grammar;}
     }
