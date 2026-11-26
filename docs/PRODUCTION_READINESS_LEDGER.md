@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `7dacc9fb0e26f49e6f65db6127647ad0bc332310` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45754165076 |
+| Last green mandatory CI SHA | `b2d0b706114411907f6de51c247e9beb52747043` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45755008129 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -116,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 7dacc9f: 297 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | b2d0b70: 301 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -331,3 +331,16 @@ Real compiled-JAR fixtures reproduced three incorrect attributions: dependency-r
 Java method/constructor/reference resolution now retains declaration origin (source, supported JAR declaration, runtime) and the actual JVM binary class name, with this nonsecret evidence persisted in existing call-site evidence. Artifact attribution follows the exact analyzed JAR order and binary entry; source/runtime declarations cannot be guessed as Maven dependencies. The first matching JAR without ownership metadata remains unowned instead of falling through to another artifact. The prior CallSite constructor remains available for Kotlin compiler/internal callers; Kotlin origin enrichment beyond its existing compiler evidence remains separate. Generator 1.12.0 requires standard reindexing. No database migration or change to canonical target signatures, symbol IDs, authentication or tools is involved.
 
 Four new tests use real Java compilation/JARs and actual JavaParser bindings, including a JDK reflection target in the presence of a shadow JAR. Focused resolver/Maven/actual HTTPS suite **19 passed**. Complete Java21 default suite **301 passed**, zero failures/errors/skips (41.514s). Added exact PostgreSQL assertions require persisted JAR-origin Money evidence and two source-origin internal calls with null external artifact; subsequent `mvn test-compile` passed (3.114s). `git diff --check` passed. These additional DB assertions remain IMPLEMENTED_UNVERIFIED until the next exact-SHA CI. This proves attribution for the indexer's effective source/JAR order, not arbitrary runtime classloader order or complete Maven/Gradle reactor semantics.
+
+
+### Semantic ownership accepted — 2026-11-26
+
+Exact SHA `b2d0b706114411907f6de51c247e9beb52747043` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45755008129. Downloaded reports contain **301 unit + seven PostgreSQL + one HTTPS = 309 passed**, zero failures/errors/skips, plus successful shell/logical restore gates. This includes the new persisted external Money JAR-origin and two internal source-origin assertions, with all previous exact cross-repository impacts, HTTP MCP/security, source reuse, V12 and rollback checks retained. Artifact: `target/ci-b2d0b70-reports`. Java binary/source attribution is service-verified for this scope; complete Maven/Gradle reactor semantics remain open.
+
+### Full application replica consistency fixture — 2026-11-26
+
+`ApplicationReplicaConsistencyPostgresIT` starts **two independent complete Spring application JVMs**, sharing an isolated PostgreSQL schema, Git mirror and real CI Zoekt/Ollama services. It indexes a baseline, pauses the first application's real Zoekt indexer only after the candidate shard is actually indexed, and starts a second application with a competing durable job. Each process has one indexing slot, making the observed busy contender originate from the second replica. Both actual HTTP MCP servers must list exactly six tools, return the previous published file/commit, and exclude an unpublished candidate that is first proven searchable through raw Zoekt. The production 30-second heartbeat must renew the paused job. After releasing the test-only latch, both jobs must succeed with exactly one replacement generation; both servers must read/search the new commit. All embeddings, database writes, Git and Zoekt operations are real; no service responses are mocked.
+
+The latch is a test-source/profile-only subclass that always executes the real indexer before pausing; there is no production hook or changed timeout. Child environments are rebuilt from an allowlist; database credentials are supplied through environment variables, not command lines. Only the fixture's UUID schema, known generation shards, metadata and process logs are cleaned up. Child GC's long initial delay avoids reconciling neighboring fixtures in the shared CI index; the existing mandatory retention/GC gate remains unchanged. Process logs are retained and uploaded even on failure.
+
+Compilation passed, then the complete Java21 default suite **301 passed**, zero failures/errors/skips (45.606s). Workflow YAML and `git diff --check` passed. The new fixture is **IMPLEMENTED_UNVERIFIED** until exact-SHA CI runs it; CI additionally requires exactly one successful/unskipped full-application case. This is application contention/publication/read consistency, **not** full-application crash, network-partition or cross-host/PVC certification. Existing independent lease/publication worker crash recovery remains verified separately. IDX-1/2 stay partial pending broader fault/staging coverage. No production files or migrations changed in this slice.

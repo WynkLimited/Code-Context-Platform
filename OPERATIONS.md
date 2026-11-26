@@ -118,3 +118,10 @@ Within an edited file, only chunks whose full text/hash, repository, prior gener
 ## Semantic declaration attribution
 
 Generator 1.12.0 records Java declaration origin and JVM binary class name in semantic call-site evidence. Source/JDK runtime declarations are not attributed to dependency JARs merely because a JAR contains the same type. JAR attribution follows the actual JavaParser classpath order; nested binary names use `$`. Unknown ownership remains unset. Reindex earlier generations to refresh this evidence. The indexer's modeled classpath is not proof of arbitrary production classloader/plugin/module-path behavior; unsupported build semantics remain coverage limitations.
+
+
+## Full-application replica acceptance
+
+The mandatory `ApplicationReplicaConsistencyPostgresIT` report requires one passed, unskipped case. It starts two independent full Spring JVMs and checks shared queue contention, production heartbeat renewal, six-tool HTTP registration, old-generation reads while a real candidate Zoekt shard waits to publish, and consistent new-commit reads/search after atomic publication. Child logs are uploaded from `target/replica-process-logs/**`. Both use a disposable UUID database schema and the CI services; only fixture-owned shards/schema/processes are removed. This adds an eighth PostgreSQL case; the existing seven and HTTPS Maven case remain mandatory.
+
+For manual execution, use the same Java21, PostgreSQL17+pgvector, Zoekt and Ollama prerequisites/environment as the full workflow, then `mvn --batch-mode --no-transfer-progress -Ppostgres-integration -Dtest=ApplicationReplicaConsistencyPostgresIT verify`. Inspect `target/surefire-reports/TEST-com.wynk.codecontext.index.ApplicationReplicaConsistencyPostgresIT.xml`: exactly one test case, no failure/error/skipped nodes. Child readiness, job and HTTP waits are bounded; a failure must retain both process logs. This fixture verifies two applications sharing one host filesystem/service set; full-application crash/network faults and real multi-host Kubernetes storage validation remain separate requirements.
