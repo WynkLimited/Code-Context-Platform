@@ -58,6 +58,12 @@ final class JavaSourceText {
         int lineCount=(int)NEWLINE.matcher(text).results().count();
         return new Slice(text,begin.line,begin.line+lineCount,start,start+text.length());
     }
+    Slice range(int start,int end) {
+        if(start<0||end<start||end>source.length())throw new IllegalArgumentException("invalid source range");
+        String text=source.substring(start,end).stripTrailing();
+        int index=java.util.Arrays.binarySearch(lines,start),first=index>=0?index+1:-index-1;
+        return new Slice(text,first,first+(int)NEWLINE.matcher(text).results().count(),start,start+text.length());
+    }
     private int offset(Position position) {
         if(position.line<1||position.line>lines.length||position.column<1)throw new IllegalArgumentException("invalid source position");
         int offset=lines[position.line-1]+position.column-1;

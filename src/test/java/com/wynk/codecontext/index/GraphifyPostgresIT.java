@@ -49,6 +49,8 @@ class GraphifyPostgresIT {
         Files.writeString(order, "package example; public class Order { public int total() { return 7; } }");
         Files.writeString(service, "package example; public class OrderService { public int load(Order order) { return order.total(); } }");
 
+        Path python=fixture.resolve("samples/refund_policy.py");Files.createDirectories(python.getParent());
+        Files.writeString(python,"class RefundPolicy:\n    def eligible(self, paid):\n        return paid > 0\n");
         repository = jdbc.queryForObject("""
                 INSERT INTO repositories(owner,name,clone_url,team,default_branch,repository_type,mirror_path)
                 VALUES(?,?,'https://github.com/fixture/graphify.git','graphify-it','main','SERVICE',?) RETURNING id
@@ -62,6 +64,8 @@ class GraphifyPostgresIT {
         assertTrue(Files.isRegularFile(fixture.resolve("graphify-out/graph.json")), "Graphify must produce its actual JSON graph output");
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=?", Integer.class, generation) > 0,
                 "Graphify nodes must be persisted for the candidate generation");
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path LIKE '%refund_policy.py'",Integer.class,generation)>0,
+                "the real pinned Graphify must extract the same Python structural fixture family");
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_edges WHERE generation_id=?", Integer.class, generation) > 0,
                 "Graphify relationships must be persisted for the candidate generation");
     }

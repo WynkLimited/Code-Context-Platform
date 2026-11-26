@@ -240,6 +240,11 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
                 symbols.add(new Symbol("CONSTRUCTOR",c.getNameAsString(),c.getSignature().asString(),line(c.getBegin()),line(c.getEnd()),text.text(),text.firstLine(),JavaSourceText.ownerOf(c),text.startOffset(),text.endOffset()));
             }
         } catch(RuntimeException ignored) { symbols.clear(); /* malformed source falls back to a source-file chunk */ }
+        if(!ext.equals("java"))for(var declaration:StructuralSourceChunks.parse(ext,file.content(),file.path())) {
+            var source=declaration.source();
+            symbols.add(new Symbol(declaration.kind(),declaration.name(),declaration.signature(),source.firstLine(),source.lastLine(),
+                    source.text(),source.firstLine(),declaration.owner(),source.startOffset(),source.endOffset()));
+        }
         if(symbols.isEmpty()) symbols.add(new Symbol("FILE",file.path(),file.path(),1,Math.max(1,(int)file.content().lines().count()),file.content()));
         for(Symbol symbol:symbols) {
             long node=jdbc.queryForObject("INSERT INTO code_nodes(generation_id,node_type,symbol,qualified_name,file_path,start_line,end_line,language,metadata) VALUES(?,?,?,?,?,?,?,?,jsonb_build_object('blobSha',?)) RETURNING id",Long.class,gen,symbol.type,symbol.name,symbol.qualified,file.path(),symbol.start,symbol.end,ext,file.blobSha());

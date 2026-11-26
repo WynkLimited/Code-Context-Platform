@@ -44,6 +44,9 @@ import static org.mockito.Mockito.doThrow;
 /** Real PostgreSQL, Zoekt, and Ollama acceptance test. */
 @SpringBootTest(classes = CodeContextApplication.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
+// Later separate-JVM fixtures use isolated PostgreSQL schemas with the same real Zoekt service.
+// Do not leave this catalog's background orphan cleanup running against their shards.
+@org.springframework.test.annotation.DirtiesContext(classMode=org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
 class SharedLibraryImpactPostgresIT {
     private static final Path ROOT = Path.of("target/postgres-shared-library-it").toAbsolutePath().normalize();
     private static final String TEAM = "integration";
@@ -218,6 +221,11 @@ class SharedLibraryImpactPostgresIT {
         assertTrue(sourceChunks.getFirst().get("content").toString().contains("\nclass: org.acme.Money\n"));
         assertEquals("public String convert(String value) { return value; }\n    public String convert(Integer value) { return value.toString(); }",
                 sourceChunks.getFirst().get("content").toString().split("\n---\n",2)[1]);
+        var pythonChunk=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='samples/refund_policy.py' AND symbol='def eligible(self, paid, cancelled):'",providerV1Generation);
+        assertEquals(1,pythonChunk.size(),"supported Python must produce an actual method chunk rather than a file fallback");
+        assertEquals(3,((Number)pythonChunk.getFirst().get("start_line")).intValue());
+        assertEquals(4,((Number)pythonChunk.getFirst().get("end_line")).intValue());
+        assertEquals("def eligible(self, paid, cancelled):\n        return paid > self.minimum and not cancelled",pythonChunk.getFirst().get("content").toString().split("\n---\n",2)[1]);
         var fallbackWindows=jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='docs/fallback-notes.txt' ORDER BY start_line",String.class,providerV1Generation);
         assertTrue(fallbackWindows.size()>3,"token-heavy fallback windows must be subdivided without dropping lines");
         var fallbackChunks=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='docs/fallback-notes.txt' ORDER BY id",providerV1Generation);
@@ -1026,6 +1034,7 @@ FROM semantic_call_sites WHERE id=?
         files.put("docs/guide.md","# Setup\nUse local tools.\n\n## Recovery\nRestore the saved snapshot.\n");
         files.put("config/runtime.yaml","server:\n  description: '"+"server ".repeat(450)+"'\nindexer:\n  description: '"+"indexer ".repeat(450)+"'\n");
         files.put("src/main/java/org/acme/Money.java", librarySource(api));
+        files.put("samples/refund_policy.py","class RefundPolicy:\n    minimum = 0\n    def eligible(self, paid, cancelled):\n        return paid > self.minimum and not cancelled\n");
         files.put("src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\""+route+"\") Object find(String id) { return null; } }\n");
         files.put("src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\""+topic+"\", \"payload\"); } }\n");
         files.put("openapi.yaml", """
@@ -1492,6 +1501,9 @@ FROM semantic_call_sites WHERE id=?
         assertTrue(semanticResults.toString().contains("convert"),"semantic retrieval omitted symbol evidence: "+semanticResults);
         assertTrue(semanticResults.toString().contains(repositories.currentCommit(repositories.id("Fixture","common-library")).orElseThrow()),"semantic retrieval omitted commit provenance: "+semanticResults);
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_chunks c JOIN index_generations g ON g.id=c.generation_id AND g.published WHERE g.repository_id=? AND c.embedding IS NOT NULL",Integer.class,repositories.id("Fixture","common-library"))>0,"real Ollama vectors must be persisted in PostgreSQL");
+        JsonNode refund=post(client,endpoint,session,Map.of("jsonrpc","2.0","id",82,"method","tools/call","params",Map.of("name","semantic_search","arguments",Map.of("query","determine whether a paid transaction can be refunded when it has not been cancelled","repository","Fixture/common-library","limit",10))));
+        assertFalse(refund.path("result").path("isError").asBoolean(false),"natural-language refund retrieval must succeed through HTTP MCP");
+        assertTrue(structuredToolPayload(refund).toString().contains("samples/refund_policy.py"),"independently labelled refund question must retrieve its Python implementation: "+refund);
         UUID semanticGeneration=repositories.currentGeneration(repositories.id("Fixture","common-library")).orElseThrow();
         String fingerprint=jdbc.queryForObject("SELECT embedding_fingerprint FROM index_generations WHERE id=?",String.class,semanticGeneration);
         assertNotNull(fingerprint);assertTrue(fingerprint.matches("[0-9a-f]{64}"));
