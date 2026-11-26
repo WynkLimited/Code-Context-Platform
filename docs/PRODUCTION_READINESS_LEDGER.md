@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `b6f5a65e393e1d1d971fb0572c04a83980a03987` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45873560029 |
+| Last green mandatory CI SHA | `9adaa141efcaf148af441e1fb7970deeee646a68` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45875224860 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -572,3 +572,17 @@ Four targeted real-service cases passed (`target/missed-event-recovery.log`): V1
 
 
 Final missed-event local validation:351 Java21 unit cases and15 real-service integration cases passed, zero failures/errors/skips (`target/missed-event-unit.log`, `target/missed-event-full-acceptance.log`). The final full run also verifies that a second unchanged scheduled HEAD check reuses the exact published generation and that lifecycle transition clears the previous provider claim. YAML parsing, inline Python gate compilation/execution against the real local XML, complete diff review and `git diff --check` passed. Prior provider-binding commit b6f5a65 is accepted by CI45873560029: downloaded365 cases, zero failures/errors/skips (`target/ci-b6f5a65-reports`). New missed-event slice exact-SHA CI is pending; expected366 cases (351unit+15integration). No live-provider, latency, production-capacity or overall completion claim.
+
+
+### GitHub App access revocation and replica credential invalidation — 2026-11-27
+
+Forward V18 records confirmed installation/host binding, common delivery receipts surviving repository purge, and row-serialized installation epochs. Epoch checks invalidate cached App credentials across instances; a revocation committed during provider issuance prevents caching the credential. Signed installation deletion/suspension and repository-removal events use persisted provider identities to suspend access, cancel queued jobs and fence publication. Restoration events never automatically grant platform authorization. Unknown legacy installation provenance and empty removal lists are handled conservatively; no invented provider binding or global hook deletion occurs.
+
+Local evidence so far:14 focused unit cases passed (`target/app-revocation-focused-final.log`); restricted-role V1–V18 and actual PostgreSQL revocation/cache acceptance2 passed (`target/app-access-postgres.log`); signed HTTP/MCP + existing webhook/PG acceptance8 passed after the protocol-status correction (`target/app-revocation-http-final.log`). Final HTTP/PG fault acceptance2 passed (`target/app-revocation-final-faults.log`), including controlled database failure503 with no receipt/access change, no private SQL error in the response, invalid HMAC401, changed redelivery409, exact previous-generation publication rejection23514 under a valid old lease, former/current-owner MCP read denial, different-installation preservation and no automatic restoration on unsuspend. The PostgreSQL fixture also proves transaction rollback, unchanged receipt/epoch on failure, legacy-push and cross-event collision rejection, receipt preservation after scoped-history removal, independent replica cache invalidation and legacy binding suspension.
+
+A real HTTP test initially failed409→401 because a controlled ResponseStatusException redispatched through API-key-protected `/error`. A controller-scoped response handler now preserves controlled protocol statuses directly; database errors return sanitized503 and log category/SQLSTATE only. SecurityConfig, API-key/async handling, CSRF, origin validation and tool registration were not changed. The old unit transaction stub was replaced with a Spring transaction-aware fixture; all existing webhook assertions remain intact.
+
+V18 has executed locally: never rewrite it. Full unit/full16-case integration and exact-SHA CI are pending. Configuration discovery and subsequent mandatory PRD phases remain actionable; live-provider/staging/client/benchmark certification still requires genuine external evidence. Overall NOT READY FOR PRODUCTION.
+
+
+Final App local evidence: full Java21 unit suite351 passed (`target/app-revocation-unit.log`), full real PostgreSQL17/Graphify/Ollama/Zoekt/HTTP MCP integration profile16 passed (`target/app-revocation-full-acceptance.log`), zero failures/errors/skips. All existing exact Java/Kotlin/REST impact, rollback, replica, restricted-role, refresh and lifecycle assertions remain enabled and passed. Parsed YAML, compiled all12 inline Python blocks, and executed report verification gates against actual367 local XML cases; complete diff review and `git diff --check` passed. Prior missed-event commit9adaa14 is accepted by CI45875224860: actual366 cases, zero failures/errors/skips, plus every named gate/script/restore step (`target/ci-9adaa14-reports`, `target/ci-9adaa14-steps.tsv`). App slice exact-SHA CI remains pending; expected367 cases. Independent configuration-discovery files are still unvalidated and excluded from this App commit. Overall NOT READY FOR PRODUCTION; continue remaining PRD implementation.

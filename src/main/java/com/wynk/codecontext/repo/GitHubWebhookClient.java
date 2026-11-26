@@ -27,7 +27,7 @@ public final class GitHubWebhookClient {
     private final OutboundUrlGuard.NameResolver resolver;
     private GitHubAppIntegration githubApp;
     @Autowired public void githubApp(GitHubAppIntegration app){this.githubApp=app;}
-    public record Hook(String mode,Long repositoryHookId,String callbackUrl,long providerRepositoryId) {}
+    public record Hook(String mode,Long repositoryHookId,String callbackUrl,long providerRepositoryId,Long installationId,String providerHost) {}
     public enum Retirement {DELETED,ABSENT}
     static final class ProviderFailure extends java.io.IOException {
         final int status;
@@ -77,9 +77,9 @@ public final class GitHubWebhookClient {
     Hook reconcile(RepositoryRecord repository,Long expectedProviderId) throws Exception {
         if(!configured())throw new IllegalStateException("Separate webhook-management credential and HTTPS callback URL are required");
         if(githubApp!=null&&githubApp.enabled()) {
-            long repositoryId=githubApp.verifyCentralWebhook(repository);
-            requireProviderId(expectedProviderId,repositoryId);
-            return new Hook("APP",null,githubApp.callbackUrl(),repositoryId);
+            var binding=githubApp.verifyCentralWebhook(repository);
+            requireProviderId(expectedProviderId,binding.repositoryId());
+            return new Hook("APP",null,githubApp.callbackUrl(),binding.repositoryId(),binding.installationId(),URI.create(repository.cloneUrl()).getHost().toLowerCase(java.util.Locale.ROOT));
         }
         URI clone=URI.create(repository.cloneUrl());
         GitHubAppIntegration.requireMatchingProvider(clone,URI.create(settings.apiBase()));
@@ -111,7 +111,7 @@ public final class GitHubWebhookClient {
         if(id<=0||existing!=null&&id!=existing||!result.path("active").asBoolean()||!callback.equals(result.path("config").path("url").asText())
                 ||!result.path("events").isArray()||!hasPush(result.path("events")))
             throw new IllegalStateException("GitHub did not confirm the active push webhook");
-        return new Hook("REPOSITORY",id,callback,providerRepository);
+        return new Hook("REPOSITORY",id,callback,providerRepository,null,clone.getHost().toLowerCase(java.util.Locale.ROOT));
     }
     private static void requireProviderId(Long expected,long actual) {
         if(expected!=null&&expected!=actual)throw new ProviderIdentityChanged();

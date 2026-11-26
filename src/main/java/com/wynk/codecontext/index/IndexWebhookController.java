@@ -43,18 +43,34 @@ public class IndexWebhookController {
     private final TransactionTemplate transactions;
     private final Clock clock;
     private final Duration maxPayloadAge;
+    private final com.wynk.codecontext.repo.GitHubAppAccess appAccess;
+
+    // Return controlled protocol errors directly. sendError would redispatch a HMAC-authenticated
+    // webhook to the API-key-protected /error path and incorrectly replace e.g. 409 with 401.
+    @org.springframework.web.bind.annotation.ExceptionHandler(ResponseStatusException.class)
+    public org.springframework.http.ResponseEntity<Map<String,Object>> protocolFailure(ResponseStatusException failure) {
+        return org.springframework.http.ResponseEntity.status(failure.getStatusCode()).body(Map.of(
+                "status",failure.getStatusCode().value(),"error",failure.getReason()==null?"request rejected":failure.getReason()));
+    }
+    @org.springframework.web.bind.annotation.ExceptionHandler(org.springframework.dao.DataAccessException.class)
+    public org.springframework.http.ResponseEntity<Map<String,Object>> persistenceFailure(org.springframework.dao.DataAccessException failure) {
+        Throwable root=failure;while(root.getCause()!=null)root=root.getCause();
+        LOGGER.error("github.webhook.persistence_failed category={} sqlState={}",failure.getClass().getSimpleName(),root instanceof java.sql.SQLException sql?sql.getSQLState():"unknown");
+        return org.springframework.http.ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("error","webhook persistence unavailable"));
+    }
 
     @Autowired
     public IndexWebhookController(IndexingService indexing, CodeContextProperties config, JsonMapper json,
                                   RepositoryStore repositories, JdbcTemplate jdbc,
-                                  org.springframework.transaction.PlatformTransactionManager transactionManager) {
-        this(indexing, config, json, repositories, jdbc, transactionManager, Clock.systemUTC(), DEFAULT_MAX_PAYLOAD_AGE);
+                                  org.springframework.transaction.PlatformTransactionManager transactionManager,
+                                  com.wynk.codecontext.repo.GitHubAppAccess appAccess) {
+        this(indexing, config, json, repositories, jdbc, transactionManager, Clock.systemUTC(), DEFAULT_MAX_PAYLOAD_AGE,appAccess);
     }
 
     IndexWebhookController(IndexingService indexing, CodeContextProperties config, JsonMapper json,
                            RepositoryStore repositories, JdbcTemplate jdbc,
                            org.springframework.transaction.PlatformTransactionManager transactionManager,
-                           Clock clock, Duration maxPayloadAge) {
+                           Clock clock, Duration maxPayloadAge,com.wynk.codecontext.repo.GitHubAppAccess appAccess) {
         this.indexing = indexing;
         this.config = config;
         this.json = json;
@@ -63,6 +79,7 @@ public class IndexWebhookController {
         this.transactions = new TransactionTemplate(transactionManager);
         this.clock = clock == null ? Clock.systemUTC() : clock;
         this.maxPayloadAge = maxPayloadAge == null ? DEFAULT_MAX_PAYLOAD_AGE : maxPayloadAge;
+        this.appAccess=java.util.Objects.requireNonNull(appAccess);
     }
 
     @PostMapping("/webhooks/github/{owner}/{name}")
@@ -112,6 +129,9 @@ public class IndexWebhookController {
         }
         String payloadHash = sha256(body);
         return transactions.execute(status -> {
+            boolean fresh=appAccess.claim(deliveryId,"push",payloadHash);
+            if(!fresh&&jdbc.queryForList("SELECT delivery_id FROM webhook_deliveries WHERE delivery_id=?",deliveryId).isEmpty())
+                return Map.of("accepted",false,"duplicate",true);
             int inserted = jdbc.update("""
                     INSERT INTO webhook_deliveries(delivery_id,repository_id,payload_sha256,signing_key_fingerprint)
                     VALUES(?,?,?,?) ON CONFLICT(delivery_id) DO NOTHING
@@ -150,6 +170,13 @@ public class IndexWebhookController {
         if(!valid(signature,body,config.webhookSecret()))throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"invalid webhook signature");
         if(body.length>MAX_PAYLOAD_BYTES)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"webhook payload exceeds 1 MiB");
         if("ping".equals(event))return ping(delivery);
+        if(java.util.List.of("installation","installation_repositories").contains(event==null?"":event)) {
+            UUID id;
+            try {id=UUID.fromString(delivery);}catch(RuntimeException invalid){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"a valid GitHub delivery ID is required");}
+            JsonNode payload;
+            try {payload=json.readTree(body);}catch(Exception malformed){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"malformed installation payload");}
+            return appAccess.receive(id,event,sha256(body),payload);
+        }
         String identity;
         try {identity=json.readTree(body).path("repository").path("full_name").asText("");}
         catch(Exception malformed){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"malformed GitHub push payload");}

@@ -113,6 +113,8 @@ class SharedLibraryImpactPostgresIT {
         jdbc.update("DELETE FROM maven_module_classpaths");
         jdbc.update("DELETE FROM contract_refresh_jobs");
         jdbc.update("DELETE FROM webhook_deliveries");
+        jdbc.update("DELETE FROM github_installation_epochs");
+        jdbc.update("DELETE FROM github_event_receipts");
         jdbc.update("DELETE FROM repository_lifecycle_work");
         jdbc.update("DELETE FROM index_jobs");
         jdbc.update("DELETE FROM index_generations");
@@ -128,7 +130,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("17", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("18", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -615,6 +617,45 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
         }
         assertNotNull(unchanged);awaitSucceeded(unchanged,"lifecycle-renamed");
         assertEquals(unchangedGeneration,repositories.currentGeneration(id).orElseThrow(),"an unchanged HEAD check must reuse the valid published generation");
+        // Controlled App bindings test signed HTTP access revocation, not live GitHub provisioning.
+        jdbc.update("UPDATE repository_onboarding SET webhook_mode='APP',webhook_state='READY',provider_repository_id=81,provider_installation_id=17,provider_host='github.com' WHERE repository_id=?",id);
+        var foreign=repositories.insert("Fixture","not-revoked",original.toUri().toString(),"isolated","main","SERVICE",ROOT.resolve("mirrors/Fixture/not-revoked").toString());
+        jdbc.update("INSERT INTO repository_onboarding(repository_id,webhook_mode,webhook_state,provider_repository_id,provider_installation_id,provider_host) VALUES(?,'APP','READY',82,18,'github.com')",foreign.id());
+        UUID removal=UUID.randomUUID();
+        String removed=json.writeValueAsString(Map.of("action","removed","installation",Map.of("id",17),"repository_selection","selected","repositories_removed",List.of(Map.of("id",81))));
+        assertEquals(401,installationEvent("installation_repositories",removal,removed,false).statusCode());
+        assertTrue(jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,id));
+        jdbc.execute("CREATE FUNCTION reject_webhook_receipt_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'controlled private database fixture failure'; END $$");
+        jdbc.execute("CREATE TRIGGER reject_webhook_receipt_fixture BEFORE INSERT ON github_event_receipts FOR EACH ROW EXECUTE FUNCTION reject_webhook_receipt_fixture()");
+        try {
+            var unavailable=installationEvent("installation_repositories",removal,removed,true);
+            assertEquals(503,unavailable.statusCode(),unavailable.body());assertFalse(unavailable.body().contains("controlled private database"));
+            assertTrue(jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,id));
+            assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM github_event_receipts WHERE delivery_id=?",Integer.class,removal));
+        }finally{jdbc.execute("DROP TRIGGER reject_webhook_receipt_fixture ON github_event_receipts");jdbc.execute("DROP FUNCTION reject_webhook_receipt_fixture()");}
+        try(var lease=awaitLifecycleLease(id)) {
+            var revoked=installationEvent("installation_repositories",removal,removed,true);
+            assertEquals(202,revoked.statusCode(),revoked.body());assertEquals(1,json.readTree(revoked.body()).path("repositoriesSuspended").asInt());
+            lease.assertOwned();
+            var rejected=assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->jdbc.update("UPDATE index_generations SET published=true WHERE id=?",unchangedGeneration));
+            Throwable cause=rejected;while(cause.getCause()!=null)cause=cause.getCause();
+            assertEquals("23514",((java.sql.SQLException)cause).getSQLState());
+        }
+        newClient.rejectFile("Fixture/lifecycle-renamed",path);assertTrue(newClient.symbols("Fixture/lifecycle-renamed").isEmpty());
+        var repeat=installationEvent("installation_repositories",removal,removed,true);
+        assertEquals(202,repeat.statusCode(),repeat.body());assertTrue(json.readTree(repeat.body()).path("duplicate").asBoolean());
+        String changed=removed.replace("81","82");assertEquals(409,installationEvent("installation_repositories",removal,changed,true).statusCode());
+        assertEquals(202,installationEvent("installation",UUID.randomUUID(),"{\"action\":\"unsuspend\",\"installation\":{\"id\":17}}",true).statusCode());
+        assertFalse(jdbc.queryForObject("SELECT enabled OR desired_enabled FROM repositories WHERE id=?",Boolean.class,id),"restored provider access must not automatically restore platform authorization");
+        assertTrue(jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,foreign.id()),"a different installation must remain untouched");
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM team_repository_access WHERE repository_id=?",Integer.class,id));
+    }
+    private HttpResponse<String> installationEvent(String event,UUID delivery,String payload,boolean valid)throws Exception {
+        byte[] bytes=payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/webhooks/github"))
+                .header("Content-Type","application/json").header("X-GitHub-Event",event).header("X-GitHub-Delivery",delivery.toString())
+                .header("X-Hub-Signature-256",valid?webhookSignature(bytes):"sha256="+"0".repeat(64))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bytes)).build(),HttpResponse.BodyHandlers.ofString());
     }
     private static String lifecycleSource(String version){return "package lifecycle;\npublic class LifecycleMarker {\n public String version(){ return \""+version+"\"; }\n}\n";}
     private RepositoryIndexLeaseManager.Lease awaitLifecycleLease(UUID id)throws Exception {

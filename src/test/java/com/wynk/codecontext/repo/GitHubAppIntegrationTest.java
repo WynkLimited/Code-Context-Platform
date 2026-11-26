@@ -103,6 +103,7 @@ class GitHubAppIntegrationTest {
         try {
             var result=webhook.reconcile(new RepositoryRecord(UUID.randomUUID(),"acme","library","https://github.com/acme/library.git","team","main","LIBRARY","/repos/acme/library"));
             assertEquals("APP",result.mode());assertNull(result.repositoryHookId());assertEquals(6,calls.get());assertEquals(81,result.providerRepositoryId());
+            assertEquals(17L,result.installationId());assertEquals("github.com",result.providerHost());
         }finally{webhook.stop();app.stop();}
     }
     private GitHubAppIntegration app(Path pem,GitHubAppIntegration.Exchange exchange){return new GitHubAppIntegration(props(),json,settings(pem),Clock.fixed(NOW,ZoneOffset.UTC),exchange,

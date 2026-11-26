@@ -8,8 +8,6 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
-import org.springframework.transaction.TransactionStatus;
-import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.web.server.ResponseStatusException;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -128,14 +126,16 @@ class IndexWebhookControllerTest {
             }
         };
         CodeContextProperties properties = properties();
-        PlatformTransactionManager transactionManager = new PlatformTransactionManager() {
-            @Override public TransactionStatus getTransaction(TransactionDefinition definition) { return new SimpleTransactionStatus(); }
-            @Override public void commit(TransactionStatus status) { }
-            @Override public void rollback(TransactionStatus status) { }
+        PlatformTransactionManager transactionManager = new org.springframework.transaction.support.AbstractPlatformTransactionManager() {
+            @Override protected Object doGetTransaction(){return new Object();}
+            @Override protected void doBegin(Object transaction,TransactionDefinition definition){}
+            @Override protected void doCommit(org.springframework.transaction.support.DefaultTransactionStatus status){}
+            @Override protected void doRollback(org.springframework.transaction.support.DefaultTransactionStatus status){}
         };
         WebhookIndexing indexing = new WebhookIndexing(repositories, properties, transactionManager);
         return new Fixture(new IndexWebhookController(indexing, properties, JsonMapper.builder().build(),
-                repositories, jdbc, transactionManager, clock, maxPayloadAge), indexing, jdbc);
+                repositories, jdbc, transactionManager, clock, maxPayloadAge,
+                new com.wynk.codecontext.repo.GitHubAppAccess(jdbc,repositories,transactionManager,"https://api.github.com")), indexing, jdbc);
     }
 
     private static CodeContextProperties properties() {
@@ -179,9 +179,13 @@ class IndexWebhookControllerTest {
 
     private static final class WebhookJdbc extends JdbcTemplate {
         private final java.util.Map<UUID, IndexWebhookController.Delivery> deliveries = new java.util.HashMap<>();
+        private final java.util.Map<UUID,java.util.Map<String,Object>> receipts=new java.util.HashMap<>();
         private int insertCount;
 
         @Override public int update(String sql, Object... args) {
+            if(sql.contains("INSERT INTO github_event_receipts")) {
+                return receipts.putIfAbsent((UUID)args[0],java.util.Map.of("event",args[1],"payload_sha256",args[2]))==null?1:0;
+            }
             if (sql.contains("INSERT INTO webhook_deliveries")) {
                 insertCount++;
                 UUID delivery = (UUID) args[0];
@@ -190,6 +194,14 @@ class IndexWebhookControllerTest {
                 return 1;
             }
             return 1;
+        }
+        @Override public java.util.Map<String,Object> queryForMap(String sql,Object... args) {
+            if(sql.contains("github_event_receipts"))return receipts.get((UUID)args[0]);
+            throw new UnsupportedOperationException("unexpected receipt query: "+sql);
+        }
+        @Override public java.util.List<java.util.Map<String,Object>> queryForList(String sql,Object... args) {
+            if(sql.contains("webhook_deliveries"))return deliveries.containsKey((UUID)args[0])?java.util.List.of(java.util.Map.of("delivery_id",args[0])):java.util.List.of();
+            throw new UnsupportedOperationException("unexpected delivery query: "+sql);
         }
 
         @Override @SuppressWarnings("unchecked") public <T> T queryForObject(String sql, Class<T> type, Object... args) {

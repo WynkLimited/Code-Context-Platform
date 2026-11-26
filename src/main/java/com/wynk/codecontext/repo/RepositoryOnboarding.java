@@ -87,6 +87,7 @@ public final class RepositoryOnboarding {
                 catch(Exception failure){throw new ReconciliationFailure(failure);}
                 String configuration=webhooks.configurationHash(repository);
                 lease.fenceTransaction();
+                jdbc.update("UPDATE repository_onboarding SET provider_installation_id=?,provider_host=? WHERE repository_id=? AND webhook_claim=?",hook.installationId(),hook.providerHost(),id,token);
                 int changed=jdbc.update("UPDATE repository_onboarding SET webhook_state='READY',webhook_id=?,webhook_mode=?,webhook_callback_url=?,provider_repository_id=?,webhook_verified_at=CASE WHEN webhook_configuration_hash IS DISTINCT FROM ? OR webhook_verified_at IS NULL THEN now() ELSE webhook_verified_at END,webhook_configuration_hash=?,webhook_attempt=0,webhook_error=NULL,webhook_claim=NULL,webhook_claim_until=NULL,webhook_available_at=now()+interval '1 hour',updated_at=now() WHERE repository_id=? AND webhook_claim=?",hook.repositoryHookId(),hook.mode(),hook.callbackUrl(),hook.providerRepositoryId(),configuration,configuration,id,token);
                 if(changed==1)indexing.enqueue(repository.owner(),repository.name(),"HEAD","webhook-catchup:"+repository.id()+":"+configuration);
             });

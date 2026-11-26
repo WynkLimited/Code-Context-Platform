@@ -109,7 +109,7 @@ public final class RepositoryLifecycle {
         // Only an explicit URL change authorizes binding to a different provider repository.
         // Save old provenance in the durable retirement work before invalidating the binding.
         if(!previous.cloneUrl().equals(target.cloneUrl()))
-            jdbc.update("UPDATE repository_onboarding SET provider_repository_id=NULL,webhook_id=NULL,webhook_callback_url=NULL,webhook_verified_at=NULL,webhook_configuration_hash=NULL WHERE repository_id=?",target.id());
+            jdbc.update("UPDATE repository_onboarding SET provider_repository_id=NULL,provider_installation_id=NULL,provider_host=NULL,webhook_id=NULL,webhook_callback_url=NULL,webhook_verified_at=NULL,webhook_configuration_hash=NULL WHERE repository_id=?",target.id());
     }
     public Map<String,Object> status(UUID id,String team) {
         var repository=owned(id,team,false);

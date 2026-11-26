@@ -32,7 +32,7 @@ public final class GitHubAppIntegration {
         @Override public String toString(){return "GitHubAppSettings[credentials redacted]";}
     }
     @FunctionalInterface interface Exchange {JsonNode send(String method,URI address,String credential,String body)throws Exception;}
-    private record Credential(String token,Instant expires,long repositoryId) {
+    private record Credential(String token,Instant expires,long repositoryId,long installationId,long epoch) {
         @Override public String toString(){return "GitHubAppCredential[redacted]";}
     }
     private final Settings settings;
@@ -42,6 +42,9 @@ public final class GitHubAppIntegration {
     private final Exchange exchange;
     private final OutboundUrlGuard.NameResolver resolver;
     private final Map<String,Credential> tokens=new java.util.concurrent.ConcurrentHashMap<>();
+    private GitHubAppAccess access;
+    @Autowired public void access(GitHubAppAccess access){this.access=access;}
+    public record VerifiedBinding(long repositoryId,long installationId) {}
     private final HttpClient http=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER).build();
 
@@ -78,10 +81,14 @@ public final class GitHubAppIntegration {
         try {
             requireConfigured();String repository=repository(cloneUrl);
             Instant now=clock.instant();tokens.values().removeIf(token->!token.expires().isAfter(now));
-            var cached=tokens.get(repository);if(cached!=null)return cached.token();
+            var cached=tokens.get(repository);
+            String providerHost=URI.create(cloneUrl).getHost().toLowerCase(java.util.Locale.ROOT);
+            if(cached!=null&&epoch(providerHost,cached.installationId())==cached.epoch())return cached.token();
+            tokens.remove(repository);
             if(tokens.size()>=512)throw new IllegalStateException("GitHub App credential cache capacity reached");
             String jwt=jwt();
             var installation=installation(repository,jwt);
+            long version=epoch(providerHost,installation);
             String body=json.writeValueAsString(Map.of("repository_names",List.of(repository.split("/",2)[1]),
                     "permissions",Map.of("contents","read","metadata","read")));
             var issued=call("POST","/app/installations/"+installation+"/access_tokens",jwt,body);
@@ -98,13 +105,16 @@ public final class GitHubAppIntegration {
             long repositoryId=scope.path("repositories").get(0).path("id").asLong();
             if(repositoryId<=0)throw new IllegalStateException("GitHub did not identify the scoped repository");
             Instant until=expiry.minusSeconds(60).isBefore(now.plusSeconds(300))?expiry.minusSeconds(60):now.plusSeconds(300);
-            tokens.put(repository,new Credential(token,until,repositoryId));return token;
+            if(version!=epoch(providerHost,installation))throw new IllegalStateException("GitHub App access changed during authorization");
+            tokens.put(repository,new Credential(token,until,repositoryId,installation,version));return token;
         }catch(Exception failure){throw new IllegalStateException("GitHub App read-only repository authorization failed ("+failure.getClass().getSimpleName()+")");}
     }
-    public synchronized long verifyCentralWebhook(RepositoryRecord record)throws Exception {
+    private long epoch(String host,long installation){return access==null?0:access.epoch(host,installation);}
+    public synchronized VerifiedBinding verifyCentralWebhook(RepositoryRecord record)throws Exception {
         requireConfigured();String repository=repository(record.cloneUrl());
         if(!repository.equalsIgnoreCase(record.key()))throw new IllegalArgumentException("GitHub App repository identity differs from registration");
-        String jwt=jwt();installation(repository,jwt);
+        String jwt=jwt();long installation=installation(repository,jwt);
+        var cached=tokens.get(repository);if(cached!=null&&cached.installationId()!=installation)tokens.remove(repository);
         var app=call("GET","/app",jwt,null);
         if(!hasPush(app.path("events")))throw new IllegalStateException("GitHub App must subscribe to push events");
         requireReadOnly(app.path("permissions"));
@@ -115,7 +125,7 @@ public final class GitHubAppIntegration {
             throw new IllegalStateException("GitHub App central webhook configuration needs operator correction");
         // The provider masks its secret. Only a fresh HMAC-verified delivery can prove key agreement.
         contentToken(record.cloneUrl());
-        return tokens.get(repository).repositoryId();
+        var confirmed=tokens.get(repository);return new VerifiedBinding(confirmed.repositoryId(),confirmed.installationId());
     }
     private long installation(String repository,String jwt)throws Exception {
         var installation=call("GET","/repos/"+repository+"/installation",jwt,null);
