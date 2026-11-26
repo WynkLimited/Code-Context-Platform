@@ -23,7 +23,7 @@ import java.util.UUID;
 @Service
 public final class RepositoryLifecycle {
     public record Update(String owner,String name,String cloneUrl,String defaultBranch,String type,String team,Long expectedRevision) {}
-    private record Snapshot(RepositoryRecord repository,long revision,boolean desiredEnabled) {}
+    private record Snapshot(RepositoryRecord repository,long revision,boolean desiredEnabled,boolean enabled) {}
     private record Work(UUID id,UUID repository,long target,RepositoryRecord previous,boolean reset,UUID token) {}
     private record HookWork(UUID id,UUID repository,RepositoryRecord previous,long hook,String callback,Long providerId,UUID token) {}
     private final JdbcTemplate jdbc;private final CodeContextProperties properties;
@@ -111,7 +111,9 @@ public final class RepositoryLifecycle {
     public Map<String,Object> status(UUID id,String team) {
         var repository=owned(id,team,false);
         var work=jdbc.queryForList("SELECT id,target_revision,state,attempt,error,webhook_retirement_state,webhook_retirement_outcome,webhook_retirement_error,created_at,updated_at FROM repository_lifecycle_work WHERE repository_id=? ORDER BY target_revision DESC LIMIT 20",id);
-        return Map.of("repository",repository.repository(),"revision",repository.revision(),"desiredEnabled",repository.desiredEnabled(),"transitions",work);
+        var jobs=jdbc.queryForList("SELECT j.id,j.state,j.requested_commit_sha,j.commit_sha,j.generation_id,j.error FROM index_jobs j JOIN repository_onboarding o ON o.initial_job_id=j.id WHERE o.repository_id=?",id);
+        return Map.of("repository",repository.repository(),"revision",repository.revision(),"desiredEnabled",repository.desiredEnabled(),"enabled",repository.enabled(),
+                "indexJob",jobs.isEmpty()?Map.of():jobs.getFirst(),"transitions",work);
     }
     public void retry(UUID id,String team) {
         transactions.executeWithoutResult(status->{
@@ -239,8 +241,8 @@ public final class RepositoryLifecycle {
     }
     private void defer(Work work){jdbc.update("UPDATE repository_lifecycle_work SET state='QUEUED',available_at=now()+interval '3 seconds',claim_token=NULL,claim_until=NULL WHERE id=? AND claim_token=?",work.id(),work.token());}
     private Snapshot owned(UUID id,String team,boolean lock) {
-        return jdbc.query("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path,configuration_revision,desired_enabled FROM repositories WHERE id=? AND team=?"+(lock?" FOR UPDATE":""),
-                (rs,n)->new Snapshot(new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),rs.getLong(9),rs.getBoolean(10)),id,team)
+        return jdbc.query("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path,configuration_revision,desired_enabled,enabled FROM repositories WHERE id=? AND team=?"+(lock?" FOR UPDATE":""),
+                (rs,n)->new Snapshot(new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),rs.getLong(9),rs.getBoolean(10),rs.getBoolean(11)),id,team)
                 .stream().findFirst().orElseThrow(()->new ResponseStatusException(HttpStatus.NOT_FOUND,"repository not found or access denied"));
     }
     private Path root(){return Path.of(properties.repositoryRoot()).toAbsolutePath().normalize();}

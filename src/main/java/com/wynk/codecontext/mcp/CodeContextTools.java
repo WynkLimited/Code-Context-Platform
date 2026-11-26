@@ -54,7 +54,9 @@ public class CodeContextTools {
     }
 
     @Tool(description="Read a UTF-8 source file from a Git repository, optionally limited to a one-based line range.")
-    public String read_file(String repository,String path,Integer startLine,Integer endLine) throws Exception {
+    public String read_file(String repository,String path,
+            @ToolParam(required=false,description="Optional first source line, defaults to 1") Integer startLine,
+            @ToolParam(required=false,description="Optional last source line, defaults to the file end within the response bound") Integer endLine) throws Exception {
         Timer.Sample sample=metrics.startMcp();
         boolean error=false;
         try {

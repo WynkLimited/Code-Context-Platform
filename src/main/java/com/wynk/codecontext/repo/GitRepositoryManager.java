@@ -45,7 +45,7 @@ public class GitRepositoryManager {
     }
     public static void requireProviderIdentity(String url,String owner,String name) {
         var uri=java.net.URI.create(url);
-        if("https".equalsIgnoreCase(uri.getScheme())&&!uri.getPath().replaceFirst("\\.git$","").equalsIgnoreCase("/"+owner+"/"+name))
+        if("https".equalsIgnoreCase(uri.getScheme())&&(uri.getPath()==null||!uri.getPath().replaceFirst("\\.git$","").equalsIgnoreCase("/"+owner+"/"+name)))
             throw new IllegalArgumentException("registered repository identity must match its Git provider URL");
     }
 

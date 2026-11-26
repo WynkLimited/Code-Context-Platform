@@ -80,7 +80,7 @@ class SharedLibraryImpactPostgresIT {
         registry.add("code-context.zoekt.webserver", () -> System.getenv().getOrDefault("ZOEKT_WEB_SERVER", "http://localhost:6070"));
         registry.add("spring.ai.ollama.base-url", () -> System.getenv().getOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"));
         registry.add("code-context.api-keys", () -> TEAM + "=" + API_KEY + ",isolated=isolated-integration-token");
-        registry.add("code-context.admin-api-keys", () -> "admin=admin-token,"+TEAM+"=integration-admin-token");
+        registry.add("code-context.admin-api-keys", () -> "admin=admin-token,"+TEAM+"=integration-admin-token,isolated=isolated-integration-admin-token");
         registry.add("code-context.graphify.enabled", () -> "false");
         registry.add("code-context.mcp-allowed-origins", () -> "http://localhost,http://127.0.0.1");
     }
@@ -112,6 +112,7 @@ class SharedLibraryImpactPostgresIT {
         jdbc.update("DELETE FROM maven_module_classpaths");
         jdbc.update("DELETE FROM contract_refresh_jobs");
         jdbc.update("DELETE FROM webhook_deliveries");
+        jdbc.update("DELETE FROM repository_lifecycle_work");
         jdbc.update("DELETE FROM index_jobs");
         jdbc.update("DELETE FROM index_generations");
         jdbc.update("DELETE FROM repository_index_leases");
@@ -510,6 +511,106 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
                 "a later success at the same SHA must not turn failed candidates into successful baselines");
     }
 
+
+    @Test
+    void updatesRepositoryIdentityBranchUrlAndOwnershipAndReturnsOnlyCurrentSourceThroughHttpMcp()throws Exception {
+        String path="src/main/java/lifecycle/LifecycleMarker.java";
+        Path original=ROOT.resolve("git-sources/lifecycle-original"),alternative=ROOT.resolve("git-sources/lifecycle-alternative");
+        createGitRepository(original,Map.of(path,lifecycleSource("alpha")));
+        createGitRepository(alternative,Map.of(path,lifecycleSource("bravo")));
+        String main,pilot;
+        try(Git git=Git.open(alternative.toFile())) {
+            main=git.getRepository().resolve("HEAD").name();git.checkout().setCreateBranch(true).setName("pilot").call();
+            write(alternative,path,lifecycleSource("charlie"));git.add().addFilepattern(".").call();
+            pilot=git.commit().setMessage("pilot fixture").setAuthor("Fixture","fixture@example.test").setCommitter("Fixture","fixture@example.test").call().name();
+            git.checkout().setName("main").call();
+        }
+        automaticallyOnboardAndAwait("lifecycle-original",original);
+        UUID id=repositories.id("Fixture","lifecycle-original");
+        UUID before=repositories.currentGeneration(id).orElseThrow();
+        var oldClient=new LifecycleMcp(API_KEY);var newClient=new LifecycleMcp("isolated-integration-token");
+        assertTrue(oldClient.file("Fixture/lifecycle-original",path).path("content").asText().contains("alpha"));
+        var client=HttpClient.newHttpClient();JsonNode transition;
+        try(var lease=awaitLifecycleLease(id)) {
+            var changed=client.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories/Fixture/lifecycle-original"))
+                    .header("X-API-Key","integration-admin-token").header("Content-Type","application/json")
+                    .method("PATCH",HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("name","lifecycle-renamed","cloneUrl",alternative.toUri().toString(),
+                            "defaultBranch","pilot","team","isolated","expectedRevision",1)))).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(202,changed.statusCode(),changed.body());transition=json.readTree(changed.body());
+            assertEquals(id.toString(),transition.path("repository").path("id").asText());assertEquals(2,transition.path("revision").asInt());
+            assertFalse(transition.path("enabled").asBoolean());
+            lease.assertOwned();
+            var rejected=assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->jdbc.update("UPDATE index_generations SET published=true WHERE id=?",before));
+            Throwable root=rejected;while(root.getCause()!=null)root=root.getCause();
+            assertInstanceOf(java.sql.SQLException.class,root);assertEquals("23514",((java.sql.SQLException)root).getSQLState());
+            assertTrue(newClient.symbols("Fixture/lifecycle-renamed").isEmpty(),"disabled transition must hide the previous symbol graph");
+        }
+        UUID targetJob=UUID.fromString(transition.path("indexJob").path("id").asText());
+        awaitSucceeded(targetJob,"lifecycle-renamed");
+        assertEquals(id,repositories.id("Fixture","lifecycle-renamed"));assertTrue(repositories.find("Fixture","lifecycle-original").isEmpty());
+        var current=newClient.file("Fixture/lifecycle-renamed",path);
+        assertEquals("Fixture/lifecycle-renamed",current.path("repository").asText());
+        assertEquals(pilot,current.path("commit").asText());assertTrue(current.path("content").asText().contains("charlie"));
+        var symbols=newClient.symbols("Fixture/lifecycle-renamed");assertFalse(symbols.isEmpty(),"new published symbols must be visible to the new owning team");
+        for(var symbol:symbols){assertEquals("Fixture/lifecycle-renamed",symbol.path("repository").asText());assertEquals(pilot,symbol.path("commit").asText());}
+        assertEquals(2L,jdbc.queryForObject("SELECT repository_revision FROM index_generations WHERE id=?",Long.class,repositories.currentGeneration(id).orElseThrow()));
+        assertFalse(current.path("content").asText().contains("alpha"));assertFalse(Files.exists(ROOT.resolve("mirrors/Fixture/lifecycle-original")));
+        assertTrue(Files.isDirectory(original.resolve(".git")));
+        oldClient.rejectFile("Fixture/lifecycle-renamed",path);
+        assertTrue(oldClient.symbols("Fixture/lifecycle-renamed").isEmpty());
+        var denied=client.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories/by-id/"+id+"/lifecycle"))
+                .header("X-API-Key","integration-admin-token").GET().build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(404,denied.statusCode(),"former owner must not retain lifecycle administration");
+
+        try(var lease=awaitLifecycleLease(id)) {
+            var branch=client.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories/Fixture/lifecycle-renamed"))
+                    .header("X-API-Key","isolated-integration-admin-token").header("Content-Type","application/json")
+                    .method("PATCH",HttpRequest.BodyPublishers.ofString("{\"defaultBranch\":\"main\",\"expectedRevision\":2}")).build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(202,branch.statusCode(),branch.body());
+            assertTrue(newClient.symbols("Fixture/lifecycle-renamed").isEmpty(),"even the same owning team must not read a disabled generation");
+            var disabled=client.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories/Fixture/lifecycle-renamed"))
+                    .header("X-API-Key","isolated-integration-admin-token").DELETE().build(),HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,disabled.statusCode(),disabled.body());
+        }
+        long deadline=System.nanoTime()+java.time.Duration.ofSeconds(20).toNanos();
+        while(System.nanoTime()<deadline&&jdbc.queryForObject("SELECT count(*) FROM repository_lifecycle_work WHERE repository_id=? AND state<>'DONE'",Integer.class,id)>0)Thread.sleep(100);
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM repository_lifecycle_work WHERE repository_id=? AND state<>'DONE'",Integer.class,id));
+        assertFalse(jdbc.queryForObject("SELECT enabled OR desired_enabled FROM repositories WHERE id=?",Boolean.class,id));
+        newClient.rejectFile("Fixture/lifecycle-renamed",path);
+        var restored=client.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories"))
+                .header("X-API-Key","isolated-integration-admin-token").header("Content-Type","application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of("owner","Fixture","name","lifecycle-renamed","cloneUrl",alternative.toUri().toString(),"defaultBranch","main","type","SERVICE")))).build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(200,restored.statusCode(),restored.body());assertEquals(id.toString(),json.readTree(restored.body()).path("id").asText());
+        UUID restarted=jdbc.queryForObject("SELECT initial_job_id FROM repository_onboarding WHERE repository_id=?",UUID.class,id);
+        awaitSucceeded(restarted,"lifecycle-renamed");
+        assertEquals(4L,jdbc.queryForObject("SELECT configuration_revision FROM repositories WHERE id=?",Long.class,id));
+        var reactivated=newClient.file("Fixture/lifecycle-renamed",path);
+        assertEquals(main,reactivated.path("commit").asText());assertTrue(reactivated.path("content").asText().contains("bravo"));
+        assertFalse(reactivated.path("content").asText().contains("charlie"));oldClient.rejectFile("Fixture/lifecycle-renamed",path);
+    }
+    private static String lifecycleSource(String version){return "package lifecycle;\npublic class LifecycleMarker {\n public String version(){ return \""+version+"\"; }\n}\n";}
+    private RepositoryIndexLeaseManager.Lease awaitLifecycleLease(UUID id)throws Exception {
+        long deadline=System.nanoTime()+java.time.Duration.ofSeconds(10).toNanos();
+        while(System.nanoTime()<deadline){var lease=repositoryIndexLeases.tryAcquire(id,UUID.randomUUID());if(lease.isPresent())return lease.get();Thread.sleep(100);}
+        throw new AssertionError("prior indexing publication did not release its repository lease");
+    }
+    private final class LifecycleMcp {
+        final HttpClient client=HttpClient.newHttpClient();final URI endpoint=URI.create("http://localhost:"+port+"/mcp");final String key,session;int sequence=10;
+        LifecycleMcp(String key)throws Exception {
+            this.key=key;
+            post(client,endpoint,null,Map.of("jsonrpc","2.0","id",1,"method","initialize","params",Map.of("protocolVersion","2025-03-26","capabilities",Map.of(),"clientInfo",Map.of("name","lifecycle-it","version","1"))),key);
+            session=lastResponse.headers().firstValue("Mcp-Session-Id").orElseThrow();
+            post(client,endpoint,session,Map.of("jsonrpc","2.0","method","notifications/initialized"),key);
+        }
+        JsonNode tool(String name,Map<String,Object> arguments)throws Exception{return post(client,endpoint,session,Map.of("jsonrpc","2.0","id",sequence++,"method","tools/call","params",Map.of("name",name,"arguments",arguments)),key);}
+        JsonNode file(String repository,String path)throws Exception{return structuredToolPayload(tool("read_file",Map.of("repository",repository,"path",path)));}
+        JsonNode symbols(String repository)throws Exception{return structuredToolPayload(tool("find_symbol",Map.of("repository",repository,"symbol","LifecycleMarker")));}
+        void rejectFile(String repository,String path)throws Exception {
+            var rejected=tool("read_file",Map.of("repository",repository,"path",path));
+            assertTrue(rejected.path("result").path("isError").asBoolean()||rejected.path("error").isObject(),"revoked/disabled repository must reject HTTP MCP read_file");
+            assertFalse(rejected.toString().contains("charlie"));
+        }
+    }
 
     @Test
     void demotesAmbiguousRestProvidersAndResolvesWhenOneProviderRemains() throws Exception {

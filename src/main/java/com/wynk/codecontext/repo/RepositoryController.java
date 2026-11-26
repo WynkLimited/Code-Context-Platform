@@ -76,7 +76,8 @@ public class RepositoryController {
         return store.find(owner,name).filter(r->jdbc.queryForObject("SELECT count(*) FROM team_repository_access WHERE team=? AND repository_id=?",Integer.class,auth.getPrincipal(),r.id())>0)
                 .orElseThrow(()->new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND,"repository not found or access denied"));
     }
-    @PatchMapping("/{owner}/{name}") public Map<String,Object> update(@PathVariable String owner,@PathVariable String name,
+    @PatchMapping("/{owner}/{name}") @ResponseStatus(org.springframework.http.HttpStatus.ACCEPTED)
+    public Map<String,Object> update(@PathVariable String owner,@PathVariable String name,
             @RequestBody RepositoryLifecycle.Update request,Authentication auth) {
         requireAdmin(auth);
         var repository=store.findAny(owner,name).orElseThrow(()->new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.NOT_FOUND));

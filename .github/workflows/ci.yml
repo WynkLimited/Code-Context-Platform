@@ -174,13 +174,17 @@ jobs:
           errors = sum(len(case.findall("error")) for case in cases)
           skipped = sum(len(case.findall("skipped")) for case in cases)
           passed = len(cases) - failures - errors - skipped
-          if len(cases) != 3 or passed != 3 or failures != 0 or errors != 0 or skipped != 0:
+          expected = {"indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp",
+                      "indexesKotlinProviderPersistsAbiAndReturnsExactCrossLanguageImpactThroughMcp",
+                      "demotesAmbiguousRestProvidersAndResolvesWhenOneProviderRemains",
+                      "updatesRepositoryIdentityBranchUrlAndOwnershipAndReturnsOnlyCurrentSourceThroughHttpMcp"}
+          if len(cases) != 4 or passed != 4 or {case.get("name") for case in cases} != expected or failures != 0 or errors != 0 or skipped != 0:
               print(f"Acceptance gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
               sys.exit(1)
           summary = ("## PostgreSQL acceptance: PASS\n\n"
                      f"`SharedLibraryImpactPostgresIT`: {passed} passed, {failures} failures, "
                      f"{errors} errors, {skipped} skipped "
-                     f"(Java Money provider + Kotlin Amount provider + REST ambiguity).\n\n"
+                     f"(Java Money provider + Kotlin Amount provider + REST ambiguity + repository lifecycle).\n\n"
                      f"Branch: `{os.environ['GITHUB_REF_NAME']}`  \nCommit: `{os.environ['GITHUB_SHA']}`\n")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
               output.write(summary)
@@ -292,6 +296,19 @@ jobs:
           if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
               raise SystemExit("Durable onboarding gate requires exactly one successful, unskipped case")
           print("RepositoryOnboardingPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify repository lifecycle PostgreSQL report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.RepositoryLifecyclePostgresIT"]
+          expected = "preservesIdentityFencesOldConfigurationAndNeverReactivatesAnExplicitlyDisabledRepository"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Lifecycle gate requires exactly one successful, unskipped PostgreSQL case")
+          print("RepositoryLifecyclePostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
           PYCODE
       - name: Record CI run metadata
         if: always()

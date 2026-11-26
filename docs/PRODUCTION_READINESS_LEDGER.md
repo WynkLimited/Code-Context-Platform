@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `35ef2b516262d961fe1951efdf3bec106d756834` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45851325380 |
+| Last green mandatory CI SHA | `84a63d9ef2fda51bf6a6a2edbe3c20be7d2f7da4` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45861836589 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -519,3 +519,14 @@ Status: IMPLEMENTED_UNVERIFIED for new lifecycle paths; not production-ready. Cu
 Outstanding before lifecycle closure: actual PATCH→worker→HTTP MCP rename/URL/branch/team-transfer/reactivation acceptance; stale revision rejection with a valid old lease; disable/purge during preparation; path reuse/conflicting updates; provider retirement recovery; provider-call/configuration concurrency and identity drift; configuration discovery; missed-event reconciliation; App installation revocation. These remain actionable development, separately from externally blocked live GitHub certification. No build-script execution, reference-repository changes or production deployment occurred.
 
 An earlier checkpoint commit/push command was not executed: automatic approval review failed because of a usage limit, explicitly not an unsafe-action determination. The user subsequently requested retrying publication. Record actual remote equality and exact-SHA CI after a successful push. Overall NOT READY FOR PRODUCTION; continue implementation after publication.
+
+
+### Lifecycle checkpoint accepted; end-to-end lifecycle acceptance added — 2026-11-26
+
+Checkpoint84a63d9ef2fda51bf6a6a2edbe3c20be7d2f7da4 was pushed to the existing branch and passed CI45861836589. Downloaded XML in `target/ci-84a63d9-reports` contains363 cases, zero failures/errors/skips. This accepts the checkpoint's existing gates, not the subsequent new lifecycle scenarios.
+
+The resumed slice adds real PostgreSQL lifecycle fencing/owned-mirror acceptance and actual HTTP MCP lifecycle acceptance. Both passed individually: `target/lifecycle-postgres-new.log` and `target/lifecycle-http-mcp.log`. The latter exercises rename, alternate Git URL, branch change, ownership transfer, exact new commit/source/symbol visibility, rejection of stale publication with a still-valid old lease (SQLSTATE23514), disable during preparation, and reactivation of the same UUID. Existing Java/Kotlin/REST impact scenarios are unchanged. CI now requires all four exact shared-impact method names and the new exact PostgreSQL lifecycle method; no skips are accepted.
+
+The HTTP test exposed a real tool schema mismatch: `read_file` accepted nullable line bounds in Java but marked them required in generated MCP schema. Explicit optional `@ToolParam` metadata now matches the existing behavior; authorization/path/response bounds remain unchanged. Lifecycle status exposes enabled state and the actual tracked index job, and asynchronous PATCH returns202. Malformed opaque HTTPS identities are rejected without a null-path exception.
+
+Java21 full unit suite351 passed, zero failures/errors/skips (`target/lifecycle-unit-acceptance.log`). Full14-case Java21/PG17 real-service acceptance passed, zero failures/errors/skips (`target/lifecycle-full-acceptance.log`), including all four HTTP MCP shared-impact cases and real Graphify, replica/crash recovery, retention, HTTPS Maven, onboarding and lifecycle fixtures. Workflow YAML parsing and `git diff --check` passed. Exact-SHA CI for this new slice remains pending. No live GitHub certification, deployment or reference-repository modification. Remaining actionable lifecycle gaps include provider/configuration concurrency and identity drift, case-alias namespace contention, configuration discovery, periodic missed-event reconciliation and installation revocation; overall NOT READY FOR PRODUCTION.
