@@ -33,6 +33,9 @@ public final class GitHubWebhookClient {
         final int status;
         ProviderFailure(int status){super("GitHub webhook management returned HTTP "+status);this.status=status;}
     }
+    static final class ProviderIdentityChanged extends IllegalStateException {
+        ProviderIdentityChanged(){super("GitHub namespace now identifies a different provider repository");}
+    }
     private final HttpClient client=HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10))
             .followRedirects(HttpClient.Redirect.NEVER).build();
     record Settings(String token,String apiBase,String apiHosts,String callbackBase) {
@@ -113,7 +116,7 @@ public final class GitHubWebhookClient {
         if(!repository.key().equalsIgnoreCase(accessible.path("full_name").asText()))
             throw new IllegalStateException("provider repository ownership could not be confirmed");
         if(providerRepositoryId!=null&&providerRepositoryId!=accessible.path("id").asLong())
-            throw new ProviderFailure(301); // A namespace now names a different provider repository; try the validated new identity.
+            throw new ProviderIdentityChanged();
         JsonNode hook;
         try {hook=exchange.send("GET",approved(base+"/hooks/"+hookId),null);}
         catch(ProviderFailure absent){if(absent.status==404&&allowAbsent&&providerRepositoryId!=null)return Retirement.ABSENT;throw absent;}

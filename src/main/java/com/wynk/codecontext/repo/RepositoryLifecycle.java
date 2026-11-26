@@ -159,8 +159,8 @@ public final class RepositoryLifecycle {
                     &&webhooks.configurationHash(currentRepository).equals(active.getFirst().get("webhook_configuration_hash")))outcome="REUSED";
             else {
                 try {outcome=webhooks.retireOwnedHook(item.previous(),item.hook(),item.callback(),item.providerId(),true).name();}
-                catch(GitHubWebhookClient.ProviderFailure moved) {
-                    if(!List.of(301,302,404).contains(moved.status))throw moved;
+                catch(GitHubWebhookClient.ProviderFailure | GitHubWebhookClient.ProviderIdentityChanged moved) {
+                    if(moved instanceof GitHubWebhookClient.ProviderFailure provider&&!List.of(301,302,404).contains(provider.status))throw moved;
                     var current=record(item.repository());
                     if(current==null||current.key().equals(item.previous().key()))throw moved;
                     // A renamed provider can expose the same owned hook under its new namespace.
