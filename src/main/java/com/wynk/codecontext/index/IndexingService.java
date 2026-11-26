@@ -226,7 +226,7 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
         for(Symbol symbol:symbols) {
             long node=jdbc.queryForObject("INSERT INTO code_nodes(generation_id,node_type,symbol,qualified_name,file_path,start_line,end_line,language,metadata) VALUES(?,?,?,?,?,?,?,?,jsonb_build_object('blobSha',?)) RETURNING id",Long.class,gen,symbol.type,symbol.name,symbol.qualified,file.path(),symbol.start,symbol.end,ext,file.blobSha());
             var chunks=symbol.type.equals("FILE")
-                    ?BoundedTextChunks.split(symbol.text,symbol.textStart,props.maxChunkChars(),60).stream()
+                    ?DocumentChunks.split(file.path(),symbol.text,symbol.textStart,props.maxChunkChars()).stream()
                             .map(piece->new Chunk(piece.text(),piece.firstLine(),piece.lastLine())).toList()
                     :split(symbol.text,symbol.textStart,props.maxChunkChars());
             for(Chunk part:chunks) {

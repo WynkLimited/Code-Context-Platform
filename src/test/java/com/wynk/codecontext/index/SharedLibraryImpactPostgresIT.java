@@ -193,6 +193,10 @@ class SharedLibraryImpactPostgresIT {
         var fallbackWindows=jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='docs/fallback-notes.txt' ORDER BY start_line",String.class,providerV1Generation);
         assertEquals(List.of("1:60","51:110","101:121"),fallbackWindows,
                 "plain text must persist exact 60-line windows with ten-line overlap");
+        assertEquals(List.of("1:3","4:5"),jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='docs/guide.md' ORDER BY start_line",String.class,providerV1Generation),
+                "Markdown sections must persist the actual heading boundaries");
+        assertEquals(List.of("1:2","3:4"),jdbc.queryForList("SELECT start_line::text||':'||end_line::text FROM code_chunks WHERE generation_id=? AND file_path='config/runtime.yaml' ORDER BY start_line",String.class,providerV1Generation),
+                "large configuration must persist separate top-level sections");
         assertTrue(zoektGenerationHasMatches("Fixture/common-library", providerV1Generation),
                 "Zoekt must expose the indexed provider v1 generation before replacement");
 
@@ -940,6 +944,8 @@ FROM semantic_call_sites WHERE id=?
         files.put("pom.xml", pom(version, null).replace("fixture","org.acme"));
         files.put("docs/fallback-notes.txt",java.util.stream.IntStream.rangeClosed(1,121)
                 .mapToObj(line->"Fallback fixture note "+line).collect(java.util.stream.Collectors.joining("\n")));
+        files.put("docs/guide.md","# Setup\nUse local tools.\n\n## Recovery\nRestore the saved snapshot.\n");
+        files.put("config/runtime.yaml","server:\n  description: '"+"server ".repeat(450)+"'\nindexer:\n  description: '"+"indexer ".repeat(450)+"'\n");
         files.put("src/main/java/org/acme/Money.java", librarySource(api));
         files.put("src/main/java/org/acme/OrderResource.java", "package org.acme;\nclass OrderResource { @GetMapping(\""+route+"\") Object find(String id) { return null; } }\n");
         files.put("src/main/java/org/acme/OrderProducer.java", "package org.acme;\nclass OrderProducer { void publish() { kafkaTemplate.send(\""+topic+"\", \"payload\"); } }\n");

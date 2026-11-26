@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `edfd9df399bffd18d8603bcf923d0c5a7418588d` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751313386 |
+| Last green mandatory CI SHA | `69b5f3df3ce3d4131a7df30b9a39d4cd0235b32e` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751860449 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -107,7 +107,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Next |
 |---|---|---|---|
-| OPS-METRICS | Domain meters + alert YAML | PARTIALLY_IMPLEMENTED | Structured servlet correlation verified in df9b83d CI; scoped worker identity implemented locally; service evidence and live scrape/alerts remain open |
+| OPS-METRICS | Domain meters + alert YAML | PARTIALLY_IMPLEMENTED | Structured servlet correlation verified in df9b83d CI; scoped worker identity service-verified at 69b5f3d; live scrape/alerts remain open |
 | OPS-BACKUP | Scripts + docs | PARTIALLY_IMPLEMENTED | Logical restore CI verified at 0ec1591; production WAL/PITR and volume/application recovery remain external |
 | OPS-K8S | Manifests | PARTIALLY_IMPLEMENTED | Cluster smoke BLOCKED |
 | OPS-PERF | Pilot ≤1 min searchable | PARTIALLY_IMPLEMENTED | Representative benchmark open |
@@ -116,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | edfd9df: 276 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 69b5f3d: 282 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -125,7 +125,7 @@ Status vocabulary (this ledger):
 
 | Blocker | Required operator action | Affected IDs |
 |---|---|---|
-| No local Docker daemon in prior sessions | Use CI workflow_dispatch | PG ITs |
+| Production service/volume environment | Supply staging services and persistence; local Docker absence is covered by mandatory CI for fixture acceptance | OPS-K8S / full application DR |
 | OS cgroup/seccomp sandbox | Platform/container policy | SEC-SANDBOX |
 | Isolated PG for PITR | Provision restore environment | OPS-BACKUP |
 | K8s staging cluster | Deploy smoke | OPS-K8S |
@@ -284,3 +284,14 @@ Exact SHA `edfd9df399bffd18d8603bcf923d0c5a7418588d` passed https://github.com/W
 Original design's 60-line fallback with ten-line overlap is now applied to FILE chunks, including unsupported languages and parser fallback. Java structural method/class chunks retain their structural boundaries and existing character limit. `BoundedTextChunks` enforces both bounds, reduces overlap when required by character size, advances even for a one-line budget and retains exact physical ranges. Generator 1.10.0 rebuilds prior chunk epochs through the accepted invalidation path.
 
 Two additional regressions require exact windows 1–60, 51–110 and 101–121 for 121 short lines and single-line window progression. Focused **5 passed**; complete Java21 default suite **284 passed**, zero failures/errors/skips (40.881s). The provider fixture now includes a tracked plain-text file and requires those exact PostgreSQL-persisted windows. Those new service assertions remain IMPLEMENTED_UNVERIFIED until the next exact-SHA CI. Existing impact, tool, security and rollback assertions remain intact. `git diff --check` passed. This does not implement Markdown/config sections, tiny structural merges, exact token counting or model provenance/reuse; CTX-4 remains partial.
+
+
+### Worker identity and streaming hashes accepted — 2026-11-26
+
+`1b4d1b12abf9713c587e380d5287f35bf8f67b31` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751591552: downloaded XML **279 unit + seven PostgreSQL + one real HTTPS passed**, zero failures/errors/skips. `69b5f3df3ce3d4131a7df30b9a39d4cd0235b32e` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45751860449: **282 unit + seven PostgreSQL + one real HTTPS passed**, same zero counts. Both include successful shell and real logical restore gates. The latter's actual service log has **48 structured job dispatch events** with validated UUID job/repository IDs, positive attempts and no inherited request_id; 22 include synchronized commit and generation IDs. Start, busy/failure and completion paths all retain the existing publication/fencing acceptance. Artifact directories: `target/ci-1b4d1b1-reports`, `target/ci-69b5f3d-reports`.
+
+### Markdown and configuration section chunks — 2026-11-26
+
+`DocumentChunks` uses CommonMark 0.32.0 block source spans for top-level ATX/setext headings; headings inside fenced/indented code and quotations do not split document sections. Preamble and physical blank lines are retained. Large YAML/JSON configuration uses parser source marks for top-level mapping sections without object construction or reserialization; small configuration stays one character-bounded chunk. Composition has explicit depth, alias and code-point budgets; malformed/nonmapping input retains safe fallback windows. Raw source text is embedded, not executed or fetched. CommonMark block/inline nesting are explicitly bounded at 100. Parser source-span API/release was checked against https://github.com/commonmark/commonmark-java and its changelog; the actual released artifact resolved successfully.
+
+A focused regression found loss of a real trailing blank line at a section boundary. Fixed source-slice termination while preserving the original exact line assertions. Six new cases cover heading/code/quotation/preamble distinctions, a single long heading section, large YAML raw source/coordinates, small multi-line configuration and malformed fallback. Focused combined suite **11 passed**; full Java21 default suite **290 passed**, zero failures/errors/skips (42.611s); `git diff --check` passed. Generator 1.11.0 invalidates older chunk epochs. The real PostgreSQL provider fixture additionally requires exact Markdown and large-configuration section ranges; these new assertions remain IMPLEMENTED_UNVERIFIED until the next exact-SHA CI. Fallback e5566ec CI is still running. Tiny structural merges, tokenizer-aware/blank-line splitting, model provenance and edited-file chunk reuse remain actionable; no overall readiness claim.
