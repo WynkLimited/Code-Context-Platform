@@ -85,6 +85,7 @@ class GitHubWebhookClientTest {
             return json.readTree("{\"id\":82,\"full_name\":\"acme/library\"}");
         });
         assertThrows(GitHubWebhookClient.ProviderIdentityChanged.class,()->reassigned.retireOwnedHook(repository,7,callback,81L,true));
+        assertThrows(GitHubWebhookClient.ProviderIdentityChanged.class,()->reassigned.reconcile(repository,81L),"reconciliation must reject provider drift before reading or changing hooks");
         var denied=client((method,uri,body)->{throw new GitHubWebhookClient.ProviderFailure(404);});
         assertThrows(GitHubWebhookClient.ProviderFailure.class,()->denied.retireOwnedHook(repository,7,callback,81L,true),"repository 404 may mean permission denial, not a deleted hook");
         var absent=client((method,uri,body)->{

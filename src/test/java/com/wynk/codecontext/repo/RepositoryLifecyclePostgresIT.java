@@ -53,10 +53,13 @@ class RepositoryLifecyclePostgresIT {
             git.sync(first);String before=git.head(Path.of(oldMirror));
             UUID generation=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published) VALUES(?,?,1,true) RETURNING id",UUID.class,first.id(),before);
             var service=onboarding;transaction.executeWithoutResult(status->service.schedule(first));
+            jdbc.update("UPDATE repository_onboarding SET provider_repository_id=81,webhook_id=91,webhook_callback_url='https://context.example/webhooks/github/acme/original' WHERE repository_id=?",first.id());
             var held=leases.tryAcquire(first.id(),UUID.randomUUID()).orElseThrow();
             try {
                 lifecycle.update(first.id(),"team",new RepositoryLifecycle.Update("acme","renamed",relocated.toUri().toString(),"pilot","LIBRARY","next",1L));
                 assertEquals(false,jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,first.id()));
+                assertNull(jdbc.queryForObject("SELECT provider_repository_id FROM repository_onboarding WHERE repository_id=?",Long.class,first.id()),"an explicit URL relocation must invalidate the current provider binding");
+                assertEquals(81L,jdbc.queryForObject("SELECT previous_provider_repository_id FROM repository_lifecycle_work WHERE repository_id=?",Long.class,first.id()),"retirement must retain the old immutable provider identity");
                 assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM team_repository_access WHERE repository_id=?",Integer.class,first.id()));
                 held.assertOwned();
                 var rejected=assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->jdbc.update("UPDATE index_generations SET published=true WHERE id=?",generation));

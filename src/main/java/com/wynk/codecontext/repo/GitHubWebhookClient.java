@@ -72,9 +72,14 @@ public final class GitHubWebhookClient {
     }
 
     public Hook reconcile(RepositoryRecord repository) throws Exception {
+        return reconcile(repository,null);
+    }
+    Hook reconcile(RepositoryRecord repository,Long expectedProviderId) throws Exception {
         if(!configured())throw new IllegalStateException("Separate webhook-management credential and HTTPS callback URL are required");
         if(githubApp!=null&&githubApp.enabled()) {
-            long repositoryId=githubApp.verifyCentralWebhook(repository);return new Hook("APP",null,githubApp.callbackUrl(),repositoryId);
+            long repositoryId=githubApp.verifyCentralWebhook(repository);
+            requireProviderId(expectedProviderId,repositoryId);
+            return new Hook("APP",null,githubApp.callbackUrl(),repositoryId);
         }
         URI clone=URI.create(repository.cloneUrl());
         GitHubAppIntegration.requireMatchingProvider(clone,URI.create(settings.apiBase()));
@@ -86,6 +91,7 @@ public final class GitHubWebhookClient {
         long providerRepository=identity.path("id").asLong();
         if(providerRepository<=0||!repository.key().equalsIgnoreCase(identity.path("full_name").asText()))
             throw new IllegalStateException("GitHub did not confirm the registered repository identity");
+        requireProviderId(expectedProviderId,providerRepository);
         Long existing=null;
         for(int page=1;page<=10;page++) {
             JsonNode hooks=exchange.send("GET",approved(base+"?per_page=100&page="+page),null);
@@ -106,6 +112,9 @@ public final class GitHubWebhookClient {
                 ||!result.path("events").isArray()||!hasPush(result.path("events")))
             throw new IllegalStateException("GitHub did not confirm the active push webhook");
         return new Hook("REPOSITORY",id,callback,providerRepository);
+    }
+    private static void requireProviderId(Long expected,long actual) {
+        if(expected!=null&&expected!=actual)throw new ProviderIdentityChanged();
     }
     Retirement retireOwnedHook(RepositoryRecord repository,long hookId,String expectedCallback,Long providerRepositoryId,boolean allowAbsent)throws Exception {
         if(!repositoryManagementConfigured()||expectedCallback==null||expectedCallback.isBlank())

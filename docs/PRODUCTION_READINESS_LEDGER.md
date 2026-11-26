@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `84a63d9ef2fda51bf6a6a2edbe3c20be7d2f7da4` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45861836589 |
+| Last green mandatory CI SHA | `657f21a6ae98aea5f464e4d18877de14e06e2525` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45866274097 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -66,7 +66,7 @@ Docker Desktop now runs locally with isolated owned fixtures; lack of a daemon i
 | ID | Requirement | Status | Next |
 |---|---|---|---|
 | LIFE-1 | Onboard / mirror / index | VERIFIED_PRODUCTION_READY | CI shared fixture |
-| LIFE-1A | Automatic webhook registration / GitHub App ingress | PARTIALLY_IMPLEMENTED | Path-specific webhook ingestion is verified; original design onboarding promises automatic registration. Registration/global App ingress not found; implement and test locally, actual provider installation requires operator credentials |
+| LIFE-1A | Automatic webhook registration / GitHub App ingress | PARTIALLY_IMPLEMENTED | Automatic registration and central App ingress are implemented and CI-verified with controlled-provider fixtures at657f21a; actual provider installation/delivery certification requires approved credentials |
 | LIFE-2 | Soft disable / re-onboard | VERIFIED_PRODUCTION_READY | GenerationRetentionPostgresIT |
 | LIFE-3 | Authorized hard purge | VERIFIED_PRODUCTION_READY | CI b2346ee purge+reclaim |
 | LIFE-4 | Cross-team re-onboard ACL depth | PARTIALLY_IMPLEMENTED | Expand ACL adversarial cases |
@@ -75,8 +75,8 @@ Docker Desktop now runs locally with isolated owned fixtures; lack of a daemon i
 
 | ID | Requirement | Status | Next |
 |---|---|---|---|
-| IDX-1 | Lease fencing / publication | PARTIALLY_IMPLEMENTED | GenerationRetentionPostgresIT lease expiry + fence; separate-JVM lease/crash/fencing CI green at bee5d60; full-app concurrency still open |
-| IDX-2 | Durable jobs / permanent failure | PARTIALLY_IMPLEMENTED | Guarded retry metrics accepted; V13 exact requested/actual commit and successful-generation association implemented locally, pending CI; full-application crash/network faults remain open |
+| IDX-1 | Lease fencing / publication | PARTIALLY_IMPLEMENTED | GenerationRetentionPostgresIT lease expiry + fence; separate-JVM and full-application replica/crash fencing are CI-verified at657f21a; cross-host/network-partition acceptance remains open |
+| IDX-2 | Durable jobs / permanent failure | PARTIALLY_IMPLEMENTED | Guarded retry metrics accepted; V13 exact requested/actual commit and successful-generation association plus full-application crash/recovery are CI-verified at657f21a; network-partition faults remain open |
 | IDX-3 | Incremental ≡ full rebuild | PARTIALLY_IMPLEMENTED | Java edit/add/delete/rename, dependency marker, generator epoch and embedding-space rebuild assertions verified through b2d0b70; broader build/module/language variants remain open |
 | IDX-4 | Zoekt orphan reconcile | VERIFIED_PRODUCTION_READY | Retention PG + unit |
 
@@ -551,3 +551,12 @@ The existing real PostgreSQL lifecycle fixture verifies alias rejection, the own
 Resumed after pushing0cd73bd. Reconciliation now holds a shared lock on the enabled repository configuration from its single-snapshot read through bounded provider calls and persisted hook provenance/catch-up enqueue. Lifecycle mutations must acquire the conflicting repository write lock before changing metadata or capturing old-hook provenance. The lease row is fenced only after provider calls, allowing its independent heartbeat to renew during HTTP. Stale claim tokens are checked before any provider mutation. Error status still persists only the underlying exception category.
 
 Real PostgreSQL controlled-provider acceptance passed (`target/provider-configuration-concurrency.log`:1 passed, no failures/errors/skips). While the provider exchange is paused, an actual competing configuration UPDATE times out with PostgreSQL SQLSTATE55P03 and rolls back; after provider completion the hook is READY, the revision remains unchanged, and existing lost-response recovery, claim fencing, unchanged signing-proof preservation, rotation and retry assertions pass. This verifies database serialization, not a live GitHub deployment or recovery of every possible remote-success/database-failure saga. Full Java21 unit suite351 passed, zero failures/errors/skips (`target/provider-configuration-unit.log`); complete diff review and `git diff --check` passed. Exact-SHA CI remains pending. Remaining lifecycle work includes immutable-provider drift policy, configuration discovery, general missed-event polling and installation revocation. Overall NOT READY FOR PRODUCTION.
+
+
+### Accepted lifecycle baseline and immutable provider binding — 2026-11-26
+
+All prior scoped runs passed: ea9f7ae/45865384559, 0cd73bd/45865793906 and657f21a/45866274097. The latest downloaded XML (`target/ci-657f21a-reports`) verifies365 cases (351 unit +14 integration), zero failures/errors/skips, and all named PostgreSQL/HTTP MCP/recovery/Graphify/HTTPS Maven/lifecycle gates plus shell and logical restore checks passed (`target/ci-657f21a-steps.tsv`). This supersedes earlier pending-CI entries for those commits; it does not certify broader PRD completion.
+
+The resumed implementation binds subsequent repository-hook and central-App reconciliation to the already-confirmed provider repository ID. A reused namespace fails visibly before hook enumeration/mutation; its old provider ID and verification provenance remain intact. Repeated retries do not grant permission to adopt another provider identity. An explicit authorized clone-URL change atomically saves old-hook retirement provenance and invalidates the current binding for the new URL; branch, team, credential and callback changes do not discard that binding. Retirement can call a hook reused only when the provider ID also matches. No new migration is needed because V16 already stores both current and retirement provider IDs.
+
+Seven focused tests passed with real PostgreSQL and controlled-provider exchanges (`target/provider-identity-binding.log`), including no POST/PATCH on identity drift, retained proof, and relocation provenance. Full Java21 unit suite351 passed with zero failures/errors/skips (`target/provider-identity-unit.log`); complete diff review and `git diff --check` passed. Exact-SHA CI remains pending. Live GitHub delivery, configuration discovery, general missed-event polling, installation revocation and subsequent mandatory directive phases remain open. Overall NOT READY FOR PRODUCTION.

@@ -106,6 +106,10 @@ public final class RepositoryLifecycle {
             VALUES(?,?,?,?::jsonb,?,?,?,?,?,?)
             """,target.id(),revision,root().toString(),json.writeValueAsString(previous),reset,retire?hook:null,retire?callback:null,retire?providerId:null,
                 retirement,"BLOCKED".equals(retirement)?"Supply approved repository-webhook management and confirm the previous callback before retirement.":null);
+        // Only an explicit URL change authorizes binding to a different provider repository.
+        // Save old provenance in the durable retirement work before invalidating the binding.
+        if(!previous.cloneUrl().equals(target.cloneUrl()))
+            jdbc.update("UPDATE repository_onboarding SET provider_repository_id=NULL,webhook_id=NULL,webhook_callback_url=NULL,webhook_verified_at=NULL,webhook_configuration_hash=NULL WHERE repository_id=?",target.id());
     }
     public Map<String,Object> status(UUID id,String team) {
         var repository=owned(id,team,false);
@@ -153,9 +157,10 @@ public final class RepositoryLifecycle {
                 }lease=claim.get();
             }
             String outcome;
-            var active=jdbc.queryForList("SELECT webhook_id,webhook_callback_url,webhook_state,webhook_mode,webhook_configuration_hash FROM repository_onboarding WHERE repository_id=?",item.repository());
+            var active=jdbc.queryForList("SELECT webhook_id,webhook_callback_url,webhook_state,webhook_mode,webhook_configuration_hash,provider_repository_id FROM repository_onboarding WHERE repository_id=?",item.repository());
             var currentRepository=record(item.repository());
             if(!active.isEmpty()&&Long.valueOf(item.hook()).equals(active.getFirst().get("webhook_id"))
+                    &&item.providerId()!=null&&item.providerId().equals(active.getFirst().get("provider_repository_id"))
                     &&"READY".equals(active.getFirst().get("webhook_state"))&&"REPOSITORY".equals(active.getFirst().get("webhook_mode"))
                     &&active.getFirst().get("webhook_callback_url") instanceof String callback&&!callback.isBlank()&&!item.callback().equals(callback)
                     &&currentRepository!=null&&java.util.Objects.equals(java.net.URI.create(currentRepository.cloneUrl()).getHost(),java.net.URI.create(item.previous().cloneUrl()).getHost())

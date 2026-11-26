@@ -41,6 +41,7 @@ class RepositoryOnboardingPostgresIT {
             leases=new RepositoryIndexLeaseManager(jdbc);
             indexing=new IndexingService(jdbc,repositories,null,props,null,null,null,tx,null,null,null,null,null,leases);
             var json=JsonMapper.builder().build();var created=new AtomicBoolean();var creates=new AtomicInteger();
+            var providerId=new java.util.concurrent.atomic.AtomicLong(81);var mutations=new AtomicInteger();
             var holdProvider=new AtomicBoolean();
             var providerEntered=new java.util.concurrent.CountDownLatch(1);
             var providerRelease=new java.util.concurrent.CountDownLatch(1);
@@ -49,8 +50,9 @@ class RepositoryOnboardingPostgresIT {
                             providerEntered.countDown();
                             assertTrue(providerRelease.await(5,java.util.concurrent.TimeUnit.SECONDS),"release the controlled provider within its bounded deadline");
                         }
-                        if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":81,\"full_name\":\"acme/library\"}");
+                        if(uri.getPath().equals("/repos/acme/library"))return json.readTree("{\"id\":"+providerId.get()+",\"full_name\":\"acme/library\"}");
                         if(method.equals("GET"))return json.readTree(created.get()?"[{\"id\":91,\"config\":{\"url\":\"https://context.example/webhooks/github/acme/library\"}}]":"[]");
+                        mutations.incrementAndGet();
                         if(method.equals("POST")){creates.incrementAndGet();created.set(true);throw new java.io.IOException("simulated lost provider response");}
                         return json.readTree("{\"id\":91,\"active\":true,\"events\":[\"push\"],\"config\":{\"url\":\"https://context.example/webhooks/github/acme/library\"}}");
                     };
@@ -122,6 +124,15 @@ class RepositoryOnboardingPostgresIT {
                 assertEquals(true,rotated.status(repository).get("webhook_configuration_current"));
                 assertEquals(false,rotated.status(repository).get("webhook_delivery_verified"),"rotation needs a new correctly signed delivery");
             }finally {rotated.stop();rotatedClient.stop();}
+            int priorMutations=mutations.get();
+            var priorProof=jdbc.queryForMap("SELECT webhook_verified_at,webhook_configuration_hash,provider_repository_id FROM repository_onboarding");
+            providerId.set(82);jdbc.update("UPDATE repository_onboarding SET webhook_available_at=now()-interval '1 second'");
+            assertTrue(second.reconcileOne());
+            assertEquals("FAILED",jdbc.queryForObject("SELECT webhook_state FROM repository_onboarding",String.class));
+            assertEquals(priorMutations,mutations.get(),"namespace reuse must not receive any hook mutation or signing secret");
+            assertEquals(priorProof,jdbc.queryForMap("SELECT webhook_verified_at,webhook_configuration_hash,provider_repository_id FROM repository_onboarding"));
+            assertTrue(jdbc.queryForObject("SELECT webhook_error FROM repository_onboarding",String.class).contains("ProviderIdentityChanged"));
+            providerId.set(81);
             jdbc.update("UPDATE index_jobs SET state='FAILED'");
             second.retry(repository);
             assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class));

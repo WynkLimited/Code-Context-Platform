@@ -79,10 +79,11 @@ public final class RepositoryOnboarding {
                 var repository=jdbc.query("SELECT id,owner,name,clone_url,team,default_branch,repository_type,mirror_path FROM repositories WHERE id=? AND enabled FOR SHARE",
                         (rs,n)->new RepositoryRecord(rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getString(8)),id)
                         .stream().findFirst().orElseThrow();
-                var claims=jdbc.queryForList("SELECT repository_id FROM repository_onboarding WHERE repository_id=? AND webhook_claim=?",id,token);
+                var claims=jdbc.queryForList("SELECT provider_repository_id FROM repository_onboarding WHERE repository_id=? AND webhook_claim=?",id,token);
                 if(claims.isEmpty())return;
                 GitHubWebhookClient.Hook hook;
-                try {hook=webhooks.reconcile(repository);}
+                var expected=claims.getFirst().get("provider_repository_id");
+                try {hook=webhooks.reconcile(repository,expected instanceof Number number?number.longValue():null);}
                 catch(Exception failure){throw new ReconciliationFailure(failure);}
                 String configuration=webhooks.configurationHash(repository);
                 lease.fenceTransaction();
@@ -92,7 +93,8 @@ public final class RepositoryOnboarding {
         }catch(Exception failure) {
             // Persist only the exception category, never provider response bodies or credentials.
             var category=failure instanceof ReconciliationFailure?failure.getCause():failure;
-            jdbc.update("UPDATE repository_onboarding SET webhook_state=CASE WHEN webhook_attempt>=4 THEN 'FAILED' ELSE 'QUEUED' END,webhook_attempt=webhook_attempt+1,webhook_error=?,webhook_available_at=now()+interval '1 minute',webhook_claim=NULL,webhook_claim_until=NULL,updated_at=now() WHERE repository_id=? AND webhook_claim=?",
+            jdbc.update("UPDATE repository_onboarding SET webhook_state=CASE WHEN ? THEN 'FAILED' WHEN webhook_attempt>=4 THEN 'FAILED' ELSE 'QUEUED' END,webhook_attempt=webhook_attempt+1,webhook_error=?,webhook_available_at=now()+interval '1 minute',webhook_claim=NULL,webhook_claim_until=NULL,updated_at=now() WHERE repository_id=? AND webhook_claim=?",
+                    category instanceof GitHubWebhookClient.ProviderIdentityChanged,
                     "Webhook reconciliation failed ("+category.getClass().getSimpleName()+"); verify provider permissions, callback URL and connectivity, then retry.",id,token);
         }
         return true;
