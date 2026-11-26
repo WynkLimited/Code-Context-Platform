@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `dbffc97c67c6d8d155aea78aebcc867383f56d25` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45752620646 |
+| Last green mandatory CI SHA | `7dacc9fb0e26f49e6f65db6127647ad0bc332310` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45754165076 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -45,7 +45,7 @@ Status vocabulary (this ledger):
 | CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested+cross-file OpenAPI `$ref` (1.3.0); Avro MCP evolution @ f905835 |
 | CTX-4 | Semantic retrieval | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama; all subsequent seven-case PG gates retained |
 | CTX-4A | Semantic chunk construction | Accurate source ranges, bounded structural/heading chunks | PARTIALLY_IMPLEMENTED | `JavaSourceText`, `BoundedTextChunks`, `IndexingService` | Original design PDF pp. 3–4; Java/source ranges, generator invalidation, 60-line fallback and Markdown/large YAML sections service-verified through dbffc97; tiny-piece merges and token-aware/blank-line splitting remain open |
-| CTX-4B | Embedding provenance/reuse | Reuse unchanged chunks inside edited files with model/config identity | PARTIALLY_IMPLEMENTED | `EmbeddingSpace`, generation provenance, exact prior-generation chunk copying | Original PDF incremental promise; model digest/config guards and edited-file reuse implemented locally; actual PG/Ollama acceptance pending |
+| CTX-4B | Embedding provenance/reuse | Reuse unchanged chunks inside edited files with model/config identity | VERIFIED_PRODUCTION_READY | `EmbeddingSpace`, generation provenance, exact prior-generation chunk copying | Original PDF incremental promise; d26c48a and 7dacc9f actual PostgreSQL/Ollama gates verify digest/config guards, exact provider-call reduction, same-commit space rebuild and HTTP legacy-vector rejection; stable operator model provisioning remains required |
 
 ### MCP tools
 
@@ -116,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | dbffc97: 290 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 7dacc9f: 297 unit + seven PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -315,3 +315,19 @@ Five new identity/search regressions plus expanded actual Ollama tags wire tests
 Reproduced a false counter increment: two stale/duplicate attempt callbacks matched zero guarded job rows but reported two permanent failures. `retryAttempt` now increments the permanent-failure counter only when exactly one RUNNING/attempt-matched row actually transitions at the attempt ceiling. SQL state guards, retry delays and error redaction are unchanged. Replaced an ineffective unconditional test assertion with real counter/delay checks and added stale/duplicate and retryable-attempt regressions. This repairs retry-callback counter accuracy; it does not claim every terminal job path or production alert delivery is certified.
 
 Complete Java21 default suite: **297 passed**, zero failures/errors/skips (43.697s); `git diff --check` passed. Model-provenance/reuse/V12 CI for d26c48a remains in progress at https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45753590616; inspect its actual XML and HTTP/provider results before changing CTX-4B status. Continue pending CI and the remaining actionable requirement register.
+
+
+### V12/model-space and guarded metrics accepted — 2026-11-26
+
+`d26c48a295584a52ebe8223ae249f421bc645da6` passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45753590616. Downloaded XML: **295 unit + seven PostgreSQL + one actual HTTPS = 303 passed**, zero failures/errors/skips. SharedLibraryImpactPostgresIT has three passed cases, including exact real-provider embedding-call reuse checks, full same-commit embedding-space rebuild and actual HTTP rejection of fingerprint-null legacy vectors. Restricted-role migration executes all twelve migrations; original MCP registration/authentication/impact, generation rollback and separate-JVM recovery assertions pass. Shell boundary tests and actual logical restore preserve all public tables, including new generation provenance metadata. Artifact: `target/ci-d26c48a-reports`.
+
+`7dacc9fb0e26f49e6f65db6127647ad0bc332310` then passed https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45754165076: **297 unit + seven PostgreSQL + one HTTPS = 305 passed**, all zero failure/error/skip counts, with script/restore gates successful. Artifact: `target/ci-7dacc9f-reports`. CTX-4B's implemented, bounded capability is now service-verified under the documented stable-provider prerequisite. This does not certify hot model replacement, every custom embedding provider, pilot performance or overall production readiness. Remaining chunk construction, Maven/Gradle, arbitrary cross-repository propagation, full-application fault/staging and operator gates remain open.
+
+
+### Actual semantic declaration ownership — 2026-11-26
+
+Real compiled-JAR fixtures reproduced three incorrect attributions: dependency-row traversal order disagreed with the actual JarTypeSolver classpath order; a repository source declaration shadowing a JAR class was tagged as an external dependency; and nested Java declarations used dotted source names instead of their `$` JVM binary names, losing artifact ownership. Pre-fix evidence: `/tmp/ccp-artifact-ownership-before.log` (three failures).
+
+Java method/constructor/reference resolution now retains declaration origin (source, supported JAR declaration, runtime) and the actual JVM binary class name, with this nonsecret evidence persisted in existing call-site evidence. Artifact attribution follows the exact analyzed JAR order and binary entry; source/runtime declarations cannot be guessed as Maven dependencies. The first matching JAR without ownership metadata remains unowned instead of falling through to another artifact. The prior CallSite constructor remains available for Kotlin compiler/internal callers; Kotlin origin enrichment beyond its existing compiler evidence remains separate. Generator 1.12.0 requires standard reindexing. No database migration or change to canonical target signatures, symbol IDs, authentication or tools is involved.
+
+Four new tests use real Java compilation/JARs and actual JavaParser bindings, including a JDK reflection target in the presence of a shadow JAR. Focused resolver/Maven/actual HTTPS suite **19 passed**. Complete Java21 default suite **301 passed**, zero failures/errors/skips (41.514s). Added exact PostgreSQL assertions require persisted JAR-origin Money evidence and two source-origin internal calls with null external artifact; subsequent `mvn test-compile` passed (3.114s). `git diff --check` passed. These additional DB assertions remain IMPLEMENTED_UNVERIFIED until the next exact-SHA CI. This proves attribution for the indexer's effective source/JAR order, not arbitrary runtime classloader order or complete Maven/Gradle reactor semantics.

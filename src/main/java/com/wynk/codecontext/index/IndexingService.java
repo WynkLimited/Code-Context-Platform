@@ -299,7 +299,7 @@ ON CONFLICT DO NOTHING
                     var call=invocation.call();
                     Long caller=ensureSemanticSymbol(repo,generation,commit,call.callerClass()+"#"+call.callerMethod(),call.callerClass(),call.callerMethod(),"METHOD","RESOLVED");
                     Long target=ensureSemanticSymbol(repo,generation,commit,call.declaringType()+"#"+call.signature(),call.declaringType(),call.signature(),"METHOD","RESOLVED");
-                    String artifact=artifactFor(call.declaringType(),cp);
+                    String artifact=SemanticArtifactOwnership.find(call,cp);
                     persistSemanticCallSite(repo.id(),generation,commit,invocation.file(),call,call.evidence(),caller,target,artifact,
                             artifact==null?null:artifact.substring(artifact.lastIndexOf(':')+1));
                 }
@@ -321,7 +321,7 @@ ON CONFLICT DO NOTHING
                     continue;
                 }
                 for(var call:result.callSites()){
-                    String artifact=artifactFor(call.declaringType(),moduleCp); String version=artifact==null?null:artifact.substring(artifact.lastIndexOf(':')+1);
+                    String artifact=SemanticArtifactOwnership.find(call,moduleCp); String version=artifact==null?null:artifact.substring(artifact.lastIndexOf(':')+1);
                     String evidence=call.evidence()+(moduleCp==null?"; no Maven module classpath":"; module="+module+"; classpath="+moduleCp.fingerprint());
                     Long caller=call.callerClass()==null||call.callerMethod()==null?null:ensureSemanticSymbol(repo,generation,commit,
                             call.callerClass()+"#"+call.callerMethod(),call.callerClass(),call.callerMethod(),"METHOD","RESOLVED");
@@ -356,12 +356,6 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
 
     private static String moduleFor(Path snapshot,String file,List<MavenClasspathResolver.ModuleClasspath> modules) {
         return modules.stream().map(MavenClasspathResolver.ModuleClasspath::modulePath).filter(p->!p.isBlank()&&(file.equals(p+"/pom.xml")||file.startsWith(p+"/"))).max(Comparator.comparingInt(String::length)).orElse("");
-    }
-    private static String artifactFor(String declaringType,MavenClasspathResolver.ModuleClasspath classpath) {
-        if(classpath==null)return null;
-        if(declaringType==null)return null;String entry=declaringType.replace('.','/')+".class";
-        for(var dependency:classpath.dependencies())try(var zip=new java.util.zip.ZipFile(dependency.artifact().toFile())){if(zip.getEntry(entry)!=null)return dependency.groupId()+":"+dependency.artifactId()+":"+dependency.version();}catch(Exception ignored){}
-        return null;
     }
     private void persistMavenResolution(RepositoryRecord repo,UUID generation,String commit,MavenClasspathResolver.Result result) throws Exception {
         if(result.modules().isEmpty()) {

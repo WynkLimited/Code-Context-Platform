@@ -208,6 +208,21 @@ class SharedLibraryImpactPostgresIT {
         assertCrossRepositoryRestAndKafkaContracts(provider, consumerA, consumerB);
         assertCallPersisted(consumerA, consumerAGeneration, consumerACommit,
                 "org.acme.Money#convert(java.lang.String)", "src/main/java/app/ConsumerA.java");
+        assertEquals(1,jdbc.queryForObject("""
+                SELECT count(*) FROM semantic_call_sites WHERE repository_id=? AND generation_id=? AND commit_sha=?
+                  AND file_path='src/main/java/app/ConsumerA.java' AND declaring_type='org.acme.Money'
+                  AND resolved_signature='convert(java.lang.String)' AND resolution_status='RESOLVED'
+                  AND dependency_artifact='org.acme:common-library:1.0'
+                  AND evidence LIKE '%declarationOrigin=JAR; binaryClass=org.acme.Money%'
+                """,Integer.class,consumerA,consumerAGeneration,consumerACommit),
+                "external call-site persistence must retain the actual binary declaration origin");
+        assertEquals(2,jdbc.queryForObject("""
+                SELECT count(*) FROM semantic_call_sites WHERE repository_id=? AND generation_id=? AND commit_sha=?
+                  AND file_path='src/main/java/app/EntryPoint.java' AND resolution_status='RESOLVED'
+                  AND declaring_type IN ('app.ConsumerA','app.EntryPoint') AND target_symbol_id IS NOT NULL
+                  AND dependency_artifact IS NULL AND evidence LIKE '%declarationOrigin=SOURCE;%'
+                """,Integer.class,consumerA,consumerAGeneration,consumerACommit),
+                "repository source declarations must retain source evidence without external dependency attribution");
         assertCallPersisted(consumerA, consumerAGeneration, consumerACommit,
                 "org.acme.Money#convert(java.lang.String)", "src/main/kotlin/app/ConsumerAKotlin.kt");
         assertUnresolvedCallRemainsUnresolved(consumerA, consumerAGeneration, consumerACommit);

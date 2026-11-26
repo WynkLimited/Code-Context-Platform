@@ -70,7 +70,7 @@ public final class JavaSemanticCallSiteAnalyzer {
                     try {
                         ResolvedMethodDeclaration resolved = node.resolve();
                         calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1),
-                                enclosingClass(node), methods.peekLast(), "RESOLVED", resolved.declaringType().getQualifiedName(), resolved.getSignature(), params(resolved), resolved.getReturnType().describe()));
+                                enclosingClass(node), methods.peekLast(), "RESOLVED", resolved.declaringType().getQualifiedName(), resolved.getSignature(), params(resolved), resolved.getReturnType().describe()).withDeclaration(resolved));
                     } catch (MethodAmbiguityException ex) { calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1), enclosingClass(node), methods.peekLast(), "AMBIGUOUS", null, null, List.of(), null)); }
                     catch (RuntimeException ex) { calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1), enclosingClass(node), methods.peekLast(), "UNRESOLVED", null, null, List.of(), null)); }
                     super.visit(node, arg);
@@ -79,7 +79,7 @@ public final class JavaSemanticCallSiteAnalyzer {
                     try {
                         var resolved = node.resolve();
                         calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1),
-                                enclosingClass(node), methods.peekLast(), "RESOLVED", resolved.declaringType().getQualifiedName(), resolved.getSignature(), params(resolved), "<constructor>"));
+                                enclosingClass(node), methods.peekLast(), "RESOLVED", resolved.declaringType().getQualifiedName(), resolved.getSignature(), params(resolved), "<constructor>").withDeclaration(resolved));
                     } catch (MethodAmbiguityException ex) { calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1), enclosingClass(node), methods.peekLast(), "AMBIGUOUS", null, null, List.of(), null)); }
                     catch (RuntimeException ex) { calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1), enclosingClass(node), methods.peekLast(), "UNRESOLVED", null, null, List.of(), null)); }
                     super.visit(node, arg);
@@ -88,7 +88,7 @@ public final class JavaSemanticCallSiteAnalyzer {
                     try {
                         ResolvedMethodDeclaration resolved = node.resolve();
                         calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1),
-                                enclosingClass(node), methods.peekLast(), "RESOLVED", resolved.declaringType().getQualifiedName(), resolved.getSignature(), params(resolved), resolved.getReturnType().describe()));
+                                enclosingClass(node), methods.peekLast(), "RESOLVED", resolved.declaringType().getQualifiedName(), resolved.getSignature(), params(resolved), resolved.getReturnType().describe()).withDeclaration(resolved));
                     } catch (MethodAmbiguityException ex) { calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1), enclosingClass(node), methods.peekLast(), "AMBIGUOUS", null, null, List.of(), null)); }
                     catch (RuntimeException ex) { calls.add(site(node.toString(), node.getBegin().map(p -> p.line).orElse(-1), node.getEnd().map(p -> p.line).orElse(-1), enclosingClass(node), methods.peekLast(), "UNRESOLVED", null, null, List.of(), null)); }
                     super.visit(node, arg);
@@ -127,7 +127,26 @@ public final class JavaSemanticCallSiteAnalyzer {
                 status.equals("RESOLVED") ? "JAVAPARSER_SYMBOL_SOLVER" : status.equals("AMBIGUOUS") ? "MULTIPLE_APPLICABLE_SYMBOLS" : "NO_TYPE_RESOLUTION");
     }
     public record CallSite(String expression, int startLine, int endLine, String callerClass, String callerMethod, String resolutionStatus,
-                           String declaringType, String signature, List<String> parameterTypes, String returnType, String evidence) {}
+                           String declaringType, String signature, List<String> parameterTypes, String returnType, String evidence,
+                           String declarationOrigin,String binaryClassName) {
+        public CallSite(String expression,int startLine,int endLine,String callerClass,String callerMethod,String resolutionStatus,
+                        String declaringType,String signature,List<String> parameterTypes,String returnType,String evidence) {
+            this(expression,startLine,endLine,callerClass,callerMethod,resolutionStatus,declaringType,signature,parameterTypes,returnType,evidence,"UNKNOWN",null);
+        }
+        private CallSite withDeclaration(ResolvedMethodLikeDeclaration method) {
+            var type=method.declaringType();
+            boolean jar=type instanceof com.github.javaparser.symbolsolver.javassistmodel.JavassistClassDeclaration
+                    ||type instanceof com.github.javaparser.symbolsolver.javassistmodel.JavassistInterfaceDeclaration
+                    ||type instanceof com.github.javaparser.symbolsolver.javassistmodel.JavassistEnumDeclaration
+                    ||type instanceof com.github.javaparser.symbolsolver.javassistmodel.JavassistAnnotationDeclaration
+                    ||type instanceof com.github.javaparser.symbolsolver.javassistmodel.JavassistRecordDeclaration;
+            String origin=jar?"JAR":type.toAst().isPresent()?"SOURCE":"RUNTIME";
+            String pkg=method.getPackageName();
+            String binary=(pkg.isBlank()?"":pkg+".")+method.getClassName().replace('.','$');
+            return new CallSite(expression,startLine,endLine,callerClass,callerMethod,resolutionStatus,declaringType,signature,
+                    parameterTypes,returnType,evidence+"; declarationOrigin="+origin+"; binaryClass="+binary,origin,binary);
+        }
+    }
     public record MethodSymbol(String declaringType, String signature, String kind) {}
     public record Result(boolean parseComplete, List<CallSite> callSites, String failureReason) {}
 }
