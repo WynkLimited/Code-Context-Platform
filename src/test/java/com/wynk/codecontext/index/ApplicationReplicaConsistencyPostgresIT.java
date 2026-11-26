@@ -54,7 +54,7 @@ class ApplicationReplicaConsistencyPostgresIT {
             assertNotEquals(leader.process().pid(),follower.process().pid());assertNotEquals(leader.port(),follower.port());
             var second=Session.connect(follower.port());
             UUID contender=fixture.enqueue(after);
-            await(()->fixture.jdbc.queryForObject("SELECT state='QUEUED' AND attempt=0 AND error='repository is already being indexed' FROM index_jobs WHERE id=?",Boolean.class,contender),15,"second application did not contend for the held repository lease");
+            await(()->fixture.jdbc.queryForObject("SELECT state='QUEUED' AND attempt=0 AND coalesce(error='repository is already being indexed',false) FROM index_jobs WHERE id=?",Boolean.class,contender),15,"second application did not contend for the held repository lease");
             assertEquals(2,fixture.jdbc.queryForObject("SELECT count(*) FROM index_generations WHERE repository_id=?",Integer.class,repository.id()),"contender must not create another generation before acquiring ownership");
             await(()->fixture.zoektContains(candidate,"replicaRevisionTwoMarker"),20,"real Zoekt did not load the unpublished candidate shard");
             for(var session:List.of(first,second)) {
