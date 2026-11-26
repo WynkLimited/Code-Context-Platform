@@ -9,7 +9,7 @@ class StructuralSourceChunksTest {
     @org.junit.jupiter.params.provider.MethodSource("fixtures")
     void completeDefinitionRangesComeFromTheActualBundledGrammar(String extension,String source,String expected) {
         var chunks=StructuralSourceChunks.parse(extension,source,"Policy."+extension);
-        assertFalse(chunks.isEmpty(),extension);
+        assertFalse(chunks.isEmpty(),()->nativeDiagnostics(extension,source));
         assertTrue(chunks.stream().anyMatch(d->d.kind().equals("METHOD")&&d.name().equals(expected)),chunks.toString());
         assertTrue(chunks.stream().filter(d->d.kind().equals("METHOD")).allMatch(d->d.signature().contains(expected)),"context header must retain the actual method identity");
         for(var chunk:chunks) {
@@ -40,6 +40,20 @@ class StructuralSourceChunksTest {
             org.junit.jupiter.params.provider.Arguments.of("swift","func refund(_ amount: Int) -> Int { return amount }","refund"),
             org.junit.jupiter.params.provider.Arguments.of("lua","function refund(amount)\n return amount\nend","refund"),
             org.junit.jupiter.params.provider.Arguments.of("sh","refund() { printf '%s' \"$1\"; }","refund"));
+    }
+    private static String nativeDiagnostics(String extension,String source) {
+        String language=switch(extension) {
+            case "kt"->"KOTLIN";case "py"->"PYTHON";case "js"->"JAVASCRIPT";case "ts"->"TYPESCRIPT";
+            case "cs"->"C_SHARP";case "rb"->"RUBY";case "rs"->"RUST";case "sh"->"BASH";
+            default->extension.toUpperCase(java.util.Locale.ROOT);
+        };
+        try(var parser=com.wynk.codecontext.port.contract.source.NativeSyntax.Parser.builder()
+                .language(com.wynk.codecontext.port.contract.source.NativeSyntax.Language.valueOf(language)).build();var tree=parser.parse(source)) {
+            var queue=new java.util.ArrayDeque<com.wynk.codecontext.port.contract.source.NativeSyntax.Node>();queue.add(tree.getRootNode());
+            var nodes=new java.util.ArrayList<String>();
+            while(!queue.isEmpty()&&nodes.size()<40){var node=queue.remove();nodes.add(node.getType()+"@"+node.getStartByte()+":"+node.getEndByte());queue.addAll(node.getNamedChildren());}
+            return extension+" error="+tree.getRootNode().hasError()+" nodes="+nodes;
+        }
     }
     @Test void unicodeByteOffsetsAreConvertedToJavaCharacterOffsets() {
         String source="class Policy:\n  label = '退款😀'\n  def refund(self, amount):\n    return amount\n";
