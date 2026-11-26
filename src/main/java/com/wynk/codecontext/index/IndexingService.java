@@ -259,7 +259,7 @@ INSERT INTO code_edges(generation_id,source_node,target_node,edge_type,evidence,
                             .map(piece->new Chunk(piece.text(),piece.firstLine(),piece.lastLine())).toList()
                     :split(symbol.text,symbol.textStart,props.maxChunkChars());
             String header="repo: "+repo.key()+" | file: "+file.path()+"\n"+(symbol.owner==null?"":"class: "+symbol.owner+"\n")+symbol.type.toLowerCase()+": "+symbol.qualified+"\n---\n";
-            chunks=chunks.stream().flatMap(part->EmbeddingInputChunks.split(part.text,part.start,header,space.contextTokens()).stream())
+            chunks=chunks.stream().flatMap(part->EmbeddingInputChunks.split(part.text,part.start,part.end,header,space.contextTokens()).stream())
                     .map(part->new Chunk(part.text(),part.firstLine(),part.lastLine())).toList();
             for(Chunk part:chunks) {
                 String chunk=header+part.text;

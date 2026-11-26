@@ -13,6 +13,11 @@ class EmbeddingInputChunksTest {
         assertEquals(1,pieces.size());assertEquals(input,pieces.getFirst().text());
         assertEquals(7,pieces.getFirst().firstLine());assertEquals(8,pieces.getFirst().lastLine());
     }
+    @Test void unchangedDocumentSectionsRetainExplicitTrailingBlankLineRanges() {
+        var parts=DocumentChunks.split("guide.md","# Setup\nUse local tools.\n\n## Recovery\nRestore the saved snapshot.\n",1,6000).stream()
+                .flatMap(p->EmbeddingInputChunks.split(p.text(),p.firstLine(),p.lastLine(),HEADER,8192).stream()).toList();
+        assertEquals(java.util.List.of("1:3","4:5"),parts.stream().map(p->p.firstLine()+":"+p.lastLine()).toList());
+    }
     @Test void unicodeLongLinesStayWithinCompleteInputBudgetWithoutLosingCodePoints() {
         String input="😀中".repeat(2000);
         var pieces=EmbeddingInputChunks.split(input,13,HEADER,8192);

@@ -11,10 +11,13 @@ final class EmbeddingInputChunks {
     static final int TARGET_TOKENS=1500;
     static int estimate(String text) {return text.getBytes(StandardCharsets.UTF_8).length;}
     static List<BoundedTextChunks.Piece> split(String text,int firstLine,String header,int contextTokens) {
+        return split(text,firstLine,firstLine+Math.max(0,(int)text.lines().count()-1),header,contextTokens);
+    }
+    static List<BoundedTextChunks.Piece> split(String text,int firstLine,int lastLine,String header,int contextTokens) {
         int budget=Math.min(TARGET_TOKENS,contextTokens)-32-estimate(header);
         if(budget<4)throw new IllegalArgumentException("embedding metadata exhausts input budget");
         if(estimate(text)<=budget)return List.of(new BoundedTextChunks.Piece(text,firstLine,
-                firstLine+Math.max(0,(int)text.lines().count()-1)));
+                lastLine));
         text=text.replace("\r\n","\n").replace('\r','\n');
         var output=new ArrayList<BoundedTextChunks.Piece>();
         int start=0,line=firstLine;
