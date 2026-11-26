@@ -184,8 +184,8 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
     }
     void retryAttempt(UUID jobId,int attempt,Exception failure) {
         int retryDelay=Math.min(300,5*(1<<Math.max(0,attempt-1)));
-        jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",truncate(AuditRedaction.redact(failure.getMessage())),retryDelay,jobId,attempt);
-        if(attempt>=3) metrics.indexFailed();
+        int changed=jdbc.update("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED' ELSE 'QUEUED' END,error=?,available_at=now()+(? * interval '1 second'),updated_at=now() WHERE id=? AND state='RUNNING' AND attempt=?",truncate(AuditRedaction.redact(failure.getMessage())),retryDelay,jobId,attempt);
+        if(changed==1&&attempt>=3) metrics.indexFailed();
     }
     @PreDestroy public void stopWorkers(){workers.shutdownNow();}
     private void copyUnchangedFiles(UUID previous,UUID next) {
