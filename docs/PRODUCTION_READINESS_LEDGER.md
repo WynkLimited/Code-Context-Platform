@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `9adaa141efcaf148af441e1fb7970deeee646a68` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45875224860 |
+| Last green mandatory CI SHA | `cb8de66556d1ee2b03deca903ac8999ac9435429` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45878147548 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -21,9 +21,9 @@ Status vocabulary (this ledger):
 
 ## Resume checkpoint
 
-**Current master-directive phase:** Phase 1 automated onboarding under the new 2026-11-26 directive. Earlier Phase 1 semantic chunking work: Tiny grouping, complete-input conservative token bounds, multiple native structural grammars and integrated Graphify/Ollama/PostgreSQL/HTTP MCP acceptance are implemented. Current native repair is generator1.18.0; see the latest dated evidence below. The exact-SHA c9fbb1a workflow passed: 339 unit + 11 integration = 350 cases, no failures/errors/skips, plus logical restore and shell gates.
+**Current master-directive phase:** Moving from Phase1 lifecycle/onboarding implementation into Phase2 genuine incremental context creation. Automatic onboarding, controlled-provider App authorization/revocation, durable missed-push recovery and stable-identity lifecycle transitions have accepted CI evidence through cb8de66. Published configuration discovery passed local acceptance; its exact-SHA CI is pending. Live GitHub provisioning/delivery certification remains externally blocked by approved credentials/callback availability. Preserve the accepted baseline while implementing Phase2; later phases remain actionable.
 
-**Overall:** **NOT READY FOR PRODUCTION** — automatic onboarding/webhook provisioning, complete reactor/Gradle intelligence, general cross-repository method chains, remaining language/contract coverage and required operational/deployment/benchmark/client acceptance remain open. Earlier chunk reuse/provenance and specific application recovery assertions have passed; do not reopen those without new evidence.
+**Overall:** **NOT READY FOR PRODUCTION** — live-provider certification, genuine incremental Graphify, complete reactor/Gradle intelligence, general cross-repository method chains, remaining language/contract coverage and required operational/deployment/benchmark/client acceptance remain open. Earlier chunk reuse/provenance and specific application recovery assertions have passed; do not reopen those without new evidence.
 
 **Next executable actions (mandatory directive order):**
 
@@ -586,3 +586,17 @@ V18 has executed locally: never rewrite it. Full unit/full16-case integration an
 
 
 Final App local evidence: full Java21 unit suite351 passed (`target/app-revocation-unit.log`), full real PostgreSQL17/Graphify/Ollama/Zoekt/HTTP MCP integration profile16 passed (`target/app-revocation-full-acceptance.log`), zero failures/errors/skips. All existing exact Java/Kotlin/REST impact, rollback, replica, restricted-role, refresh and lifecycle assertions remain enabled and passed. Parsed YAML, compiled all12 inline Python blocks, and executed report verification gates against actual367 local XML cases; complete diff review and `git diff --check` passed. Prior missed-event commit9adaa14 is accepted by CI45875224860: actual366 cases, zero failures/errors/skips, plus every named gate/script/restore step (`target/ci-9adaa14-reports`, `target/ci-9adaa14-steps.tsv`). App slice exact-SHA CI remains pending; expected367 cases. Independent configuration-discovery files are still unvalidated and excluded from this App commit. Overall NOT READY FOR PRODUCTION; continue remaining PRD implementation.
+
+
+### Published configuration discovery and acceptance isolation — 2026-11-27
+
+The authorized configuration endpoint observes regular tracked manifests/languages at the exact published Git commit and returns UUID/revision/generation provenance. Root and nested Maven/Gradle/Node/Python/Go/Rust descriptors and context metadata preserve repository-relative paths; source-controlled metadata cannot apply administrative settings or commands. Discovery is bounded and explicitly flags partial results. No build/plugin execution, arbitrary filesystem reads or new MCP tool was added.
+
+The real Git unit fixture verifies root and nested descriptors including tracked build/pom.xml, immutable commit reads despite working-tree deletion, untracked exclusion, symlink exclusion and no metadata-content disclosure. Actual HTTP acceptance verifies missing/invalid keys401, previous-owner/disabled/revoked access404, correct new-owner UUID/revision/branch/type/generation/commit, exact manifests/languages/build systems, untracked mirror settings exclusion and unchanged team despite malicious source metadata. Final targeted cases2 passed (`target/configuration-discovery-http-final.log`); full unit352 passed (`target/configuration-discovery-unit.log`), zero failures/errors/skips. Full16-case integration and exact-SHA CI remain pending.
+
+A repeated local run exposed a fixture race: startup refresh claimed old catalog work while setup removed the previous run's fixed mirror path. Per-run schema and mirror roots now isolate runs, retaining scheduled refresh and all acceptance assertions. A final Spring TestExecutionListener removes only the isolated schema after normal DirtiesContext shutdown; explicit manual context closure was rejected because Spring's cache listeners attempted to restart it. Corrected teardown passed, and the owned PostgreSQL instance reports zero remaining shared_impact_* fixture schemas. The exact code_context_test guard remains enforced before setup and schema removal.
+
+Accepted App-revocation baseline cb8de66556d1ee2b03deca903ac8999ac9435429 passed CI45878147548: downloaded367 cases (351unit+16integration), zero failures/errors/skips plus all named/script/restore gates (`target/ci-cb8de66-reports`, `target/ci-cb8de66-steps.tsv`). This supersedes its earlier pending entries. Remaining Phase2 incremental Graphify/context work, Phase3 OS isolation and later mandatory PRD phases are actionable/open; external live-provider, staging, benchmark/client and organization approvals remain separate. Overall NOT READY FOR PRODUCTION.
+
+
+Final discovery validation:352 Java21 unit/regression cases and16 real-service integration cases passed, zero failures/errors/skips (`target/configuration-discovery-unit.log`, `target/configuration-discovery-full-acceptance.log`). The full run exercised all four unchanged named shared-impact methods plus new metadata assertions in the lifecycle scenario, including class shutdown/schema cleanup. YAML parsing, all inline Python compilation, actual XML report-gate execution (368 cases), complete diff review and `git diff --check` passed. Exact-SHA CI remains pending; expected368 cases. Local pinned-Graphify warm-state probe separately demonstrated1of2 actual files extracted versus2of2 cold, with exact normalized node/link equality across relocated roots; this is implementation research, not a claim that the production pipeline is already incremental. Continue Phase2 using generation-scoped isolated state and preserve all existing acceptance.

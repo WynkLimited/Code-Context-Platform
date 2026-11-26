@@ -81,6 +81,19 @@ jobs:
               output.write(summary)
           print(summary)
           PY
+      - name: Verify configuration discovery report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.RepositoryConfigurationDiscoveryTest"]
+          expected = "discoversOnlyRegularTrackedManifestsAtTheExactCommitWithoutApplyingRepositorySettings"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Configuration discovery requires exactly one successful, unskipped case")
+          print("RepositoryConfigurationDiscoveryTest: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
       - name: Start pinned Zoekt service and indexer
         run: |
           set -euo pipefail

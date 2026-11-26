@@ -47,8 +47,12 @@ import static org.mockito.Mockito.doThrow;
 // Later separate-JVM fixtures use isolated PostgreSQL schemas with the same real Zoekt service.
 // Do not leave this catalog's background orphan cleanup running against their shards.
 @org.springframework.test.annotation.DirtiesContext(classMode=org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
+@org.springframework.test.context.TestExecutionListeners(listeners=SharedLibraryImpactPostgresIT.SchemaCleanup.class,
+        mergeMode=org.springframework.test.context.TestExecutionListeners.MergeMode.MERGE_WITH_DEFAULTS)
 class SharedLibraryImpactPostgresIT {
-    private static final Path ROOT = Path.of("target/postgres-shared-library-it").toAbsolutePath().normalize();
+    private static final String FIXTURE=UUID.randomUUID().toString().replace("-","");
+    private static final String SCHEMA="shared_impact_"+FIXTURE;
+    private static final Path ROOT = Path.of("target/postgres-shared-library-it",FIXTURE).toAbsolutePath().normalize();
     private static final String TEAM = "integration";
     private static final String API_KEY = "integration-token";
 
@@ -71,7 +75,13 @@ class SharedLibraryImpactPostgresIT {
         // proves relationship binding does not depend on reindexing the consumer generation.
         registry.add("CONTRACT_REFRESH_POLL_MS", () -> "3600000");
         registry.add("REPOSITORY_REFRESH_POLL_MS", () -> "100");
-        registry.add("spring.datasource.url", () -> System.getenv().getOrDefault("DATABASE_URL", "jdbc:postgresql://localhost:5432/code_context_test"));
+        String base=System.getenv().getOrDefault("DATABASE_URL", "jdbc:postgresql://localhost:5432/code_context_test");
+        var admin=new JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(base,
+                System.getenv().getOrDefault("DATABASE_USER","code_context"),System.getenv().getOrDefault("DATABASE_PASSWORD","integration_test_password")));
+        if(!"code_context_test".equals(admin.queryForObject("SELECT current_database()",String.class)))throw new IllegalStateException("shared acceptance requires the isolated code_context_test database");
+        registry.add("spring.datasource.url", () -> base+(base.contains("?")?"&":"?")+"currentSchema="+SCHEMA+",public");
+        registry.add("spring.flyway.schemas", () -> SCHEMA);
+        registry.add("spring.flyway.default-schema", () -> SCHEMA);
         registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("DATABASE_USER", "code_context"));
         registry.add("spring.datasource.password", () -> System.getenv().getOrDefault("DATABASE_PASSWORD", "integration_test_password"));
         registry.add("code-context.repository-root", () -> ROOT.resolve("mirrors").toString());
@@ -92,6 +102,18 @@ class SharedLibraryImpactPostgresIT {
         Path artifacts = ROOT.resolve("maven-repository");
         System.setProperty("MAVEN_ALLOWED_REPOSITORIES", "integration=" + artifacts.toUri());
         System.setProperty("MAVEN_ALLOWED_HOSTS", "");
+    }
+    public static final class SchemaCleanup extends org.springframework.test.context.support.AbstractTestExecutionListener {
+        // afterTestClass callbacks run in reverse order: let DirtiesContext and all normal
+        // Spring listeners finish before removing this run's isolated schema.
+        @Override public int getOrder(){return Integer.MIN_VALUE;}
+        @Override public void afterTestClass(org.springframework.test.context.TestContext ignored) {
+            var admin=new JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                    System.getenv().getOrDefault("DATABASE_URL","jdbc:postgresql://localhost:5432/code_context_test"),
+                    System.getenv().getOrDefault("DATABASE_USER","code_context"),System.getenv().getOrDefault("DATABASE_PASSWORD","integration_test_password")));
+            if(!"code_context_test".equals(admin.queryForObject("SELECT current_database()",String.class)))throw new IllegalStateException("refusing fixture cleanup outside code_context_test");
+            admin.execute("DROP SCHEMA IF EXISTS "+SCHEMA+" CASCADE");
+        }
     }
 
     @BeforeEach
@@ -520,7 +542,8 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
         String path="src/main/java/lifecycle/LifecycleMarker.java";
         Path original=ROOT.resolve("git-sources/lifecycle-original"),alternative=ROOT.resolve("git-sources/lifecycle-alternative");
         createGitRepository(original,Map.of(path,lifecycleSource("alpha")));
-        createGitRepository(alternative,Map.of(path,lifecycleSource("bravo")));
+        createGitRepository(alternative,Map.of(path,lifecycleSource("bravo"),"package.json","{\"private\":true,\"name\":\"lifecycle-fixture\"}\n",
+                ".code-context.yml","team: untrusted-source-team\ncommand: never-execute-this\n"));
         String main,pilot;
         try(Git git=Git.open(alternative.toFile())) {
             main=git.getRepository().resolve("HEAD").name();git.checkout().setCreateBranch(true).setName("pilot").call();
@@ -546,6 +569,7 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
             assertEquals(202,changed.statusCode(),changed.body());transition=json.readTree(changed.body());
             assertEquals(id.toString(),transition.path("repository").path("id").asText());assertEquals(2,transition.path("revision").asInt());
             assertFalse(transition.path("enabled").asBoolean());
+            assertEquals(404,configuration("Fixture/lifecycle-renamed","isolated-integration-token").statusCode(),"configuration discovery must hide disabled transition generations");
             lease.assertOwned();
             var rejected=assertThrows(org.springframework.dao.DataIntegrityViolationException.class,()->jdbc.update("UPDATE index_generations SET published=true WHERE id=?",before));
             Throwable root=rejected;while(root.getCause()!=null)root=root.getCause();
@@ -561,6 +585,20 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
         var symbols=newClient.symbols("Fixture/lifecycle-renamed");assertFalse(symbols.isEmpty(),"new published symbols must be visible to the new owning team");
         for(var symbol:symbols){assertEquals("Fixture/lifecycle-renamed",symbol.path("repository").asText());assertEquals(pilot,symbol.path("commit").asText());}
         assertEquals(2L,jdbc.queryForObject("SELECT repository_revision FROM index_generations WHERE id=?",Long.class,repositories.currentGeneration(id).orElseThrow()));
+        assertEquals(401,configuration("Fixture/lifecycle-renamed",null).statusCode());
+        assertEquals(401,configuration("Fixture/lifecycle-renamed","invalid-fixture-key").statusCode());
+        assertEquals(404,configuration("Fixture/lifecycle-renamed",API_KEY).statusCode(),"the former owner must not retain discovered configuration access");
+        var discoveredResponse=configuration("Fixture/lifecycle-renamed","isolated-integration-token");
+        assertEquals(200,discoveredResponse.statusCode(),discoveredResponse.body());var discovered=json.readTree(discoveredResponse.body());
+        assertEquals(id.toString(),discovered.path("repositoryId").asText());assertEquals(pilot,discovered.path("commit").asText());
+        assertEquals(repositories.currentGeneration(id).orElseThrow().toString(),discovered.path("generationId").asText());
+        assertEquals(2,discovered.path("configurationRevision").asInt());assertEquals("pilot",discovered.path("defaultBranch").asText());
+        assertEquals("SERVICE",discovered.path("repositoryType").asText());
+        assertEquals(List.of(".code-context.yml","package.json"),java.util.stream.StreamSupport.stream(discovered.path("discovery").path("manifests").spliterator(),false).map(item->item.path("path").asText()).toList());
+        assertEquals(List.of("NODE"),json.convertValue(discovered.path("discovery").path("buildSystems"),List.class));
+        assertEquals(List.of("JAVA"),json.convertValue(discovered.path("discovery").path("languages"),List.class));
+        assertFalse(discovered.toString().contains("untrusted-source-team"));assertFalse(discovered.toString().contains("never-execute"));
+        assertEquals("isolated",jdbc.queryForObject("SELECT team FROM repositories WHERE id=?",String.class,id));
         assertFalse(current.path("content").asText().contains("alpha"));assertFalse(Files.exists(ROOT.resolve("mirrors/Fixture/lifecycle-original")));
         assertTrue(Files.isDirectory(original.resolve(".git")));
         oldClient.rejectFile("Fixture/lifecycle-renamed",path);
@@ -617,6 +655,11 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
         }
         assertNotNull(unchanged);awaitSucceeded(unchanged,"lifecycle-renamed");
         assertEquals(unchangedGeneration,repositories.currentGeneration(id).orElseThrow(),"an unchanged HEAD check must reuse the valid published generation");
+        Files.writeString(ROOT.resolve("mirrors/Fixture/lifecycle-renamed/settings.gradle"),"untracked filesystem settings must not be discovered\n");
+        var finalConfiguration=configuration("Fixture/lifecycle-renamed","isolated-integration-token");assertEquals(200,finalConfiguration.statusCode(),finalConfiguration.body());
+        var currentConfiguration=json.readTree(finalConfiguration.body());assertEquals(missed,currentConfiguration.path("commit").asText());
+        assertEquals(4,currentConfiguration.path("configurationRevision").asInt());assertEquals("main",currentConfiguration.path("defaultBranch").asText());
+        assertEquals(List.of("NODE"),json.convertValue(currentConfiguration.path("discovery").path("buildSystems"),List.class));
         // Controlled App bindings test signed HTTP access revocation, not live GitHub provisioning.
         jdbc.update("UPDATE repository_onboarding SET webhook_mode='APP',webhook_state='READY',provider_repository_id=81,provider_installation_id=17,provider_host='github.com' WHERE repository_id=?",id);
         var foreign=repositories.insert("Fixture","not-revoked",original.toUri().toString(),"isolated","main","SERVICE",ROOT.resolve("mirrors/Fixture/not-revoked").toString());
@@ -642,6 +685,7 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
             assertEquals("23514",((java.sql.SQLException)cause).getSQLState());
         }
         newClient.rejectFile("Fixture/lifecycle-renamed",path);assertTrue(newClient.symbols("Fixture/lifecycle-renamed").isEmpty());
+        assertEquals(404,configuration("Fixture/lifecycle-renamed","isolated-integration-token").statusCode(),"App revocation must also revoke configuration discovery");
         var repeat=installationEvent("installation_repositories",removal,removed,true);
         assertEquals(202,repeat.statusCode(),repeat.body());assertTrue(json.readTree(repeat.body()).path("duplicate").asBoolean());
         String changed=removed.replace("81","82");assertEquals(409,installationEvent("installation_repositories",removal,changed,true).statusCode());
@@ -649,6 +693,11 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
         assertFalse(jdbc.queryForObject("SELECT enabled OR desired_enabled FROM repositories WHERE id=?",Boolean.class,id),"restored provider access must not automatically restore platform authorization");
         assertTrue(jdbc.queryForObject("SELECT enabled FROM repositories WHERE id=?",Boolean.class,foreign.id()),"a different installation must remain untouched");
         assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM team_repository_access WHERE repository_id=?",Integer.class,id));
+    }
+    private HttpResponse<String> configuration(String repository,String key)throws Exception {
+        var request=HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories/"+repository+"/configuration"));
+        if(key!=null)request.header("X-API-Key",key);
+        return HttpClient.newHttpClient().send(request.GET().build(),HttpResponse.BodyHandlers.ofString());
     }
     private HttpResponse<String> installationEvent(String event,UUID delivery,String payload,boolean valid)throws Exception {
         byte[] bytes=payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
