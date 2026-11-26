@@ -124,6 +124,11 @@ class RepositoryOnboardingPostgresIT {
                 assertEquals(true,rotated.status(repository).get("webhook_configuration_current"));
                 assertEquals(false,rotated.status(repository).get("webhook_delivery_verified"),"rotation needs a new correctly signed delivery");
             }finally {rotated.stop();rotatedClient.stop();}
+            jdbc.update("UPDATE index_jobs SET state='FAILED'");
+            second.retry(repository);
+            assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class));
+            second.retry(repository);
+            assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class),"retrying an already queued initial job must be idempotent");
             int priorMutations=mutations.get();
             var priorProof=jdbc.queryForMap("SELECT webhook_verified_at,webhook_configuration_hash,provider_repository_id FROM repository_onboarding");
             providerId.set(82);jdbc.update("UPDATE repository_onboarding SET webhook_available_at=now()-interval '1 second'");
@@ -133,11 +138,8 @@ class RepositoryOnboardingPostgresIT {
             assertEquals(priorProof,jdbc.queryForMap("SELECT webhook_verified_at,webhook_configuration_hash,provider_repository_id FROM repository_onboarding"));
             assertTrue(jdbc.queryForObject("SELECT webhook_error FROM repository_onboarding",String.class).contains("ProviderIdentityChanged"));
             providerId.set(81);
-            jdbc.update("UPDATE index_jobs SET state='FAILED'");
-            second.retry(repository);
-            assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class));
-            second.retry(repository);
-            assertEquals(4,jdbc.queryForObject("SELECT count(*) FROM index_jobs",Integer.class),"retrying an already queued initial job must be idempotent");
+            assertFalse(jdbc.queryForObject("SELECT enabled OR desired_enabled FROM repositories WHERE id=?",Boolean.class,repository.id()),"provider drift must suspend indexing and visibility until an explicit authorized recovery");
+            assertFalse(second.reconcileOne(),"failed provider identity must not be retried automatically");
             client.stop();
         } finally {
             if(first!=null)first.stop();if(second!=null)second.stop();if(indexing!=null)indexing.stopWorkers();if(leases!=null)leases.shutdown();

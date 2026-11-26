@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `657f21a6ae98aea5f464e4d18877de14e06e2525` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45866274097 |
+| Last green mandatory CI SHA | `b6f5a65e393e1d1d971fb0572c04a83980a03987` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45873560029 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -560,3 +560,15 @@ All prior scoped runs passed: ea9f7ae/45865384559, 0cd73bd/45865793906 and657f21
 The resumed implementation binds subsequent repository-hook and central-App reconciliation to the already-confirmed provider repository ID. A reused namespace fails visibly before hook enumeration/mutation; its old provider ID and verification provenance remain intact. Repeated retries do not grant permission to adopt another provider identity. An explicit authorized clone-URL change atomically saves old-hook retirement provenance and invalidates the current binding for the new URL; branch, team, credential and callback changes do not discard that binding. Retirement can call a hook reused only when the provider ID also matches. No new migration is needed because V16 already stores both current and retirement provider IDs.
 
 Seven focused tests passed with real PostgreSQL and controlled-provider exchanges (`target/provider-identity-binding.log`), including no POST/PATCH on identity drift, retained proof, and relocation provenance. Full Java21 unit suite351 passed with zero failures/errors/skips (`target/provider-identity-unit.log`); complete diff review and `git diff --check` passed. Exact-SHA CI remains pending. Live GitHub delivery, configuration discovery, general missed-event polling, installation revocation and subsequent mandatory directive phases remain open. Overall NOT READY FOR PRODUCTION.
+
+
+### Durable missed-push recovery and identity-drift suspension — 2026-11-26
+
+Forward V17 adds due/scheduled/job audit fields and an enabled-repository due index. `RepositoryRefresh` atomically selects a due row with SKIP LOCKED, enqueues HEAD via the existing production indexing method and advances its schedule. Active jobs, lifecycle preparation and disabled repositories coalesce/defer checks; the poll has a10-repository batch bound. Onboarding status exposes the actual latest refresh state/error. No extractor, security or publication bypass was added.
+
+A detected provider identity mismatch now atomically soft-disables the repository while retaining old-hook proof and failure evidence. Lifecycle transitions clear old claim tokens, fencing a late failed provider attempt from a newly authorized configuration. Existing provider retry/claim/lost-response and signing-proof assertions remain intact.
+
+Four targeted real-service cases passed (`target/missed-event-recovery.log`): V1–V17 under a non-superuser, PostgreSQL refresh enqueue/schedule rollback, competing-replica coalescing, active-job/lifecycle/disable deferral, provider drift suspension, and actual scheduled worker→HTTP MCP recovery to the exact new commit/source with no webhook/manual indexing call. The existing lifecycle and former-owner rejection assertions remain unchanged. V17 has executed locally: never rewrite it. Full unit/full integration/CI results are recorded after execution. Configuration discovery, App revocation and subsequent directive phases remain open; overall NOT READY FOR PRODUCTION.
+
+
+Final missed-event local validation:351 Java21 unit cases and15 real-service integration cases passed, zero failures/errors/skips (`target/missed-event-unit.log`, `target/missed-event-full-acceptance.log`). The final full run also verifies that a second unchanged scheduled HEAD check reuses the exact published generation and that lifecycle transition clears the previous provider claim. YAML parsing, inline Python gate compilation/execution against the real local XML, complete diff review and `git diff --check` passed. Prior provider-binding commit b6f5a65 is accepted by CI45873560029: downloaded365 cases, zero failures/errors/skips (`target/ci-b6f5a65-reports`). New missed-event slice exact-SHA CI is pending; expected366 cases (351unit+15integration). No live-provider, latency, production-capacity or overall completion claim.

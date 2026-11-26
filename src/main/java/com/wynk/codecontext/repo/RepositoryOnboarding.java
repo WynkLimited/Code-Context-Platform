@@ -93,9 +93,16 @@ public final class RepositoryOnboarding {
         }catch(Exception failure) {
             // Persist only the exception category, never provider response bodies or credentials.
             var category=failure instanceof ReconciliationFailure?failure.getCause():failure;
-            jdbc.update("UPDATE repository_onboarding SET webhook_state=CASE WHEN ? THEN 'FAILED' WHEN webhook_attempt>=4 THEN 'FAILED' ELSE 'QUEUED' END,webhook_attempt=webhook_attempt+1,webhook_error=?,webhook_available_at=now()+interval '1 minute',webhook_claim=NULL,webhook_claim_until=NULL,updated_at=now() WHERE repository_id=? AND webhook_claim=?",
-                    category instanceof GitHubWebhookClient.ProviderIdentityChanged,
-                    "Webhook reconciliation failed ("+category.getClass().getSimpleName()+"); verify provider permissions, callback URL and connectivity, then retry.",id,token);
+            transactions.executeWithoutResult(status->{
+                if(category instanceof GitHubWebhookClient.ProviderIdentityChanged) {
+                    var current=jdbc.queryForList("SELECT r.id FROM repositories r WHERE r.id=? AND EXISTS(SELECT 1 FROM repository_onboarding o WHERE o.repository_id=r.id AND o.webhook_claim=?) FOR UPDATE OF r",id,token);
+                    if(current.isEmpty())return;
+                    repositories.disable(id);
+                }
+                jdbc.update("UPDATE repository_onboarding SET webhook_state=CASE WHEN ? THEN 'FAILED' WHEN webhook_attempt>=4 THEN 'FAILED' ELSE 'QUEUED' END,webhook_attempt=webhook_attempt+1,webhook_error=?,webhook_available_at=now()+interval '1 minute',webhook_claim=NULL,webhook_claim_until=NULL,updated_at=now() WHERE repository_id=? AND webhook_claim=?",
+                        category instanceof GitHubWebhookClient.ProviderIdentityChanged,
+                        "Webhook reconciliation failed ("+category.getClass().getSimpleName()+"); verify provider permissions, callback URL and connectivity, then retry.",id,token);
+            });
         }
         return true;
     }
@@ -123,7 +130,7 @@ public final class RepositoryOnboarding {
             INSERT INTO repository_onboarding(repository_id,initial_job_id,webhook_state,webhook_mode)
             VALUES(?,?,?,?) ON CONFLICT(repository_id) DO UPDATE SET initial_job_id=excluded.initial_job_id,
               webhook_state=excluded.webhook_state,webhook_mode=excluded.webhook_mode,webhook_attempt=0,
-              webhook_available_at=now(),webhook_error=NULL,updated_at=now()
+              webhook_available_at=now(),webhook_error=NULL,webhook_claim=NULL,webhook_claim_until=NULL,updated_at=now()
             """,repository.id(),job,local?"NOT_APPLICABLE":webhooks.configured()?"QUEUED":"BLOCKED",local?"NONE":webhooks.mode());
     }
     @jakarta.annotation.PreDestroy public void stop(){worker.shutdownNow();}
@@ -134,8 +141,11 @@ public final class RepositoryOnboarding {
               j.generation_id,j.error AS indexing_error,o.webhook_state,o.webhook_error,o.webhook_mode,o.webhook_verified_at,
               EXISTS(SELECT 1 FROM webhook_deliveries d WHERE d.repository_id=o.repository_id AND d.signing_key_fingerprint=? AND d.received_at>=o.webhook_verified_at) AS webhook_delivery_verified,
               o.webhook_configuration_hash=? AND o.webhook_mode=? AS webhook_configuration_current,
-              o.created_at,o.updated_at
-            FROM repository_onboarding o LEFT JOIN index_jobs j ON j.id=o.initial_job_id
+              r.refresh_due_at,r.last_refresh_scheduled_at,r.last_refresh_job_id,
+              CASE WHEN r.last_refresh_job_id IS NULL THEN 'NOT_SCHEDULED' ELSE coalesce(f.state,'MISSING') END AS last_refresh_state,
+              f.error AS last_refresh_error,o.created_at,o.updated_at
+            FROM repository_onboarding o JOIN repositories r ON r.id=o.repository_id
+              LEFT JOIN index_jobs j ON j.id=o.initial_job_id LEFT JOIN index_jobs f ON f.id=r.last_refresh_job_id
             WHERE o.repository_id=?
             """,webhooks.signingKeyFingerprint(),webhooks.configurationHash(repository),webhooks.mode(),repository.id());
         if(rows.isEmpty())return Map.of("repository",repository.key(),"state","LEGACY_REGISTRATION",

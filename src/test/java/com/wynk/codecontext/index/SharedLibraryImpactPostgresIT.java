@@ -70,6 +70,7 @@ class SharedLibraryImpactPostgresIT {
         // Keep durable refresh jobs queued during this scenario so the late-provider assertion
         // proves relationship binding does not depend on reindexing the consumer generation.
         registry.add("CONTRACT_REFRESH_POLL_MS", () -> "3600000");
+        registry.add("REPOSITORY_REFRESH_POLL_MS", () -> "100");
         registry.add("spring.datasource.url", () -> System.getenv().getOrDefault("DATABASE_URL", "jdbc:postgresql://localhost:5432/code_context_test"));
         registry.add("spring.datasource.username", () -> System.getenv().getOrDefault("DATABASE_USER", "code_context"));
         registry.add("spring.datasource.password", () -> System.getenv().getOrDefault("DATABASE_PASSWORD", "integration_test_password"));
@@ -127,7 +128,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("16", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("17", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -591,6 +592,29 @@ AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.
         var reactivated=newClient.file("Fixture/lifecycle-renamed",path);
         assertEquals(main,reactivated.path("commit").asText());assertTrue(reactivated.path("content").asText().contains("bravo"));
         assertFalse(reactivated.path("content").asText().contains("charlie"));oldClient.rejectFile("Fixture/lifecycle-renamed",path);
+        String missed;
+        try(Git git=Git.open(alternative.toFile())) {
+            write(alternative,path,lifecycleSource("delta"));git.add().addFilepattern(".").call();
+            missed=git.commit().setMessage("push without webhook delivery").setAuthor("Fixture","fixture@example.test").setCommitter("Fixture","fixture@example.test").call().name();
+        }
+        jdbc.update("UPDATE repositories SET refresh_due_at=now()-interval '1 second' WHERE id=?",id);
+        UUID recovery=null;deadline=System.nanoTime()+java.time.Duration.ofSeconds(15).toNanos();
+        while(recovery==null&&System.nanoTime()<deadline){recovery=jdbc.queryForObject("SELECT last_refresh_job_id FROM repositories WHERE id=?",UUID.class,id);if(recovery==null)Thread.sleep(100);}
+        assertNotNull(recovery,"the normal scheduled reconciler must recover a source change without webhook or manual index invocation");
+        awaitSucceeded(recovery,"lifecycle-renamed");
+        var recovered=newClient.file("Fixture/lifecycle-renamed",path);
+        assertEquals(missed,recovered.path("commit").asText());assertTrue(recovered.path("content").asText().contains("delta"));
+        assertEquals(4L,jdbc.queryForObject("SELECT repository_revision FROM index_generations WHERE id=?",Long.class,repositories.currentGeneration(id).orElseThrow()));
+        oldClient.rejectFile("Fixture/lifecycle-renamed",path);
+        UUID unchangedGeneration=repositories.currentGeneration(id).orElseThrow(),priorRecovery=recovery;
+        jdbc.update("UPDATE repositories SET refresh_due_at=now()-interval '1 second' WHERE id=?",id);
+        UUID unchanged=null;deadline=System.nanoTime()+java.time.Duration.ofSeconds(15).toNanos();
+        while(unchanged==null&&System.nanoTime()<deadline) {
+            UUID next=jdbc.queryForObject("SELECT last_refresh_job_id FROM repositories WHERE id=?",UUID.class,id);
+            if(next!=null&&!next.equals(priorRecovery))unchanged=next;else Thread.sleep(100);
+        }
+        assertNotNull(unchanged);awaitSucceeded(unchanged,"lifecycle-renamed");
+        assertEquals(unchangedGeneration,repositories.currentGeneration(id).orElseThrow(),"an unchanged HEAD check must reuse the valid published generation");
     }
     private static String lifecycleSource(String version){return "package lifecycle;\npublic class LifecycleMarker {\n public String version(){ return \""+version+"\"; }\n}\n";}
     private RepositoryIndexLeaseManager.Lease awaitLifecycleLease(UUID id)throws Exception {

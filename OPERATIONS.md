@@ -190,3 +190,12 @@ Webhook reconciliation serializes provider calls with repository configuration u
 
 
 Subsequent webhook reconciliation is pinned to the confirmed immutable GitHub repository ID. If a namespace is reused for another repository, onboarding reports FAILED with the `ProviderIdentityChanged` category; no new hook receives the signing secret and existing verification provenance is retained. Investigate with the Git provider administrator before retrying. Changing credentials, callback settings, team or branch does not authorize rebinding. An authorized clone-URL lifecycle change preserves old-hook retirement provenance and invalidates the binding for the new URL. For an unrelated replacement at an unchanged URL, use an explicitly reviewed purge/new registration rather than silently treating the replacement as the previous repository.
+
+
+## Missed-push reconciliation (V17)
+
+Every enabled repository has a durable `refresh_due_at`. After the initial five-minute grace, `RepositoryRefresh` queues a HEAD check at the configured `REPOSITORY_REFRESH_INTERVAL_SECONDS` (default300, allowed30..86400). `REPOSITORY_REFRESH_POLL_MS` defaults to60000. Each poll schedules at most10 repositories. PostgreSQL row locks and a single enqueue/schedule transaction coalesce competing replicas; an active queued/running index job or pending lifecycle preparation defers another check. Disabled repositories are excluded. This is fallback recovery, not a replacement for prompt signed webhook delivery or a measured indexing-latency guarantee.
+
+The normal indexing workers fetch the configured branch, reuse a valid current generation when appropriate, and retain existing retry, lease/configuration fences, last-successful publication and failure visibility. A scheduling transaction failure advances neither the due time nor the job queue. A failed indexing job remains visible; a later scheduled check can recover after the external cause is corrected. Size the cadence/poll rate for the number of repositories and actual worker capacity.
+
+Authorized onboarding status includes `refresh_due_at`, `last_refresh_scheduled_at`, `last_refresh_job_id`, `last_refresh_state` and `last_refresh_error`; MISSING means referenced history was removed, not successful reconciliation. Identity-drift detection soft-disables visibility and indexing until explicit authorized recovery; a scheduled refresh cannot re-enable it. Lifecycle transitions invalidate the previous webhook claim so a late failure cannot suspend a new configuration.
