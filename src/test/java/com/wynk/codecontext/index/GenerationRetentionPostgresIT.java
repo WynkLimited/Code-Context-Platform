@@ -34,7 +34,16 @@ class GenerationRetentionPostgresIT {
         var leases=new RepositoryIndexLeaseManager(jdbc);
         try {
             Flyway.configure().dataSource(ds).schemas(schema).defaultSchema(schema)
+                    .placeholders(Map.of("vectorDimensions","1024")).target("12").load().migrate();
+            UUID legacyRepo=jdbc.queryForObject("INSERT INTO repositories(owner,name,clone_url,team,mirror_path) VALUES('fixture','legacy-provenance','','team','') RETURNING id",UUID.class);
+            String legacySha="a".repeat(40);
+            jdbc.update("INSERT INTO index_generations(repository_id,commit_sha,generation,published) VALUES(?,?,1,true)",legacyRepo,legacySha);
+            for(String request:java.util.List.of("HEAD",legacySha))jdbc.update("INSERT INTO index_jobs(repository_id,commit_sha,idempotency_key,state) VALUES(?,?,?,'SUCCEEDED')",legacyRepo,request,UUID.randomUUID().toString());
+            Flyway.configure().dataSource(ds).schemas(schema).defaultSchema(schema)
                     .placeholders(Map.of("vectorDimensions","1024")).load().migrate();
+            assertEquals(2,jdbc.queryForObject("SELECT count(*) FROM index_jobs WHERE repository_id=? AND requested_commit_sha=commit_sha AND generation_id IS NULL AND generation_provenance_unverified",Integer.class,legacyRepo),
+                    "forward migration must preserve legacy request refs without guessing generation success");
+            jdbc.update("DELETE FROM repositories WHERE id=?",legacyRepo);
             UUID repo=jdbc.queryForObject("INSERT INTO repositories(owner,name,clone_url,team,mirror_path) VALUES('fixture','retention','','team','') RETURNING id",UUID.class);
             UUID obsolete=generation(jdbc,repo,1,false);
             UUID baseline=generation(jdbc,repo,2,false);
@@ -177,6 +186,14 @@ class GenerationRetentionPostgresIT {
             assertEquals("QUEUED",jdbc.queryForObject("SELECT state FROM generation_cleanup_outbox WHERE generation_id=?",String.class,orphan));
             jdbc.update("UPDATE generation_cleanup_outbox SET available_at=now()+interval '1 hour' WHERE generation_id=?",orphan);
 
+            // Legacy uncertain history is retained, not inferred as successful or silently collected.
+            UUID uncertain=generation(jdbc,repo,100,false);
+            generation(jdbc,repo,101,false);generation(jdbc,repo,102,false);
+            jdbc.update("UPDATE index_jobs SET generation_id=NULL,generation_provenance_unverified=true WHERE generation_id=?",uncertain);
+            assertFalse(gc.collect(uncertain,repo),"legacy provenance hold must protect uncertain historical generations");
+            jdbc.update("UPDATE index_jobs SET generation_provenance_unverified=false WHERE repository_id=? AND commit_sha='100'",repo);
+            assertTrue(gc.collect(uncertain,repo),"explicitly reviewed legacy hold may be released through retention policy");
+
             // Authorized hard purge removes PostgreSQL evidence and queues Zoekt cleanup for every generation.
             jdbc.update("INSERT INTO code_chunks(generation_id,file_path,start_line,end_line,content_hash,content) VALUES(?,'Active.java',1,1,'hash','active')",active);
             jdbc.update("INSERT INTO cross_repo_impact_analyses(team,origin_repository_id,before_generation_id,after_generation_id,after_commit,analysis_status,result) VALUES('team',?,?,?,'3','COMPLETE','{}')",repo,baseline,active);
@@ -202,7 +219,7 @@ class GenerationRetentionPostgresIT {
     private UUID generation(JdbcTemplate jdbc,UUID repo,int number,boolean published) {
         String sha=String.valueOf(number);
         UUID id=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published,created_at) VALUES(?,?,?,?,now()-interval '60 days') RETURNING id",UUID.class,repo,sha,number,published);
-        jdbc.update("INSERT INTO index_jobs(repository_id,commit_sha,idempotency_key,state) VALUES(?,?,?,'SUCCEEDED')",repo,sha,UUID.randomUUID().toString());
+        jdbc.update("INSERT INTO index_jobs(repository_id,commit_sha,idempotency_key,state,generation_id,generation_provenance_unverified) VALUES(?,?,?,'SUCCEEDED',?,false)",repo,sha,UUID.randomUUID().toString(),id);
         return id;
     }
     private static final class CleanupAdapter extends ZoektIndexer {

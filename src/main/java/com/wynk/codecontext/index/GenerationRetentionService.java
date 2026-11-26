@@ -17,9 +17,13 @@ import java.util.UUID;
 public class GenerationRetentionService {
     private static final String PROTECTED = """
                       AND NOT EXISTS(SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.state IN ('QUEUED','RUNNING'))
+                      AND NOT EXISTS(SELECT 1 FROM index_jobs legacy WHERE legacy.repository_id=g.repository_id
+                        AND legacy.generation_provenance_unverified AND legacy.generation_id IS NULL AND legacy.state='SUCCEEDED'
+                        AND g.created_at<=legacy.updated_at
+                        AND (legacy.commit_sha=g.commit_sha OR legacy.commit_sha !~ '^[0-9a-fA-F]{40}$'))
                       AND g.id NOT IN (
                         SELECT h.id FROM index_generations h WHERE h.repository_id=g.repository_id
-                        AND EXISTS(SELECT 1 FROM index_jobs j WHERE j.repository_id=h.repository_id AND j.commit_sha=h.commit_sha AND j.state='SUCCEEDED')
+                        AND EXISTS(SELECT 1 FROM index_jobs j WHERE j.repository_id=h.repository_id AND j.generation_id=h.id AND j.commit_sha=h.commit_sha AND j.state='SUCCEEDED')
                         ORDER BY h.generation DESC LIMIT 2)
                       AND NOT EXISTS(SELECT 1 FROM cross_repo_impact_analyses a WHERE a.before_generation_id=g.id OR a.after_generation_id=g.id)
                       AND NOT EXISTS(SELECT 1 FROM contract_refresh_jobs f WHERE f.origin_generation_id=g.id)

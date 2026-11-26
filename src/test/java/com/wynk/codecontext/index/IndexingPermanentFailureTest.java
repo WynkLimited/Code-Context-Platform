@@ -22,6 +22,23 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class IndexingPermanentFailureTest {
+    @Test void staleAttemptsCannotChangeTheCapturedCommit() {
+        var jdbc=mock(JdbcTemplate.class);
+        var service=service(jdbc,new PlatformMetrics(new SimpleMeterRegistry()));
+        try {
+            assertThrows(IllegalStateException.class,()->service.recordActualCommit(UUID.randomUUID(),1,"a".repeat(40)));
+            assertThrows(IllegalArgumentException.class,()->service.recordActualCommit(UUID.randomUUID(),1,"HEAD"));
+        } finally {service.stopWorkers();}
+    }
+    @Test void unmatchedAttemptsCannotAttachASuccessfulGenerationOrCountSuccess() {
+        var jdbc=mock(JdbcTemplate.class);
+        var metrics=new PlatformMetrics(new SimpleMeterRegistry());
+        var service=service(jdbc,metrics);
+        try {
+            assertThrows(IllegalStateException.class,()->service.markSucceeded(UUID.randomUUID(),2,UUID.randomUUID()));
+            assertEquals(0,metrics.indexSucceededCount());
+        } finally {service.stopWorkers();}
+    }
     @Test void retryAttemptMarksJobFailedOnceAttemptCeilingIsReached() {
         var jdbc=mock(JdbcTemplate.class);
         when(jdbc.update(startsWith("UPDATE index_jobs SET state=CASE WHEN attempt>=3 THEN 'FAILED'"),any(),anyInt(),any(),anyInt()))

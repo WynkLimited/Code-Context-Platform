@@ -73,8 +73,8 @@ Status vocabulary (this ledger):
 | ID | Requirement | Status | Next |
 |---|---|---|---|
 | IDX-1 | Lease fencing / publication | PARTIALLY_IMPLEMENTED | GenerationRetentionPostgresIT lease expiry + fence; separate-JVM lease/crash/fencing CI green at bee5d60; full-app concurrency still open |
-| IDX-2 | Durable jobs / permanent failure | PARTIALLY_IMPLEMENTED | Shared IT failure-boundary; expand stale-worker cases |
-| IDX-3 | Incremental ≡ full rebuild | PARTIALLY_IMPLEMENTED | Rename+dependency markers added to shared IT; await next CI |
+| IDX-2 | Durable jobs / permanent failure | PARTIALLY_IMPLEMENTED | Guarded retry metrics accepted; V13 exact requested/actual commit and successful-generation association implemented locally, pending CI; full-application crash/network faults remain open |
+| IDX-3 | Incremental ≡ full rebuild | PARTIALLY_IMPLEMENTED | Java edit/add/delete/rename, dependency marker, generator epoch and embedding-space rebuild assertions verified through b2d0b70; broader build/module/language variants remain open |
 | IDX-4 | Zoekt orphan reconcile | VERIFIED_PRODUCTION_READY | Retention PG + unit |
 
 ### Cross-repository intelligence
@@ -354,3 +354,14 @@ Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/4575645840
 ### Replica search response contract repair — 2026-11-26
 
 Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45757589572 for 2e16c9d progressed past real contender acquisition and raw candidate-shard visibility, then failed a new test assertion that expected `search_code.results` to be empty. The actual API returns a per-repository envelope even for no matches: it contained the exact baseline commit, `MatchCount=0` and `Files=null`. Candidate exclusion was already working; the test confused envelope presence with file matches. Corrected it to require the exact repository/commit, zero matches and no files for the candidate query. Positive old/new queries now require actual positive match counts and the exact source filename, including baseline text availability during the publication pause. No production behavior, timeout, security or gate was changed. Compilation passed; service verification remains pending the next exact SHA. Reports and both child logs: `target/ci-2e16c9d-reports`. V13 job-provenance work remains independent and uncommitted.
+
+
+### Exact job/publication provenance — 2026-11-26
+
+Confirmed two related production defects from actual paths: the manual index endpoint enqueues literal `HEAD`, while the worker indexes synchronized branch HEAD without recording its resolved SHA; and previous-success/provider-generation/retention queries inferred success from any successful job at the same commit. Consequently a successful retry at SHA B could certify earlier failed/unpublished B candidates. Original accepted fixtures enqueued resolved SHAs directly and did not cover this recovery combination.
+
+New forward-only V13 (V1–V12 unchanged) preserves `requested_commit_sha`, adds exact `generation_id` and an explicit unverified-provenance marker. Each owned attempt records its actual synchronized SHA under state/attempt guards. Both real publication and same-commit short-circuit success must atomically associate the exact published generation with matching repository and SHA; stale attempts and unpublished candidates cannot claim success. Job-status HTTP adds audit fields. History lookup, provider lookup and top-two retention protection now require exact successful-generation association. Generator 1.13.0 invalidates older evidence under the existing reindex protocol.
+
+Legacy association is never guessed. Recorded requests are retained, and temporally plausible legacy history is held conservatively by retention while provenance remains unverified. A legacy symbolic ref such as HEAD holds only historical generations created by its recorded completion time; future generations do not accrue that hold. Verified jobs retain their proof marker when later retention clears an expired generation FK. Operators may review and release a legacy retention hold without manufacturing a successful association. Homogeneous-version rollout/rebaselining is required; mixed old/new generator workers are not certified.
+
+Validation: focused job/freshness/impact suite **14 passed**; final full Java21 default suite **303 passed**, zero failures/errors/skips (44.193s). Subsequent acceptance compilation passed (4.418s); workflow YAML and `git diff --check` passed. Added actual PostgreSQL checks for V12→V13 legacy migration, preservation/release of legacy retention holds, matched-attempt rejection of an unpublished same-SHA generation, actual HTTP manual indexing/job-status requested HEAD versus resolved SHA, and successful same-SHA recovery selecting the last genuine published baseline. All original rollback and exact impact assertions remain and execute before recovery. These V13 service/migration assertions are **IMPLEMENTED_UNVERIFIED** until the next exact-SHA CI. The independently repaired full-application gate for 9a08737 is still running; retain its exact outcome separately.

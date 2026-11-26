@@ -35,7 +35,7 @@ public final class PostgresContractIndexStore {
         List<Header> rows=jdbc.query("""
 SELECT g.id,g.repository_id,g.generation,g.commit_sha,r.owner,r.name,r.default_branch,m.index_schema_version,m.extractor_versions::text,m.compatibility_rules_version,m.generator_version,m.generated_at,m.index_hash
 FROM index_generations g JOIN repositories r ON r.id=g.repository_id JOIN contract_index_metadata m ON m.generation_id=g.id
-WHERE g.repository_id=? AND g.generation < ? AND EXISTS (SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED')
+WHERE g.repository_id=? AND g.generation < ? AND EXISTS (SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.generation_id=g.id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED')
 ORDER BY g.generation DESC LIMIT 1
 """, this::header, repositoryId, beforeGeneration);
         return rows.stream().findFirst().map(this::readIndex);

@@ -122,7 +122,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("12", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("13", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -173,16 +173,41 @@ class SharedLibraryImpactPostgresIT {
         assertEquals(consumerBGeneration, repositories.currentGeneration(consumerB).orElseThrow());
         assertEquals(consumerCGeneration, repositories.currentGeneration(consumerC).orElseThrow());
 
-        UUID attemptJob=jdbc.queryForObject("INSERT INTO index_jobs(repository_id,commit_sha,idempotency_key,state,attempt) VALUES(?,'fencing-fixture',?,'RUNNING',2) RETURNING id",UUID.class,provider,"attempt-fencing-"+UUID.randomUUID());
+        UUID providerV1Generation = repositories.currentGeneration(provider).orElseThrow();
+        String providerV1Commit=repositories.currentCommit(provider).orElseThrow();
+        UUID attemptJob=jdbc.queryForObject("INSERT INTO index_jobs(repository_id,commit_sha,idempotency_key,state,attempt) VALUES(?,?,?,'RUNNING',2) RETURNING id",UUID.class,provider,providerV1Commit,"attempt-fencing-"+UUID.randomUUID());
+        UUID unpublishedFencing=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published) SELECT ?,?,coalesce(max(generation),0)+1,false FROM index_generations WHERE repository_id=? RETURNING id",UUID.class,provider,providerV1Commit,provider);
         try {
             indexing.retryAttempt(attemptJob,1,new IllegalStateException("late failure from stale attempt"));
             assertEquals("RUNNING",jdbc.queryForObject("SELECT state FROM index_jobs WHERE id=?",String.class,attemptJob));
-            assertThrows(IllegalStateException.class,()->indexing.markSucceeded(attemptJob,1));
-            indexing.markSucceeded(attemptJob,2);
+            assertThrows(IllegalStateException.class,()->indexing.markSucceeded(attemptJob,1,providerV1Generation));
+            assertThrows(IllegalStateException.class,()->indexing.markSucceeded(attemptJob,2,unpublishedFencing),
+                    "a matched attempt must not associate success with an unpublished generation at the same SHA");
+            assertEquals("RUNNING",jdbc.queryForObject("SELECT state FROM index_jobs WHERE id=?",String.class,attemptJob));
+            indexing.markSucceeded(attemptJob,2,providerV1Generation);
             indexing.retryAttempt(attemptJob,2,new IllegalStateException("late failure after success"));
             assertEquals("SUCCEEDED",jdbc.queryForObject("SELECT state FROM index_jobs WHERE id=?",String.class,attemptJob));
-        } finally { jdbc.update("DELETE FROM index_jobs WHERE id=?",attemptJob); }
-        UUID providerV1Generation = repositories.currentGeneration(provider).orElseThrow();
+        } finally {
+            jdbc.update("DELETE FROM index_jobs WHERE id=?",attemptJob);
+            jdbc.update("DELETE FROM index_generations WHERE id=?",unpublishedFencing);
+        }
+        var manualClient=HttpClient.newHttpClient();
+        var manualResponse=manualClient.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/repositories/Fixture/common-library/index"))
+                .header("X-API-Key",API_KEY).POST(HttpRequest.BodyPublishers.noBody()).build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(202,manualResponse.statusCode(),manualResponse.body());
+        UUID manualJob=UUID.fromString(json.readTree(manualResponse.body()).path("jobId").asText());
+        indexing.poll();awaitSucceeded(manualJob,"manual HEAD resolution");
+        var manual=jdbc.queryForMap("SELECT requested_commit_sha,commit_sha,generation_id FROM index_jobs WHERE id=?",manualJob);
+        assertEquals("HEAD",manual.get("requested_commit_sha"));assertEquals(providerV1Commit,manual.get("commit_sha"));
+        assertEquals(providerV1Generation,manual.get("generation_id"),"same-commit manual success must reference the actual published generation");
+        var statusResponse=manualClient.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+"/api/index-jobs/"+manualJob))
+                .header("X-API-Key",API_KEY).GET().build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(200,statusResponse.statusCode(),statusResponse.body());
+        var manualStatus=json.readTree(statusResponse.body());
+        assertEquals("HEAD",manualStatus.path("requested_commit_sha").asText());
+        assertEquals(providerV1Commit,manualStatus.path("commit_sha").asText());
+        assertEquals(providerV1Generation.toString(),manualStatus.path("generation_id").asText());
+        assertFalse(manualStatus.path("generation_provenance_unverified").asBoolean(true));
         var sourceChunks=jdbc.queryForList("SELECT start_line,end_line,content FROM code_chunks WHERE generation_id=? AND file_path='src/main/java/org/acme/Money.java' AND symbol='convert(String)'",providerV1Generation);
         assertEquals(1,sourceChunks.size(),"the inline provider method must have one persisted source chunk");
         assertEquals(3,((Number)sourceChunks.getFirst().get("start_line")).intValue());
@@ -440,6 +465,15 @@ JOIN index_generations g ON g.id=edge.generation_id AND g.published
 WHERE edge.repository_id=? AND edge.generation_id=site.generation_id AND site.commit_sha=?
 AND edge.resolution_status='RESOLVED' AND site.resolved_signature='convert(java.lang.String)')
 """,Boolean.class,consumerA,dependencyCommit(consumerA))));
+
+        // Recover the same SHA after failed candidates: commit equality cannot establish publication.
+        assertNull(jdbc.queryForObject("SELECT generation_id FROM index_jobs WHERE id=?",UUID.class,failedJob));
+        org.mockito.Mockito.doCallRealMethod().when(zoektIndexer).index(any(RepositoryRecord.class),any(Path.class),any(UUID.class));
+        indexAndAwait("common-library","successful-retry-"+UUID.randomUUID());
+        var recovered=contractIndexes.published(provider).orElseThrow();
+        assertEquals(failedCommit,recovered.index().commit());assertNotEquals(lastPublished,recovered.generationId());
+        assertEquals(lastPublished,contractIndexes.previousSuccessful(provider,recovered.generationNumber()).orElseThrow().generationId(),
+                "a later success at the same SHA must not turn failed candidates into successful baselines");
     }
 
 
@@ -911,6 +945,10 @@ FROM semantic_call_sites WHERE id=?
         try (Git source = Git.open(ROOT.resolve("git-sources").resolve(name).toFile())) { sha = source.getRepository().resolve("HEAD").name(); }
         UUID job = indexing.enqueue("Fixture", name, sha, delivery);
         indexing.poll();
+        awaitSucceeded(job,name);
+    }
+
+    private void awaitSucceeded(UUID job,String name) throws Exception {
         long deadline = System.nanoTime() + java.time.Duration.ofMinutes(3).toNanos();
         while (System.nanoTime() < deadline) {
             var state = jdbc.queryForMap("SELECT state,error FROM index_jobs WHERE id=?", job);

@@ -251,7 +251,7 @@ SELECT EXISTS(SELECT 1 FROM maven_module_classpaths
         List<UUID> ids=jdbc.query("""
 SELECT g.id FROM index_generations g
 WHERE g.repository_id=? AND g.commit_sha=?
-  AND (g.published=true OR EXISTS(SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED'))
+  AND (g.published=true OR EXISTS(SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.generation_id=g.id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED'))
 ORDER BY g.generation DESC LIMIT 1
 """,(rs,n)->rs.getObject(1,UUID.class),repository,commit);
         return ids.isEmpty()?null:ids.get(0);
