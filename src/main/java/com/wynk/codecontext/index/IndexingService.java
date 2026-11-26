@@ -173,6 +173,7 @@ WITH candidate AS (SELECT id FROM index_jobs WHERE state='QUEUED' AND available_
         } catch(Exception e) {
             String sqlDiagnostics = sqlDiagnosticChain(e);
             if (!sqlDiagnostics.isBlank()) LOGGER.error("Database failure while indexing job {}: {}", jobId, AuditRedaction.redact(sqlDiagnostics));
+            else LOGGER.error("index.job.attempt.failed cause={}",e.getClass().getName());
             retryJob(jobId,job,e);
         }
     }
@@ -467,12 +468,14 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
     }
     private static String sha256(String s) { try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8))); } catch(Exception e) { throw new IllegalStateException(e); } }
     private static String vectorLiteral(float[] v){return "["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";}
-    private static String sqlDiagnosticChain(Throwable failure) {
+    static String sqlDiagnosticChain(Throwable failure) {
         Set<Throwable> seen = Collections.newSetFromMap(new IdentityHashMap<>());
         List<String> details = new ArrayList<>();
+        boolean sqlFailure=false;
         for (Throwable current = failure; current != null && seen.add(current); current = current.getCause()) {
             StringBuilder detail = new StringBuilder(current.getClass().getName());
             if (current instanceof SQLException sql) {
+                sqlFailure=true;
                 detail.append("[SQLSTATE=").append(Objects.toString(sql.getSQLState(), "unknown"));
                 if ("org.postgresql.util.PSQLException".equals(current.getClass().getName())) {
                     detail.append(", message=").append(Objects.toString(sql.getMessage(), "unknown"));
@@ -491,7 +494,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
             }
             details.add(detail.toString());
         }
-        return String.join(" <- ", details);
+        return sqlFailure?String.join(" <- ", details):"";
     }
 
     private static void appendPostgresServerFields(StringBuilder detail, Throwable exception) {

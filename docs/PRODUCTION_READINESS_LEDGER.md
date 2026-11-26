@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `9a08737ba799add9315744b33238b384cb96d74d` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45758588962 |
+| Last green mandatory CI SHA | `10d546042bcd570f45d5ce284c8ae1c5443c91cd` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45768140338 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -116,7 +116,7 @@ Status vocabulary (this ledger):
 
 | ID | Requirement | Status | Evidence |
 |---|---|---|---|
-| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 9a08737: 301 unit + eight PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
+| VALID-CI | Mandatory Java21 + PG ITs | VERIFIED_PRODUCTION_READY | 10d5460: 303 unit + nine PostgreSQL + one actual HTTPS case; five shell tests and actual logical restore passed |
 | VALID-INDEP | Build without MultiRepo present | VERIFIED_PRODUCTION_READY | `ArchitecturalIndependenceTest` + pom has no MultiRepo deps |
 
 ---
@@ -381,3 +381,13 @@ Added a second mandatory `ApplicationReplicaConsistencyPostgresIT` method that k
 Timing scope is explicit: only this test process profile uses the existing package-scoped three-second/200 ms lease constructor. The original consistency case retains the production thirty-second heartbeat. After actual process death, the fixture backdates only the dead job heartbeat; production polling performs expiry, queueing, retry and publication, and the lease expires naturally. No test directly marks success or publication. Therefore this is full-application kill/recovery evidence with injected heartbeat age, not a measurement of production ten-minute detection or RTO/RPO. No production code, defaults or migrations changed. Network-partition/cross-host staging remain open.
 
 Complete local Java21 default suite **303 passed**, zero failures/errors/skips (47.306s); final acceptance compilation passed (3.467s). Workflow YAML and `git diff --check` passed. The report gate now requires both exact named methods, two passes and zero skip/failure/error nodes; original gates remain intact. Actual crash execution is **IMPLEMENTED_UNVERIFIED** until the next exact-SHA CI. The V13 retention cleanup repair at 8d21409 is independently running in CI 45767629596; record its actual result before claiming complete V13 acceptance.
+
+
+### V13 and full application process recovery accepted — 2026-11-26
+
+Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45767629596 at 8d21409 passed with downloaded XML **303 unit + eight PostgreSQL + one HTTPS = 312 passed**, zero failures/errors/skips, and actual logical restore. This includes completed V13 legacy migration/retention, manual HTTP job audit and same-SHA recovery checks. Run https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45768140338 at 10d5460 then passed **303 unit + nine PostgreSQL + one HTTPS = 313 passed**, all zero failure/error/skip counts. Both named full-application methods executed, including actual publisher JVM death, surviving-app recovery of the same job and exact HTTP MCP baseline/generation checks. Heartbeat-age injection and short test-only lease scope remain as documented; production RTO and network/cross-host staging are not certified. Artifacts: `target/ci-8d21409-reports`, `target/ci-10d5460-reports`. Overall readiness remains NOT READY because other actionable and external requirements remain open.
+
+
+### Correct indexing failure diagnostic category — 2026-11-26
+
+Actual fixture teardown logs exposed a plain InterruptedException labeled as a database failure. A focused regression reproduced this because the SQL formatter returned class names for every exception chain. It now returns SQL diagnostics only when the chain contains SQLException; other indexing failures log a generic event with the exception class and existing job MDC, without raw non-SQL messages. Actual PostgreSQL SQLSTATE, server message, schema/table/column/constraint, next exceptions and cycle termination remain covered by three new driver-backed formatter tests. Complete local Java21 suite **306 passed**, zero failures/errors/skips (49.150s); `git diff --check` passed. Service CI for this logging-only change remains pending publication. No retry, publication, security, migration or acceptance criteria changed.
