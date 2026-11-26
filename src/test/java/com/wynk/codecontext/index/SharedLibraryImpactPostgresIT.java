@@ -79,7 +79,7 @@ class SharedLibraryImpactPostgresIT {
         registry.add("code-context.zoekt.webserver", () -> System.getenv().getOrDefault("ZOEKT_WEB_SERVER", "http://localhost:6070"));
         registry.add("spring.ai.ollama.base-url", () -> System.getenv().getOrDefault("OLLAMA_BASE_URL", "http://localhost:11434"));
         registry.add("code-context.api-keys", () -> TEAM + "=" + API_KEY + ",isolated=isolated-integration-token");
-        registry.add("code-context.admin-api-keys", () -> "admin=admin-token");
+        registry.add("code-context.admin-api-keys", () -> "admin=admin-token,"+TEAM+"=integration-admin-token");
         registry.add("code-context.graphify.enabled", () -> "false");
         registry.add("code-context.mcp-allowed-origins", () -> "http://localhost,http://127.0.0.1");
     }
@@ -125,7 +125,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("13", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("14", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");
@@ -138,7 +138,7 @@ class SharedLibraryImpactPostgresIT {
 
         Path consumerASource = ROOT.resolve("git-sources/consumer-service-a");
         createGitRepository(consumerASource, consumerFiles("1.0", "ConsumerA", "String", "money.convert(\"x\")"));
-        onboard("consumer-service-a", consumerASource, "SERVICE");
+        automaticallyOnboardAndAwait("consumer-service-a", consumerASource);
         Path consumerBSource = ROOT.resolve("git-sources/consumer-service-b");
         createGitRepository(consumerBSource, consumerFiles("2.0", "ConsumerB", "java.math.BigDecimal", "money.convert(java.math.BigDecimal.ONE)"));
         onboard("consumer-service-b", consumerBSource, "SERVICE");
@@ -965,6 +965,58 @@ FROM semantic_call_sites WHERE id=?
         RepositoryRecord repo = repositories.insert("Fixture", name, source.toUri().toString(), TEAM, "main", type,
                 ROOT.resolve("mirrors/Fixture").resolve(name).toString());
         jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES(?,?) ON CONFLICT DO NOTHING", TEAM, repo.id());
+    }
+
+    private void automaticallyOnboardAndAwait(String name,Path source) throws Exception {
+        var client=HttpClient.newHttpClient();
+        URI endpoint=URI.create("http://localhost:"+port+"/api/repositories");
+        // Omit defaultBranch: onboarding must discover the remote's symbolic HEAD.
+        String body=json.writeValueAsString(Map.of("owner","Fixture","name",name,"cloneUrl",source.toUri().toString(),"type","SERVICE"));
+        var request=HttpRequest.newBuilder(endpoint).header("X-API-Key","integration-admin-token")
+                .header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build();
+        var teamOnly=client.send(HttpRequest.newBuilder(endpoint).header("X-API-Key",API_KEY)
+                .header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(403,teamOnly.statusCode(),"a team key must not gain administrative onboarding permission");
+        String invalidBody=json.writeValueAsString(Map.of("owner","Fixture","name","invalid-onboarding","cloneUrl","https://127.0.0.1/secret/repo.git"));
+        var invalid=client.send(HttpRequest.newBuilder(endpoint).header("X-API-Key","integration-admin-token")
+                .header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(invalidBody)).build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(400,invalid.statusCode(),invalid.body());
+        assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM repositories WHERE name='invalid-onboarding'",Integer.class));
+        var first=client.send(request,HttpResponse.BodyHandlers.ofString());
+        assertEquals(200,first.statusCode(),"automatic onboarding failed: "+first.body());
+        UUID repository=UUID.fromString(json.readTree(first.body()).path("id").asText());
+        assertEquals("main",json.readTree(first.body()).path("defaultBranch").asText());
+        try(var workers=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            var duplicates=new java.util.ArrayList<java.util.concurrent.Future<HttpResponse<String>>>();
+            for(int i=0;i<4;i++)duplicates.add(workers.submit(()->client.send(request,HttpResponse.BodyHandlers.ofString())));
+            for(var duplicate:duplicates) {
+                var response=duplicate.get(30,java.util.concurrent.TimeUnit.SECONDS);
+                assertEquals(200,response.statusCode(),response.body());
+                assertEquals(repository.toString(),json.readTree(response.body()).path("id").asText());
+            }
+        }
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM repository_onboarding WHERE repository_id=?",Integer.class,repository));
+        assertEquals(1,jdbc.queryForObject("SELECT count(*) FROM index_jobs WHERE repository_id=? AND idempotency_key LIKE 'onboarding:%'",Integer.class,repository),
+                "concurrent duplicate requests must schedule exactly one durable initial job");
+        var conflicting=client.send(HttpRequest.newBuilder(endpoint).header("X-API-Key","integration-admin-token")
+                .header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(body.replace("\"SERVICE\"","\"LIBRARY\""))).build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(409,conflicting.statusCode(),"a duplicate request must not silently replace repository configuration");
+        assertEquals("SERVICE",repositories.find("Fixture",name).orElseThrow().repositoryType());
+        UUID job=jdbc.queryForObject("SELECT initial_job_id FROM repository_onboarding WHERE repository_id=?",UUID.class,repository);
+        // No manual /index request or poll call: the normal worker must create the mirror and publish.
+        awaitSucceeded(job,name);
+        assertTrue(Files.isDirectory(ROOT.resolve("mirrors/Fixture").resolve(name).resolve(".git")));
+        assertEquals(repositories.currentGeneration(repository).orElseThrow(),jdbc.queryForObject("SELECT generation_id FROM index_jobs WHERE id=?",UUID.class,job));
+        var status=client.send(HttpRequest.newBuilder(URI.create(endpoint+"/Fixture/"+name+"/onboarding"))
+                .header("X-API-Key",API_KEY).GET().build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(200,status.statusCode(),status.body());
+        JsonNode onboarding=json.readTree(status.body());
+        assertEquals("INDEXED",onboarding.path("state").asText());
+        assertEquals("SUCCEEDED",onboarding.path("indexing_state").asText());
+        assertEquals("NOT_APPLICABLE",onboarding.path("webhook_state").asText(),"file fixtures must not claim a live GitHub webhook");
+        var hidden=client.send(HttpRequest.newBuilder(URI.create(endpoint+"/Fixture/"+name+"/onboarding"))
+                .header("X-API-Key","isolated-integration-token").GET().build(),HttpResponse.BodyHandlers.ofString());
+        assertEquals(404,hidden.statusCode(),"onboarding status must not expose another team's repository/job metadata");
     }
 
     private void indexAndAwait(String name) throws Exception {

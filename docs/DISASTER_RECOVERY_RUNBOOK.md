@@ -1,6 +1,6 @@
 # Disaster recovery runbook
 
-**Status: PARTIAL / BLOCKED for production sign-off** until restore+PITR drills execute in an isolated environment.
+**Status: PARTIAL / BLOCKED for production sign-off** until WAL/PITR and whole-environment recovery drills execute in an isolated environment. Actual CI logical backup/restore and full-application process-death recovery already pass; they do not certify PITR or production RPO/RTO.
 
 ## Components to recover
 

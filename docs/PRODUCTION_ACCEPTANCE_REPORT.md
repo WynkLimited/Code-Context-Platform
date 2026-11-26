@@ -2,10 +2,10 @@
 
 **Decision: NOT READY FOR PRODUCTION**
 
-Branch: `fix/jackson3-postgres-acceptance`  
-Evidence HEAD (this report): see `docs/PRODUCTION_READINESS_LEDGER.md`  
-Last green mandatory CI: `f0a36adb320429a7752944f742de49a98567cc74`  
-CI URL: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45650821728  
+Branch: `fix/jackson3-postgres-acceptance`
+Evidence HEAD (this report): see `docs/PRODUCTION_READINESS_LEDGER.md`
+Last green mandatory CI: `c9fbb1a0abdd49981b0fd1e05052cad273979e3e`
+CI URL: https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45830952339
 
 Reference (read-only): MultiRepo-Code-Review-Agent `main` @ `65144c6060e97c491546674586ea8ae5020588c7`
 
@@ -13,7 +13,7 @@ Reference (read-only): MultiRepo-Code-Review-Agent `main` @ `65144c6060e97c49154
 
 The platform has working foundations for all four context types and all six MCP tools under authenticated Streamable HTTP, with Java/Kotlin shared-library impact and REST/Kafka linking demonstrated in PostgreSQL acceptance. Cross-repository proposed-change classification and MultiRepo architectural independence gates are verified. Nested OpenAPI `$ref` flattening and Avro required-field evolution are covered at unit level.
 
-Release blockers remain: OS-level compiler sandboxing, durable multi-instance crash drills, PostgreSQL PITR/restore drills, Gradle dependency resolution, representative performance SLOs, cluster smoke, and several contract/ambiguity PG end-to-end scenarios.
+Release blockers remain: OS-level compiler sandboxing, production network-partition drills, PostgreSQL WAL/PITR and full-environment recovery, Gradle dependency resolution, representative performance SLOs, cluster smoke, and several contract/ambiguity PG end-to-end scenarios.
 
 | Metric | Count (ledger statuses) |
 |---|---|
@@ -36,3 +36,5 @@ Do not treat this report as a certification until the ledger shows no mandatory 
 ## Final release decision
 
 **NOT READY FOR PRODUCTION**
+
+Accepted c9fbb1a baseline:350 actual cases, no failures/errors/skips, including whole-application crash recovery and logical restore. New onboarding changes require their own exact-SHA verification.

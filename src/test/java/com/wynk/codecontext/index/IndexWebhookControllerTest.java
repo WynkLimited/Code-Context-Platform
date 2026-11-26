@@ -97,6 +97,15 @@ class IndexWebhookControllerTest {
         assertEquals(1, fixture.indexing.enqueueCount);
     }
 
+    @Test void centralAppIngressUsesIdenticalSignatureAndReplayChecks() throws Exception {
+        var fixture=fixture();byte[] body=payload("1".repeat(40));String delivery=UUID.randomUUID().toString();
+        var rejected=assertThrows(ResponseStatusException.class,()->fixture.controller.githubApp("sha256=00",delivery,"push",body));
+        assertEquals(401,rejected.getStatusCode().value());assertEquals(0,fixture.indexing.enqueueCount);
+        assertTrue((Boolean)fixture.controller.githubApp(signature(body),delivery,"push",body).get("accepted"));
+        assertTrue((Boolean)fixture.controller.github("Fixture","lib",signature(body),delivery,"push",body).get("duplicate"));
+        assertEquals(1,fixture.indexing.enqueueCount,"central and per-repository routes must share durable delivery deduplication");
+    }
+
     private static Fixture fixture() {
         return fixture(Clock.systemUTC(), Duration.ZERO);
     }

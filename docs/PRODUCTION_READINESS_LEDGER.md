@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `c5894be30502629cc68ac41f7f2f8bb854c3e44c` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45770009550 |
+| Last green mandatory CI SHA | `c9fbb1a0abdd49981b0fd1e05052cad273979e3e` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45830952339 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -21,14 +21,14 @@ Status vocabulary (this ledger):
 
 ## Resume checkpoint
 
-**Current master-directive phase:** Phase1 semantic chunking. Tiny grouping, complete-input conservative token bounds, multiple native structural grammars and integrated Graphify/Ollama/PostgreSQL/HTTP MCP acceptance are implemented. Current native repair is generator1.18.0; see the latest dated evidence below. The accepted CI baseline remains c5894be until the repaired exact-SHA workflow passes.
+**Current master-directive phase:** Phase 1 automated onboarding under the new 2026-11-26 directive. Earlier Phase 1 semantic chunking work: Tiny grouping, complete-input conservative token bounds, multiple native structural grammars and integrated Graphify/Ollama/PostgreSQL/HTTP MCP acceptance are implemented. Current native repair is generator1.18.0; see the latest dated evidence below. The exact-SHA c9fbb1a workflow passed: 339 unit + 11 integration = 350 cases, no failures/errors/skips, plus logical restore and shell gates.
 
 **Overall:** **NOT READY FOR PRODUCTION** — automatic onboarding/webhook provisioning, complete reactor/Gradle intelligence, general cross-repository method chains, remaining language/contract coverage and required operational/deployment/benchmark/client acceptance remain open. Earlier chunk reuse/provenance and specific application recovery assertions have passed; do not reopen those without new evidence.
 
 **Next executable actions (mandatory directive order):**
 
-1. Finish exact-SHA CI and local full acceptance for the verified native repair; complete remaining promised structural language/declaration coverage.
-2. Integrated automatic onboarding, initial indexing and least-privilege webhook provisioning/recovery.
+1. Complete integrated automatic onboarding, initial indexing, separately authorized webhook provisioning and repository lifecycle.
+2. Genuine incremental Graphify processing, followed by OS isolation before enabling new repository-controlled execution.
 3. Complete Maven reactors and safe Gradle resolution, guided by early read-only reference inspection.
 4. General bounded cross-repository method chains and independent parity acceptance.
 5. Remaining contracts/security, representative performance/accuracy, real distributed/storage/PITR drills and actual advertised clients.
@@ -470,3 +470,25 @@ The first complete local profile ran11 cases:9 passed,2 failed. Both full-applic
 The previous full/incremental snapshot failure contained the same36 records; nested Kotlin invocations sharing source line and caller were returned in different physical order. Appended invocation,resolution_status,resolved_signature to the existing semantic_call_sites snapshot ORDER BY. No rows, values, joins, filters, classifications or assertions changed. Fixture purge now waits for repository ownership, fences the purge and uses the existing durable cleanup outbox instead of racing post-publication/global Zoekt cleanup; every fixture generation must have QUEUED/DONE cleanup ownership and the repository must be absent.
 
 Complete local Java21 real-service acceptance **11 passed, zero failures/errors/skips** (`target/local-acceptance-ordering-final.log`): restricted-role1, retention1, Graphify2, complete application consistency/recovery2, SharedLibrary3, HTTPS Maven1 and separate-JVM lease1. The SharedLibrary scenarios executed authenticated HTTP MCP impact, exact provider/consumer/version/symbol assertions, full-vs-incremental equivalence, model-space rebuilds and rollback. Both application JVM recovery assertions executed. No acceptance criteria or existing indexing deadlines were relaxed. Full default339 and final four-platform native22 evidence remain as recorded above. Workflow YAML, maintainer script syntax and git diff checks passed. The next exact-SHA CI still must pass before treating this checkpoint as CI-accepted. Overall production-readiness work remains incomplete.
+
+
+### Revised master directive and automated onboarding — 2026-11-26
+
+Source: user-supplied `1e1539ed-e42a-4e4d-a786-25b4660bd0e7/Pasted text.txt`, original PDF pp.3/9, later lifecycle/security requirements. This supersedes the earlier phase order. No new audit cycle or accepted-baseline rerun is required: downloaded exact-SHA c9fbb1a XML confirms350 passes, zero failures/errors/skips. Actual full-application process-death recovery, separate-JVM fencing and logical restore are accepted scoped capabilities; production network partitions, WAL/PITR and whole-environment recovery remain open.
+
+| ID / source class | Expected behavior / implementation | Status / remaining acceptance | Release classification |
+|---|---|---|---|
+| LIFE-AUTO / original PRD | One admin registration verifies read-only Git access/default branch and atomically schedules an initial durable job (`RepositoryController`, `RepositoryOnboarding`, V14) | PARTIALLY_IMPLEMENTED: HTTP/PG concurrent duplicates, automatic all-four-context indexing and rejection/status checks passed locally; configuration discovery and live provider acceptance remain open | Mandatory technical |
+| LIFE-WEBHOOK / original + subsequent | Separate management credential; bounded provider enumeration, crash-idempotent create/update, durable claim/retry and status (`GitHubWebhookClient`, `RepositoryOnboarding`) | PARTIALLY_IMPLEMENTED: repository-hook adapter has controlled-provider/real-PG claim-recovery coverage; GitHub App central installation/configuration integration, deletion and missed-event reconciliation remain open. Live GitHub approval/isolated test repository unavailable; no live provider mutation attempted | Mandatory technical + external provider acceptance |
+| LIFE-UPDATE / subsequent | Stable identity across rename, URL/branch/team/config changes | PARTIALLY_IMPLEMENTED: disable/purge/reactivation retained; complete update API remains open | Mandatory technical |
+| IDX-INCREMENTAL / original | Changed-file extraction and clean-rebuild equivalence across all contexts | PARTIALLY_IMPLEMENTED: vector reuse accepted; Graphify fresh-snapshot full extraction still open | Mandatory technical |
+| SEC-EXECUTION / production hardening | Enforced filesystem/network/resource isolation before untrusted build execution | PARTIALLY_IMPLEMENTED: application guards only; no new build-script execution added by onboarding. OS boundary remains mandatory before widening compiler/build execution | Mandatory technical |
+| OPS-ACCEPTANCE / production hardening | Real deployment/network/WAL-PITR, scale and quality gates | BLOCKED for representative deployment/organization evidence; independently implementable harness work remains actionable | Mandatory technical + operator environment |
+| CLIENT-ACCEPTANCE / original | Real advertised agent workflows | IMPLEMENTED_UNVERIFIED: HTTP protocol gates accepted, real clients not certified | External client acceptance |
+| ORG-SSO / original post-pilot | Company SSO after pilot | NOT_APPLICABLE_WITH_JUSTIFICATION for pilot gate; remains post-pilot roadmap | Organizational / post-pilot |
+| SCIP / architectural enhancement | Evidence-based comparison, adopt only on measured benefit | NOT_IMPLEMENTED evaluation; not a replacement for original features | Approved evaluation; adoption optional |
+
+Testing/push/CI evidence for new onboarding must be appended after actual execution. Overall NOT READY FOR PRODUCTION. No migration history rewritten; V14 is forward-only. No reference repository changes.
+
+
+Local onboarding evidence: Java21 full default suite345 passed before final HTTP rejection/helper refinements; final21 focused cases passed (Graphify2 + SharedLibrary3 + durable onboardingPG1 + webhook/Git/lifecycle units15), all zero failure/error/skip. Full real-service profile12 passed, including unchanged whole-application recovery2, separate-JVM lease1, retention1, restricted-role migration1, HTTPS Maven1 and the new onboardingPG1. Final all-four-context automatic onboarding and403/400/409/404 assertions passed through HTTP with the production security configuration; no manual indexing/poll is used to establish initial publication. Logs: `target/onboarding-unit.log`, `target/onboarding-acceptance.log`, `target/onboarding-final-focused.log`. Final default-suite rerun also passed345/345 with no failures/errors/skips (`target/onboarding-unit-final.log`). Exact-SHA CI remains pending until recorded. Live GitHub management/App credentials, reachable callback and isolated approved provider fixture are not configured locally; no external repository or hook was mutated. Only the owned local fixture services were used. Replica storage, OS isolation, live provider delivery and all later directive phases remain open.

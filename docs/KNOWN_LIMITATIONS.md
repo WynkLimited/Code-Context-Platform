@@ -15,14 +15,14 @@ Honest inventory of supported vs incomplete behaviour. Do not treat undocumented
 ## Partial
 
 - OpenAPI nested `$ref` flattening + same-repo relative file `$ref` (remote URL `$ref` rejected)
-- Kafka Avro `fields{}` evolution (unit-level; multi-repo MCP fixture pending)
-- Contract ambiguity demotion (SQL refresher; contention PG proof pending)
+- Kafka Avro `fields{}` evolution has selected multi-repo MCP acceptance; broader consumer-linked payload coverage remains partial.
+- Contract ambiguity demotion has dual-provider PostgreSQL/HTTP acceptance; broader contention remains partial.
 - Proposed-change classification (signatures only; no full PR diff)
 - Indirect impact via re-export hops only; method-chain multi-hop incomplete
 - Webhook freshness when timestamp present; durable PG concurrency open
-- Dual-key API rotation; admin key API incomplete
+- Dual-key API rotation and admin status exist; organization secret distribution/revocation procedures remain operator requirements.
 - Metrics/alerts YAML present; live scrape unverified
-- Backup scripts present; PITR drill not executed
+- Actual CI logical backup/restore passes; WAL/PITR and whole-environment recovery remain unverified.
 
 ## Not implemented / blocked
 
@@ -38,3 +38,5 @@ Honest inventory of supported vs incomplete behaviour. Do not treat undocumented
 - Persistent generations vs ephemeral PR indexes
 - Team API-key ACL vs review-product registry
 - No shared module or compile/test/runtime dependency on MultiRepo
+
+Automatic onboarding and per-repository webhook reconciliation are under implementation. GitHub App integration, lifecycle updates and genuine incremental Graphify processing are not complete.

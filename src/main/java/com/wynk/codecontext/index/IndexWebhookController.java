@@ -138,6 +138,25 @@ public class IndexWebhookController {
         });
     }
 
+    /** Central GitHub App ingress uses the same HMAC, replay and repository authorization checks. */
+    @PostMapping("/webhooks/github")
+    @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.ACCEPTED)
+    public Map<String,Object> githubApp(
+            @RequestHeader(value="X-Hub-Signature-256",required=false) String signature,
+            @RequestHeader(value="X-GitHub-Delivery",required=false) String delivery,
+            @RequestHeader(value="X-GitHub-Event",required=false) String event,
+            @RequestBody byte[] body) {
+        if(!valid(signature,body,config.webhookSecret()))throw new ResponseStatusException(HttpStatus.UNAUTHORIZED,"invalid webhook signature");
+        if(body.length>MAX_PAYLOAD_BYTES)throw new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE,"webhook payload exceeds 1 MiB");
+        String identity;
+        try {identity=json.readTree(body).path("repository").path("full_name").asText("");}
+        catch(Exception malformed){throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"malformed GitHub push payload");}
+        if(!identity.matches("[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,"a valid GitHub repository identity is required");
+        String[] parts=identity.split("/",2);
+        return github(parts[0],parts[1],signature,delivery,event,body);
+    }
+
     @PostMapping("/api/repositories/{owner}/{name}/index")
     @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.ACCEPTED)
     public Map<String, Object> reindex(@PathVariable String owner, @PathVariable String name,

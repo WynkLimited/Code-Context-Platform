@@ -113,7 +113,7 @@ class RepositoryControllerLifecycleTest {
                 git==null?new GitRepositoryManager(props()):git,
                 leases==null?mock(RepositoryIndexLeaseManager.class):leases,
                 retention==null?mock(GenerationRetentionService.class):retention,
-                syncTx);
+                syncTx,mock(RepositoryOnboarding.class));
     }
     private static CodeContextProperties props() {
         return new CodeContextProperties("/tmp/repos","/tmp/local","/tmp/zoekt","t=t","a=a","","","github.com","http://localhost",

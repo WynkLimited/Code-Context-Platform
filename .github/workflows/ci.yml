@@ -141,7 +141,7 @@ jobs:
           "$RUNNER_TEMP/graphify/bin/pip" install --no-cache-dir 'graphifyy[ollama]==0.9.118'
           echo "$RUNNER_TEMP/graphify/bin" >> "$GITHUB_PATH"
           echo "GRAPHIFY_COMMAND=$RUNNER_TEMP/graphify/bin/graphify" >> "$GITHUB_ENV"
-      - name: PostgreSQL V1-V13 shared-library impact integration
+      - name: PostgreSQL V1-V14 shared-library impact integration
         run: |
           set -o pipefail
           mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log
@@ -279,6 +279,19 @@ jobs:
           if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
               raise SystemExit("HTTPS Maven model gate requires exactly one successful, unskipped test")
           print("MavenRemoteModelIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify durable onboarding PostgreSQL report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.RepositoryOnboardingPostgresIT"]
+          expected = "registrationRollsBackAtomicallyAndWebhookReconciliationRecoversAfterLostProviderResponse"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Durable onboarding gate requires exactly one successful, unskipped case")
+          print("RepositoryOnboardingPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
           PYCODE
       - name: Record CI run metadata
         if: always()

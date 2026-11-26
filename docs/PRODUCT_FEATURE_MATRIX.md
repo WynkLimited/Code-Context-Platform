@@ -22,7 +22,7 @@ Statuses reflect ledger evidence. `N/A` requires justification.
 | Ambiguous contract refresh | Y | Y | Y | Partial | N | Dual REST AMBIGUOUS @ 440a4ef | VERIFIED |
 | Gradle resolution | N | N | N | N/A | N/A | — | NOT_IMPLEMENTED |
 | OS sandbox | Partial | N | N | BLOCKED | N/A | App isolation only | BLOCKED |
-| DR / PITR | Scripts | N | N | Partial | N | Scripts only | BLOCKED (env) |
+| DR / PITR | Partial | Logical restore Y | Partial | Partial | N | Actual CI logical restore; full-app crash recovery | PARTIAL (WAL/PITR/environment open) |
 | MultiRepo independence | Y | Unit | Y (CI build) | Y | N/A | ArchitecturalIndependenceTest | VERIFIED |
 
 Overall: **NOT READY FOR PRODUCTION** — see ledger.

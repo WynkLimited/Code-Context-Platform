@@ -38,6 +38,43 @@ public class GitRepositoryManager {
         this.nameResolver = nameResolver;
     }
 
+    public void validateRegistrationUrl(String url) {
+        try {validateUrl(url);}catch(IOException failure){throw new IllegalArgumentException("repository URL is not accessible",failure);}
+    }
+
+    /** Read-only ref advertisement verifies access and discovers symbolic HEAD without build execution. */
+    public String verifyAccessAndBranch(String url,String requested) {
+        validateRegistrationUrl(url);
+        if(requested!=null&&!requested.isBlank()&&!org.eclipse.jgit.lib.Repository.isValidRefName("refs/heads/"+requested))
+            throw new IllegalArgumentException("invalid repository branch");
+        Path temporary=null;
+        try {
+            temporary=Files.createTempDirectory("code-context-discovery-");
+            try(Git probe=Git.init().setDirectory(temporary.toFile()).call()) {
+                disableHttpRedirects(probe);
+                var configuration=probe.getRepository().getConfig();
+                configuration.setString("remote","origin","url",url);configuration.save();
+                var command=probe.lsRemote().setRemote("origin").setTimeout(properties.gitTimeoutSeconds());
+                if(!properties.gitAccessToken().isBlank())command.setCredentialsProvider(
+                        new UsernamePasswordCredentialsProvider("x-access-token",properties.gitAccessToken()));
+                var refs=command.call();
+                String branch=requested;
+                if(branch==null||branch.isBlank())branch=refs.stream().filter(r->r.getName().equals("HEAD")&&r.isSymbolic())
+                        .map(r->r.getTarget().getName()).filter(n->n.startsWith("refs/heads/"))
+                        .map(n->n.substring("refs/heads/".length())).findFirst()
+                        .orElseThrow(()->new IllegalArgumentException("remote has no discoverable default branch"));
+                String selected="refs/heads/"+branch;
+                if(refs.stream().noneMatch(r->r.getName().equals(selected)))throw new IllegalArgumentException("requested remote branch does not exist");
+                return branch;
+            }
+        }catch(Exception failure){throw new IllegalArgumentException("repository access or branch verification failed",failure);}
+        finally {
+            if(temporary!=null)try(var paths=Files.walk(temporary)) {
+                for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);
+            }catch(IOException failure){throw new IllegalStateException("could not remove repository discovery temporary files",failure);}
+        }
+    }
+
     public Path sync(RepositoryRecord repo) throws Exception {
         Path root = safeRoot().resolve(safeComponent(repo.owner())).resolve(safeComponent(repo.name())).normalize();
         if (!root.startsWith(safeRoot())) throw new IOException("repository path escaped configured root");

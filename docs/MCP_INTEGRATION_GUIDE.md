@@ -4,7 +4,7 @@
 
 - Protocol: Streamable HTTP MCP (`spring.ai.mcp.server.protocol=STREAMABLE`)
 - Path: `/mcp` (configurable via `spring.ai.mcp.server.streamable-http.mcp-endpoint`)
-- Auth: `Authorization: Bearer <team-api-key>` (or configured API-key header)
+- Auth: `X-API-Key: <team-api-key>`
 
 ## Tools
 
@@ -38,7 +38,7 @@
     "code-context": {
       "url": "https://code-context.example/mcp",
       "headers": {
-        "Authorization": "Bearer ${CODE_CONTEXT_API_KEY}"
+        "X-API-Key": "${CODE_CONTEXT_API_KEY}"
       }
     }
   }

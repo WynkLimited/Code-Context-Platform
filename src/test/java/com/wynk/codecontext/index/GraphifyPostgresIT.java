@@ -51,6 +51,7 @@ class GraphifyPostgresIT {
         registry.add("code-context.zoekt.webserver",()->System.getenv().getOrDefault("ZOEKT_WEB_SERVER","http://localhost:6070"));
         registry.add("spring.ai.ollama.base-url",()->System.getenv().getOrDefault("OLLAMA_BASE_URL","http://localhost:11434"));
         registry.add("code-context.api-keys",()->"graphify=graphify-semantic-test-token");
+        registry.add("code-context.admin-api-keys",()->"graphify=graphify-onboarding-admin-token");
         registry.add("code-context.mcp-allowed-origins",()->"http://localhost,http://127.0.0.1");
         registry.add("CONTRACT_REFRESH_POLL_MS",()->"3600000");
         registry.add("code-context.graphify.enabled", () -> true);
@@ -103,9 +104,8 @@ class GraphifyPostgresIT {
         String before;
         try(var git=org.eclipse.jgit.api.Git.init().setDirectory(fixture.toFile()).setInitialBranch("main").call()) {before=commitFixture(git,"structural baseline");}
         String name="semantic-"+UUID.randomUUID().toString().replace("-","");
-        var record=repositories.insert("fixture",name,fixture.toUri().toString(),"graphify","main","LIBRARY",Path.of(ROOT,"mirrors",name).toString());
-        repository=record.id();jdbc.update("INSERT INTO team_repository_access(team,repository_id) VALUES('graphify',?)",repository);
-        generation=indexFixture(name,before);
+        var record=automaticallyOnboard(name,before);
+        generation=repositories.currentGeneration(repository).orElseThrow();
         UUID initial=generation;
         var chunks=jdbc.queryForList("SELECT file_path,symbol,start_line,end_line,content_hash,content,embedding::text AS vector FROM code_chunks WHERE generation_id=?",generation);
         assertTrue(chunks.size()>10,"long Unicode method must really be subdivided before embedding");
@@ -144,6 +144,27 @@ class GraphifyPostgresIT {
         org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND file_path=?",Integer.class,generation,pythonPath));
         org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path=?",Integer.class,generation,pythonPath));
         org.junit.jupiter.api.Assertions.assertFalse(mcp.search(record.key()).toString().contains(pythonPath),"deleted vectors must not remain searchable through the same real MCP session");
+    }
+    private com.wynk.codecontext.model.RepositoryRecord automaticallyOnboard(String name,String commit)throws Exception {
+        var client=java.net.http.HttpClient.newHttpClient();
+        var request=java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:"+port+"/api/repositories"))
+                .header("X-API-Key","graphify-onboarding-admin-token").header("Content-Type","application/json")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(json.writeValueAsString(java.util.Map.of(
+                        "owner","fixture","name",name,"cloneUrl",fixture.toUri().toString(),"type","LIBRARY")))).build();
+        var response=client.send(request,java.net.http.HttpResponse.BodyHandlers.ofString());
+        org.junit.jupiter.api.Assertions.assertEquals(200,response.statusCode(),response.body());
+        var record=json.readValue(response.body(),com.wynk.codecontext.model.RepositoryRecord.class);repository=record.id();
+        UUID job=jdbc.queryForObject("SELECT initial_job_id FROM repository_onboarding WHERE repository_id=?",UUID.class,repository);
+        long deadline=System.nanoTime()+java.time.Duration.ofSeconds(90).toNanos();
+        while(System.nanoTime()<deadline) {
+            var state=jdbc.queryForMap("SELECT state,error,commit_sha FROM index_jobs WHERE id=?",job);
+            if("SUCCEEDED".equals(state.get("state"))) {
+                org.junit.jupiter.api.Assertions.assertEquals(commit,state.get("commit_sha"));return record;
+            }
+            if("FAILED".equals(state.get("state")))org.junit.jupiter.api.Assertions.fail("automatic all-context indexing failed: "+state.get("error"));
+            Thread.sleep(200);
+        }
+        throw new AssertionError("automatic all-context indexing did not publish before the existing deadline");
     }
     private void writeFixture(String path,String content)throws Exception {Path file=fixture.resolve(path);Files.createDirectories(file.getParent());Files.writeString(file,content);}
     private static String commitFixture(org.eclipse.jgit.api.Git git,String message)throws Exception {
