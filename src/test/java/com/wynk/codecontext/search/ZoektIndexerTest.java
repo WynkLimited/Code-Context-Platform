@@ -1,0 +1,66 @@
+package com.wynk.codecontext.search;
+
+import com.wynk.codecontext.config.CodeContextProperties;
+import com.wynk.codecontext.model.RepositoryRecord;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.json.JsonMapper;
+import java.nio.file.*;
+import java.util.*;
+import static org.junit.jupiter.api.Assertions.*;
+
+class ZoektIndexerTest {
+    @TempDir Path root;
+    @Test void indexesExactCommitAndPreservesGenerationIdentity() throws Exception {
+        Path executable=root.resolve("capture-indexer");
+        Files.writeString(executable,"#!/bin/sh\nprintf '%s\\n' \"$@\"\n");
+        assertTrue(executable.toFile().setExecutable(true));
+        Path checkout=Files.createDirectory(root.resolve("checkout"));
+        String commit;
+        try(var git=org.eclipse.jgit.api.Git.init().setDirectory(checkout.toFile()).setInitialBranch("release/v1").call()) {
+            Files.writeString(checkout.resolve("Source.java"),"class Source {}\n");
+            git.add().addFilepattern(".").call();
+            commit=git.commit().setAuthor("fixture","fixture@example.com").setCommitter("fixture","fixture@example.com").setMessage("immutable snapshot").call().name();
+        }
+        Path index=root.resolve("index");
+        var config=new CodeContextProperties(root.toString(),root.toString(),index.toString(),"","","","","github.com","http://localhost",1024,1048576,6000,2,300,
+                new CodeContextProperties.Zoekt(executable.toString(),"zoekt-local-sync","http://localhost:6070"),new CodeContextProperties.Graphify("graphify",false));
+        UUID repository=UUID.randomUUID(),generation=UUID.randomUUID();
+        var record=new RepositoryRecord(repository,"Fixture","repo","file:///fixture","team","release/v1","LIBRARY",root.toString());
+        new ZoektIndexer(config,JsonMapper.builder().build()).index(record,checkout,generation);
+        var args=Files.readAllLines(index.resolve("index-"+repository+".log"));
+        assertEquals(commit,args.get(args.indexOf("-branches")+1));
+        assertFalse(args.contains("HEAD"));
+        var metadata=JsonMapper.builder().build().readTree(index.resolve("meta-"+repository+".json").toFile());
+        assertEquals("Fixture/repo@"+generation,metadata.path("name").asText());
+    }
+
+    @Test void treatsAbsentGenerationRemovalAsSuccessfulCleanup() throws Exception {
+        Path cleaner=root.resolve("capture-cleaner");
+        Files.writeString(cleaner,"#!/bin/sh\necho 'repository \"Fixture/repo@deadbeef\" not found' >&2\nexit 1\n");
+        assertTrue(cleaner.toFile().setExecutable(true));
+        Path index=Files.createDirectory(root.resolve("index"));
+        var config=new CodeContextProperties(root.toString(),root.toString(),index.toString(),"","","","","github.com","http://localhost",1024,1048576,6000,2,300,
+                new CodeContextProperties.Zoekt("zoekt-git-index",cleaner.toString(),"http://localhost:6070"),new CodeContextProperties.Graphify("graphify",false));
+        UUID repository=UUID.randomUUID(),generation=UUID.randomUUID();
+        var record=new RepositoryRecord(repository,"Fixture","repo","file:///fixture","team","main","LIBRARY",root.toString());
+        assertDoesNotThrow(()->new ZoektIndexer(config,JsonMapper.builder().build()).removeGeneration(record,generation));
+    }
+
+    @Test void normalizesRealJGitClonePackNamesWithoutChangingRevisionOrFiles() throws Exception {
+        Path source=root.resolve("source"),clone=root.resolve("clone");
+        String commit;
+        try(var git=org.eclipse.jgit.api.Git.init().setDirectory(source.toFile()).setInitialBranch("main").call()) {
+            Files.writeString(source.resolve("Money.java"),"class Money {}\n");
+            git.add().addFilepattern(".").call();
+            commit=git.commit().setAuthor("fixture","fixture@example.com").setCommitter("fixture","fixture@example.com").setMessage("pack fixture").call().name();
+        }
+        org.eclipse.jgit.api.Git.cloneRepository().setURI(source.toUri().toString()).setDirectory(clone.toFile()).call().close();
+        assertTrue(GitPackCompatibility.normalize(clone),"JGit clone pack names must be normalized for the pinned go-git reader");
+        assertFalse(GitPackCompatibility.normalize(clone),"already-compatible repositories must avoid repeated repacking");
+        try(var git=org.eclipse.jgit.api.Git.open(clone.toFile())) {
+            assertEquals(commit,git.getRepository().resolve("HEAD").name());
+            assertEquals("class Money {}\n",Files.readString(clone.resolve("Money.java")));
+        }
+    }
+}

@@ -37,10 +37,346 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+      - name: Install Protobuf compiler required by regression tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+      - name: Install pinned Kotlin compiler
+        run: |
+          mkdir -p target
+          curl -fL --retry 3 https://github.com/JetBrains/kotlin/releases/download/v2.2.21/kotlin-compiler-2.2.21.zip -o target/kotlin-compiler.zip
+          echo "a623871f1cd9c938946948b70ef9170879f0758043885bbd30c32f024e511714  target/kotlin-compiler.zip" | sha256sum -c -
+          unzip -q target/kotlin-compiler.zip -d target
+          echo "KOTLIN_COMPILER=$GITHUB_WORKSPACE/target/kotlinc/bin/kotlinc" >> "$GITHUB_ENV"
       - name: Unit and regression tests
-        run: mvn --batch-mode --no-transfer-progress test
-      - name: PostgreSQL V1-V6 shared-library impact integration
-        run: mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify
+        run: |
+          mkdir -p target
+          set -o pipefail
+          mvn --batch-mode --no-transfer-progress test 2>&1 | tee target/unit-tests-maven.log
+      - name: Backup and restore script regression tests
+        run: |
+          set -o pipefail
+          python3 -m unittest discover -s scripts/tests -v 2>&1 | tee target/script-tests.log
+      - name: Verify unit and regression reports
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          roots = [ET.parse(path).getroot() for path in glob.glob("target/surefire-reports/TEST-*.xml")]
+          cases = [case for root in roots for case in root.findall("testcase")]
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          if not cases or failures or errors or skipped:
+              print(f"Unit report gate failed: cases={len(cases)} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
+              sys.exit(1)
+          summary = ("## Unit and regression tests: PASS\n\n"
+                     f"{len(cases) - skipped} passed, {skipped} skipped, {failures} failures, {errors} errors.\n\n"
+                     f"Branch: `{os.environ['GITHUB_REF_NAME']}`  \nCommit: `{os.environ['GITHUB_SHA']}`\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(summary)
+          print(summary)
+          PY
+      - name: Verify configuration discovery report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.RepositoryConfigurationDiscoveryTest"]
+          expected = "discoversOnlyRegularTrackedManifestsAtTheExactCommitWithoutApplyingRepositorySettings"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Configuration discovery requires exactly one successful, unskipped case")
+          print("RepositoryConfigurationDiscoveryTest: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Start pinned Zoekt service and indexer
+        run: |
+          set -euo pipefail
+          image=ghcr.io/sourcegraph/zoekt:0.0.0-20261026142308-e8242d26df19
+          mkdir -p "$RUNNER_TEMP/zoekt-index"
+          docker pull "$image"
+          docker create --name zoekt-tools --entrypoint /bin/true "$image"
+          docker cp zoekt-tools:/usr/local/bin/zoekt-git-index "$RUNNER_TEMP/zoekt-git-index"
+          docker cp zoekt-tools:/usr/local/bin/zoekt-local-sync "$RUNNER_TEMP/zoekt-local-sync"
+          docker rm zoekt-tools
+          chmod 0755 "$RUNNER_TEMP/zoekt-git-index"
+          chmod 0755 "$RUNNER_TEMP/zoekt-local-sync"
+          docker run --detach --rm --name code-context-zoekt \
+            -p 6070:6070 -v "$RUNNER_TEMP/zoekt-index:/data/index" "$image" \
+            zoekt-webserver -index /data/index -rpc
+          echo "ZOEKT_INDEXER=$RUNNER_TEMP/zoekt-git-index" >> "$GITHUB_ENV"
+          echo "ZOEKT_CLEANER=$RUNNER_TEMP/zoekt-local-sync" >> "$GITHUB_ENV"
+          echo "ZOEKT_INDEX_ROOT=$RUNNER_TEMP/zoekt-index" >> "$GITHUB_ENV"
+          echo "ZOEKT_WEB_SERVER=http://localhost:6070" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://localhost:6070/ >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker logs code-context-zoekt
+          exit 1
+      - name: Start Ollama and verify the configured embedding model
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ollama-model"
+          docker run --detach --rm --name code-context-ollama \
+            -p 11434:11434 -v "$RUNNER_TEMP/ollama-model:/root/.ollama" ollama/ollama:0.13.3
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent http://localhost:11434/api/tags >/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec code-context-ollama ollama pull qwen3-embedding:0.6b
+          docker exec code-context-ollama ollama pull qwen3:0.6b
+          curl --fail --silent --show-error http://localhost:11434/api/embed \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"qwen3-embedding:0.6b","input":"verify local embedding dimensions"}' \
+            > "$RUNNER_TEMP/ollama-embedding-smoke.json"
+          python3 - "$RUNNER_TEMP/ollama-embedding-smoke.json" <<'PY'
+          import json
+          import sys
+          with open(sys.argv[1]) as source:
+              data = json.load(source)
+          embeddings = data.get("embeddings", [])
+          if len(embeddings) != 1 or len(embeddings[0]) != 1024:
+              raise SystemExit(f"Ollama embedding preflight failed: vectors={len(embeddings)} dimensions={len(embeddings[0]) if embeddings else 0}")
+          print("Ollama qwen3-embedding:0.6b returned one 1,024-dimensional vector.")
+          PY
+          echo "OLLAMA_BASE_URL=http://localhost:11434" >> "$GITHUB_ENV"
+          echo "GRAPHIFY_OLLAMA_MODEL=qwen3:0.6b" >> "$GITHUB_ENV"
+      - name: Install the pinned Graphify CLI
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/graphify"
+          "$RUNNER_TEMP/graphify/bin/pip" install --no-cache-dir 'graphifyy[ollama]==0.9.118'
+          echo "$RUNNER_TEMP/graphify/bin" >> "$GITHUB_PATH"
+          echo "GRAPHIFY_COMMAND=$RUNNER_TEMP/graphify/bin/graphify" >> "$GITHUB_ENV"
+      - name: PostgreSQL V1-V20 shared-library impact integration
+        run: |
+          set -o pipefail
+          mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log
+      - name: Verify PostgreSQL logical backup and restore
+        run: |
+          set -euo pipefail
+          service="${{ job.services.postgres.id }}"
+          read -r acceptance_schema < target/postgres-acceptance-schema.txt
+          [[ "$acceptance_schema" =~ ^shared_impact_[0-9a-f]{32}$ ]]
+          docker exec "$service" mkdir -p /tmp/ccp-drill
+          docker cp scripts/. "$service:/tmp/ccp-drill"
+          docker exec -e CI=true -e DATABASE_USER -e DATABASE_PASSWORD -e "CCP_ACCEPTANCE_SCHEMA=$acceptance_schema" "$service" \
+            bash /tmp/ccp-drill/ci-postgres-restore-drill.sh 2>&1 | tee target/restore-drill.log
+      - name: Stop Zoekt service
+        if: always()
+        run: docker rm --force code-context-zoekt code-context-ollama zoekt-tools >/dev/null 2>&1 || true
+      - name: Verify PostgreSQL acceptance report
+        run: |
+          python3 - <<'PY'
+          import glob
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          reports = glob.glob("target/surefire-reports/TEST-*.xml")
+          cases = []
+          for report in reports:
+              root = ET.parse(report).getroot()
+              cases.extend(case for case in root.findall("testcase")
+                           if case.attrib.get("classname", "").endswith("SharedLibraryImpactPostgresIT"))
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          passed = len(cases) - failures - errors - skipped
+          expected = {"indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp",
+                      "indexesKotlinProviderPersistsAbiAndReturnsExactCrossLanguageImpactThroughMcp",
+                      "demotesAmbiguousRestProvidersAndResolvesWhenOneProviderRemains",
+                      "updatesRepositoryIdentityBranchUrlAndOwnershipAndReturnsOnlyCurrentSourceThroughHttpMcp"}
+          if len(cases) != 4 or passed != 4 or {case.get("name") for case in cases} != expected or failures != 0 or errors != 0 or skipped != 0:
+              print(f"Acceptance gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
+              sys.exit(1)
+          summary = ("## PostgreSQL acceptance: PASS\n\n"
+                     f"`SharedLibraryImpactPostgresIT`: {passed} passed, {failures} failures, "
+                     f"{errors} errors, {skipped} skipped "
+                     f"(Java Money provider + Kotlin Amount provider + REST ambiguity + repository lifecycle).\n\n"
+                     f"Branch: `{os.environ['GITHUB_REF_NAME']}`  \nCommit: `{os.environ['GITHUB_SHA']}`\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+              output.write(summary)
+          print(summary)
+          PY
+      - name: Verify least-privilege PostgreSQL integration report
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = []
+          for report in glob.glob("target/surefire-reports/TEST-*.xml"):
+              root = ET.parse(report).getroot()
+              cases.extend(case for case in root.findall("testcase")
+                           if case.attrib.get("classname", "").endswith("ProductionDatabaseLeastPrivilegeIT"))
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          passed = len(cases) - failures - errors - skipped
+          if len(cases) != 1 or passed != 1 or failures or errors or skipped:
+              print(f"Least-privilege gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
+              sys.exit(1)
+          print("ProductionDatabaseLeastPrivilegeIT: 1 passed, 0 failures, 0 errors, 0 skipped.")
+          PY
+      - name: Verify real Graphify PostgreSQL integration report
+        run: |
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          cases = []
+          for report in glob.glob("target/surefire-reports/TEST-*.xml"):
+              root = ET.parse(report).getroot()
+              cases.extend(case for case in root.findall("testcase")
+                           if case.attrib.get("classname", "").endswith("GraphifyPostgresIT"))
+          failures = sum(len(case.findall("failure")) for case in cases)
+          errors = sum(len(case.findall("error")) for case in cases)
+          skipped = sum(len(case.findall("skipped")) for case in cases)
+          passed = len(cases) - failures - errors - skipped
+          expected = {"runsPinnedGraphifyCliAndPersistsGenerationBoundNodesAndEdges",
+                      "indexesStructuralChunksThroughGraphifyOllamaPostgresAndHttpMcpThenReusesAndDeletesVectors"}
+          if len(cases) != 2 or passed != 2 or {case.get("name") for case in cases} != expected or failures or errors or skipped:
+              print(f"Graphify gate failed: tests={len(cases)} passed={passed} failures={failures} errors={errors} skipped={skipped}", file=sys.stderr)
+              sys.exit(1)
+          print("GraphifyPostgresIT: 2 passed, 0 failures, 0 errors, 0 skipped.")
+          PY
+      - name: Verify generation retention and fencing report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("GenerationRetentionPostgresIT")]
+          if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Generation retention gate requires exactly one successful, unskipped test")
+          print("GenerationRetentionPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify raw contract extraction PostgreSQL report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("ContractExtractionCachePostgresIT")]
+          expected = "reusesOnlyMatchingPublishedRepositoryRevisionAndPreservesColdContracts"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Raw contract extraction requires exactly one successful PostgreSQL case")
+          print("ContractExtractionCachePostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify separate-JVM lease recovery report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("RepositoryLeaseProcessPostgresIT")]
+          if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Separate-JVM recovery gate requires exactly one successful, unskipped test")
+          print("RepositoryLeaseProcessPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify full-application replica consistency report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("ApplicationReplicaConsistencyPostgresIT")]
+          expected = {"bothApplicationsReadOnlyPublishedGenerationsWhileAContenderWaits",
+                      "anotherCompleteApplicationRecoversTheActualJobAfterPublisherProcessDeath"}
+          if len(cases) != 2 or {case.get("name") for case in cases} != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Full-application replica gate requires exactly two successful, unskipped tests")
+          print("ApplicationReplicaConsistencyPostgresIT: 2 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify allowlisted HTTPS Maven model report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "").endswith("MavenRemoteModelIT")]
+          if len(cases) != 1 or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("HTTPS Maven model gate requires exactly one successful, unskipped test")
+          print("MavenRemoteModelIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify durable onboarding PostgreSQL report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.RepositoryOnboardingPostgresIT"]
+          expected = "registrationRollsBackAtomicallyAndWebhookReconciliationRecoversAfterLostProviderResponse"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Durable onboarding gate requires exactly one successful, unskipped case")
+          print("RepositoryOnboardingPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify repository lifecycle PostgreSQL report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.RepositoryLifecyclePostgresIT"]
+          expected = "preservesIdentityFencesOldConfigurationAndNeverReactivatesAnExplicitlyDisabledRepository"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Lifecycle gate requires exactly one successful, unskipped PostgreSQL case")
+          print("RepositoryLifecyclePostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify missed-event recovery PostgreSQL report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.RepositoryRefreshPostgresIT"]
+          expected = "queuesMissedEventRecoveryAtomicallyAndCoalescesCompetingSchedulers"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("Missed-event recovery requires exactly one successful, unskipped PostgreSQL case")
+          print("RepositoryRefreshPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Verify GitHub App access PostgreSQL report
+        run: |
+          python3 - <<'PYCODE'
+          import glob
+          import xml.etree.ElementTree as ET
+          cases = [case for path in glob.glob("target/surefire-reports/TEST-*.xml")
+                   for case in ET.parse(path).getroot().findall("testcase")
+                   if case.get("classname", "") == "com.wynk.codecontext.repo.GitHubAppAccessPostgresIT"]
+          expected = "revokesOnlyBoundAccessAtomicallyAndInvalidatesCredentialsAcrossReplicas"
+          if len(cases) != 1 or cases[0].get("name") != expected or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("App access requires exactly one successful, unskipped PostgreSQL case")
+          print("GitHubAppAccessPostgresIT: 1 passed, 0 failures, 0 errors, 0 skipped")
+          PYCODE
+      - name: Record CI run metadata
+        if: always()
+        run: |
+          mkdir -p target
+          {
+            echo "Workflow: $GITHUB_WORKFLOW"
+            echo "Run URL: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Branch: $GITHUB_REF_NAME"
+            echo "Commit: $GITHUB_SHA"
+            echo "Java: $(java -version 2>&1 | head -n 1)"
+            echo "Integration command: mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify"
+            echo "PostgreSQL service: pgvector/pgvector:0.8.1-pg17"
+          } > target/acceptance-run-metadata.txt
       - name: Publish test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,4 +385,11 @@ jobs:
           path: |
             target/surefire-reports/**
             target/failsafe-reports/**
+            target/*-maven.log
+            target/restore-drill.log
+            target/script-tests.log
+            target/acceptance-run-metadata.txt
+            target/postgres-acceptance-schema.txt
+            target/lease-process-logs/**
+            target/replica-process-logs/**
           if-no-files-found: warn

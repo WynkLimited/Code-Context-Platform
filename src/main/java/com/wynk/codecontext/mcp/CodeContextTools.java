@@ -14,9 +14,14 @@ import com.wynk.codecontext.port.contract.graph.CrossRepoImpactResolver.Analysis
 import com.wynk.codecontext.port.contract.graph.MavenConsumerBridge;
 import com.wynk.codecontext.port.contract.source.JavaCallSiteAnalyzer;
 import com.wynk.codecontext.index.ConsumerContractIndexRefresher;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.wynk.codecontext.ops.PlatformMetrics;
+import io.micrometer.core.instrument.Timer;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import tools.jackson.databind.json.JsonMapper;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -29,79 +34,143 @@ import java.util.UUID;
 @Service
 public class CodeContextTools {
     private final ZoektSearchService search; private final RepositoryStore repos; private final JdbcTemplate jdbc; private final EmbeddingModel embeddings; private final GitRepositoryManager git; private final CodeContextProperties props;
-    private final PostgresContractIndexStore contractIndexes; private final ContractCompatibilityEngine compatibility; private final CrossRepoImpactResolver impactResolver; private final ObjectMapper objectMapper; private final ConsumerContractIndexRefresher contractRefresher;
-    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,ObjectMapper objectMapper,ConsumerContractIndexRefresher contractRefresher){search=s;repos=r;jdbc=j;embeddings=e;git=g;props=p;this.contractIndexes=contractIndexes;this.compatibility=compatibility;this.impactResolver=impactResolver;this.objectMapper=objectMapper;this.contractRefresher=contractRefresher;}
+    private final PostgresContractIndexStore contractIndexes; private final ContractCompatibilityEngine compatibility; private final CrossRepoImpactResolver impactResolver; private final JsonMapper objectMapper; private final ConsumerContractIndexRefresher contractRefresher;
+    private final PlatformMetrics metrics;
+    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,JsonMapper objectMapper,ConsumerContractIndexRefresher contractRefresher){
+        this(s,r,j,e,g,p,contractIndexes,compatibility,impactResolver,objectMapper,contractRefresher,new PlatformMetrics(new SimpleMeterRegistry()));
+    }
+    @Autowired
+    public CodeContextTools(ZoektSearchService s,RepositoryStore r,JdbcTemplate j,EmbeddingModel e,GitRepositoryManager g,CodeContextProperties p,PostgresContractIndexStore contractIndexes,ContractCompatibilityEngine compatibility,CrossRepoImpactResolver impactResolver,JsonMapper objectMapper,ConsumerContractIndexRefresher contractRefresher,PlatformMetrics metrics){search=s;repos=r;jdbc=j;embeddings=e;git=g;props=p;this.contractIndexes=contractIndexes;this.compatibility=compatibility;this.impactResolver=impactResolver;this.objectMapper=objectMapper;this.contractRefresher=contractRefresher;this.metrics=metrics;}
     private String team(){return String.valueOf(SecurityContextHolder.getContext().getAuthentication().getPrincipal());}
     private RepositoryRecord allowed(String key){String[] p=key.split("/",2);if(p.length!=2)throw new IllegalArgumentException("repository must be owner/name");return repos.find(p[0],p[1]).filter(r->repos.findAccessible(team()).stream().anyMatch(x->x.id().equals(r.id()))).orElseThrow(()->new SecurityException("repository not found or access denied"));}
 
     @Tool(description="Search exact text or regular expressions across repositories the authenticated team may access.")
-    public String search_code(String query){return search.search(query);}
+    public String search_code(String query){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try { return search.search(query); }
+        catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
+    }
 
     @Tool(description="Read a UTF-8 source file from a Git repository, optionally limited to a one-based line range.")
-    public String read_file(String repository,String path,Integer startLine,Integer endLine) throws Exception {
+    public String read_file(String repository,String path,
+            @ToolParam(required=false,description="Optional first source line, defaults to 1") Integer startLine,
+            @ToolParam(required=false,description="Optional last source line, defaults to the file end within the response bound") Integer endLine) throws Exception {
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
         RepositoryRecord repo=allowed(repository); if(path==null||path.isBlank()||Path.of(path).isAbsolute())throw new IllegalArgumentException("relative source path required");
         String commit=repos.currentCommit(repo.id()).orElseThrow(()->new IllegalStateException("repository has no published generation"));
         String content=git.readFileAtRevision(Path.of(repo.mirrorPath()),commit,path,1_048_576);List<String> lines=content.lines().toList();int start=startLine==null?1:Math.max(1,startLine);int end=endLine==null?lines.size():Math.min(lines.size(),endLine);
         if(start>end||end-start>2000)throw new IllegalArgumentException("invalid line range");
-        StringBuilder out=new StringBuilder();for(int i=start;i<=end;i++)out.append(i).append(": ").append(lines.get(i-1)).append('\n');return out.toString();
+        StringBuilder out=new StringBuilder();for(int i=start;i<=end;i++)out.append(i).append(": ").append(lines.get(i-1)).append('\n');
+        return objectMapper.writeValueAsString(java.util.Map.of("repository",repo.key(),"commit",commit,"path",path,"startLine",start,"endLine",end,"content",out.toString()));
+        } catch(Exception e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     @Tool(description="Find class, method, or symbol definitions with repository and exact line locations.")
     public String find_symbol(String symbol,String repository){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
+        if(symbol==null||symbol.isBlank())throw new IllegalArgumentException("symbol is required");
+        String like="%"+symbol+"%";
+        var args=new java.util.ArrayList<Object>();
+        args.add(team()); args.add(like); args.add(like);
         String sql="""
-SELECT r.owner||'/'||r.name AS repository,n.node_type,n.symbol,n.qualified_name,n.file_path,n.start_line,n.end_line
-          FROM code_nodes n JOIN index_generations g ON g.id=n.generation_id AND g.published
+SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,n.node_type,n.symbol,n.qualified_name,n.file_path,n.start_line,n.end_line
+          FROM code_nodes n JOIN index_generations g ON g.id=n.generation_id AND g.published=true
           JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=?
-          WHERE (n.symbol ILIKE ? OR n.qualified_name ILIKE ?)""";
-        Object[] args=new Object[]{team(),"%"+symbol+"%","%"+symbol+"%"};
-        String filter=repository==null||repository.isBlank()?"":" AND r.owner||'/'||r.name=?";
-        if(!filter.isEmpty()){sql+=filter;args=new Object[]{team(),"%"+symbol+"%","%"+symbol+"%",repository};}
-        return jdbc.queryForList(sql+" ORDER BY repository,n.start_line LIMIT 100",args).toString();
+          WHERE r.enabled AND (n.symbol ILIKE ? OR coalesce(n.qualified_name,'') ILIKE ?)""";
+        if(repository!=null&&!repository.isBlank()){sql+=" AND r.owner||'/'||r.name=?";args.add(repository);}
+        sql+=" ORDER BY 1,n.start_line LIMIT 100";
+        return objectMapper.writeValueAsString(jdbc.queryForList(sql,args.toArray()));
+        } catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     @Tool(description="Return direct callers and callees of a symbol, including evidence and confidence.")
     public String get_neighbors(String repository,String symbol){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
+        if(symbol==null||symbol.isBlank())throw new IllegalArgumentException("symbol is required");
         RepositoryRecord r=allowed(repository);
-        return jdbc.queryForList("""
-SELECT source.symbol AS from_symbol,target.symbol AS to_symbol,e.edge_type,e.evidence,e.confidence,source.file_path,source.start_line
+        String like="%"+symbol+"%";
+        var rows=jdbc.queryForList("""
+SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,source.symbol AS from_symbol,target.symbol AS to_symbol,e.edge_type,e.evidence,e.confidence,source.file_path,source.start_line
           FROM code_edges e JOIN code_nodes source ON source.id=e.source_node LEFT JOIN code_nodes target ON target.id=e.target_node
-          JOIN index_generations g ON g.id=e.generation_id AND g.published WHERE g.repository_id=? AND (source.qualified_name ILIKE ? OR target.qualified_name ILIKE ?)
+          JOIN index_generations g ON g.id=e.generation_id AND g.published=true JOIN repositories r ON r.id=g.repository_id WHERE g.repository_id=? AND (coalesce(source.qualified_name,'') ILIKE ? OR coalesce(target.qualified_name,'') ILIKE ?)
         UNION ALL
-        SELECT caller.symbol_key AS from_symbol,target.symbol_key AS to_symbol,'SEMANTIC_'+edge.resolution_status AS edge_type,
+        SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,caller.symbol_key AS from_symbol,target.symbol_key AS to_symbol,'SEMANTIC_'||edge.resolution_status AS edge_type,
                edge.evidence,edge.confidence,site.file_path,site.start_line
           FROM semantic_call_edges edge
           JOIN semantic_symbols caller ON caller.id=edge.caller_symbol_id
           LEFT JOIN semantic_symbols target ON target.id=edge.target_symbol_id
           JOIN semantic_call_sites site ON site.id=edge.call_site_id
-          JOIN index_generations g ON g.id=edge.generation_id AND g.published
-         WHERE g.repository_id=? AND (caller.symbol_key ILIKE ? OR target.symbol_key ILIKE ?)
-         LIMIT 200""",r.id(),"%"+symbol+"%","%"+symbol+"%",r.id(),"%"+symbol+"%","%"+symbol+"%").toString();
+          JOIN index_generations g ON g.id=edge.generation_id AND g.published=true JOIN repositories r ON r.id=g.repository_id
+         WHERE g.repository_id=? AND (caller.symbol_key ILIKE ? OR coalesce(target.symbol_key,'') ILIKE ?)
+        LIMIT 200""",r.id(),like,like,r.id(),like,like);
+        return objectMapper.writeValueAsString(rows);
+        } catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     @Tool(description="Find code chunks by natural language using the self-hosted embedding model and pgvector cosine distance.")
     public String semantic_search(String query,String repository,Integer limit){
-        float[] v=embeddings.embed(query);if(v.length!=props.embeddingDimensions())throw new IllegalStateException("embedding model dimension mismatch");String vec="["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try {
+        if(query==null||query.isBlank())throw new IllegalArgumentException("semantic search query is required");
+        if(query.length()>1024)throw new IllegalArgumentException("semantic search query exceeds 1024 characters");
         String owner=null,name=null;if(repository!=null&&!repository.isBlank()){RepositoryRecord r=allowed(repository);owner=r.owner();name=r.name();}
+        var space=com.wynk.codecontext.index.EmbeddingSpace.current(embeddings,props.embeddingDimensions());
+        String staleSql="SELECT count(*) FROM index_generations g JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=? WHERE g.published AND r.enabled AND g.embedding_fingerprint IS DISTINCT FROM ?";
+        if(owner!=null)staleSql+=" AND r.owner=? AND r.name=?";
+        Integer stale=owner==null?jdbc.queryForObject(staleSql,Integer.class,team(),space.fingerprint())
+                :jdbc.queryForObject(staleSql,Integer.class,team(),space.fingerprint(),owner,name);
+        if(stale!=null&&stale>0)throw new IllegalStateException("semantic indexes require reindexing for the configured embedding model");
+        float[] v=embeddings.embed(query);if(v.length!=props.embeddingDimensions())throw new IllegalStateException("embedding model dimension mismatch");
+        for(float value:v)if(!Float.isFinite(value))throw new IllegalStateException("embedding model returned a non-finite vector");
+        String vec="["+String.join(",",java.util.stream.IntStream.range(0,v.length).mapToObj(i->Float.toString(v[i])).toList())+"]";
         int n=limit==null?10:Math.max(1,Math.min(limit,50));
         String sql="""
-SELECT r.owner||'/'||r.name AS repository,c.file_path,c.symbol,c.start_line,c.end_line,c.content,
+SELECT r.owner||'/'||r.name AS repository,g.commit_sha AS commit,c.file_path,c.symbol,c.start_line,c.end_line,c.content,
             1-(c.embedding <=> ?::vector) AS similarity FROM code_chunks c JOIN index_generations g ON g.id=c.generation_id AND g.published
             JOIN repositories r ON r.id=g.repository_id JOIN team_repository_access a ON a.repository_id=r.id AND a.team=?
-            WHERE c.embedding IS NOT NULL""";
+            WHERE r.enabled AND c.embedding IS NOT NULL AND g.embedding_fingerprint=?""";
+
         if(owner!=null)sql+=" AND r.owner=? AND r.name=?";
         sql+=" ORDER BY c.embedding <=> ?::vector LIMIT "+n;
-        List<?> rows=owner==null?jdbc.queryForList(sql,vec,team(),vec):jdbc.queryForList(sql,vec,team(),owner,name,vec);
-        return rows.toString();
+        List<?> rows=owner==null?jdbc.queryForList(sql,vec,team(),space.fingerprint(),vec):jdbc.queryForList(sql,vec,team(),space.fingerprint(),owner,name,vec);
+        space.requireCurrent(embeddings);
+        return objectMapper.writeValueAsString(rows);
+        } catch(RuntimeException e){ error=true; throw e; }
+        finally { metrics.recordMcp(sample,error); }
     }
 
-    @Tool(description="Compare published contract generations, classify supported changes, and return fresh, evidence-backed candidate consumers with completeness status. Method-level consumer behavior is not inferred; results never block a review.")
-    public java.util.Map<String,Object> impact_analysis(String contract,String repository){
-        try { return computeImpactAnalysis(contract,repository); }
-        catch(SecurityException e) { throw e; }
-        catch(Exception e) { return java.util.Map.of("status","FAILED","blocking",false,"reason","Impact analysis could not be completed; consult platform logs.","results",List.of()); }
+
+    @Tool(description="Compare published contract generations, classify supported changes, and return fresh, evidence-backed candidate consumers with completeness status. Optional oldSignature/newSignature classify a proposed method change without claiming definite breakage. Method-level consumer behavior is not inferred; results never block a review.")
+    public java.util.Map<String,Object> impact_analysis(
+            String contract,
+            String repository,
+            @ToolParam(required=false, description="Existing method/API signature for proposed-change classification") String oldSignature,
+            @ToolParam(required=false, description="Proposed method/API signature for proposed-change classification") String newSignature){
+        Timer.Sample sample=metrics.startMcp();
+        boolean error=false;
+        try { return computeImpactAnalysis(contract,repository,oldSignature,newSignature); }
+        catch(SecurityException e) { error=true; throw e; }
+        catch(Exception e) { error=true; return java.util.Map.of("status","FAILED","blocking",false,"reason","Impact analysis could not be completed; consult platform logs.","results",List.of()); }
+        finally { metrics.recordMcp(sample,error); }
     }
 
     private java.util.Map<String,Object> computeImpactAnalysis(String contract,String repository){
+        return computeImpactAnalysis(contract,repository,null,null);
+    }
+
+    private java.util.Map<String,Object> computeImpactAnalysis(String contract,String repository,String oldSignature,String newSignature){
         RepositoryRecord r=allowed(repository);
         StoredIndex after=contractIndexes.published(r.id()).orElse(null);
         if(after==null) return java.util.Map.of("status","INCOMPLETE","blocking",false,"reason","No published contract index is available for the requested repository.","results",List.of());
@@ -137,10 +206,13 @@ SELECT r.owner||'/'||r.name AS repository,c.file_path,c.symbol,c.start_line,c.en
             persistImpact(r,after,before,"FAILED",failed);
             return failed;
         }
+        var callerChains=new com.wynk.codecontext.port.contract.graph.PublishedCallerChainResolver(jdbc)
+                .resolve(team(),resolution.semanticMethodImpacts(),resolution.impacted().stream().collect(java.util.stream.Collectors.toMap(
+                        candidate->candidate.repo().key()+"@"+candidate.commit(),CrossRepoImpactResolver.Impacted::generationId)));
         // Capture the immutable published consumer generations for this analysis before scheduling
         // refresh jobs. A newly queued refresh must not make the generation being analyzed appear
         // stale midway through the same request.
-        var refreshRequest=contractRefresher.refreshRelevant(team(),r.id(),routingKeys);
+        var refreshRequest=contractRefresher.refreshRelevant(team(),r.id(),after.generationId(),routingKeys);
         boolean unknown=changes.stream().anyMatch(c->c.compatibility()==com.wynk.codecontext.port.contract.compat.CompatibilityModels.Compatibility.UNKNOWN);
         boolean breakingConsumerCandidate=changes.stream().anyMatch(ContractChange::isBreaking)&&resolution.impacted().stream().anyMatch(i->"DIRECT".equals(i.relationship()));
         var methodEvidence = collectMethodEvidence(resolution.impacted(), changes);
@@ -155,13 +227,33 @@ SELECT r.owner||'/'||r.name AS repository,c.file_path,c.symbol,c.start_line,c.en
         result.put("methodLevelAnalysis", methodEvidence.complete() ? "COMPLETE_FOR_SUPPORTED_JAVA_FILES" : "INCOMPLETE");
         result.put("methodLevelAnalysisComplete", methodEvidence.complete());
         result.put("semanticMethodImpacts",resolution.semanticMethodImpacts());
+        result.put("publishedCallerChains",callerChains);
+        result.put("intraRepositoryCallerChainsSupported",true);
         result.put("skippedRepositories",resolution.skipped()); result.put("contractGraph",resolution.graph());
         result.put("unknownCompatibilityPresent",unknown);
         result.put("confirmedConsumerBreakage",false); result.put("consumerBehaviorAnalysis","NOT_RUN");
         result.put("safetyConclusion","NO_AUTOMATIC_SAFETY_CONCLUSION");
-        result.put("completenessScope","Contract generation comparison, team-scoped Maven dependency routing, and exact V5 semantic method references where dependency artifacts and provider symbols are available; results remain informational.");
+        boolean hasIndirectContractCandidates=resolution.impacted().stream().anyMatch(i->"INDIRECT_CANDIDATE".equals(i.relationship()));
+        result.put("contractHopBound",3);
+        result.put("methodChainMultiHopSupported",false);
+        result.put("indirectContractCandidatesPresent",hasIndirectContractCandidates);
+        result.put("analysisCompletenessFlags",java.util.List.of(
+                hasIndirectContractCandidates?"INDIRECT_CONTRACT_REEXPORT_CANDIDATES":"DIRECT_CONTRACT_MATCHES_ONLY",
+                "METHOD_LEVEL_DIRECT_EDGES_ONLY",
+                "METHOD_CHAIN_MULTI_HOP_UNSUPPORTED"));
+        if(oldSignature!=null&&!oldSignature.isBlank()||newSignature!=null&&!newSignature.isBlank()) {
+            var proposed=com.wynk.codecontext.port.contract.graph.ProposedChangeClassifier.classify(oldSignature,newSignature);
+            result.put("proposedChange",java.util.Map.of(
+                    "oldSignature",oldSignature==null?"":oldSignature,
+                    "newSignature",newSignature==null?"":newSignature,
+                    "kind",proposed.kind().name(),
+                    "impactClass",proposed.impactClass(),
+                    "explanation",proposed.explanation(),
+                    "confirmedBreakage",false));
+        }
+        result.put("completenessScope","Contract generation comparison, team-scoped Maven dependency routing, exact V5 Java semantic method references, and Kotlin compiler JVM call edges where dependency artifacts and provider symbols are available; Kotlin source compatibility stays UNKNOWN; results remain informational.");
         result.put("consumerRefreshScheduled",refreshRequest.scheduled()); result.put("consumerRefreshTruncated",refreshRequest.truncated());
-        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin and full indirect method-chain resolution remain unsupported.","Repositories outside the authenticated team's access scope are not searched."));
+        result.put("limitations",List.of("Results are informational and do not block reviews.","Removed provider signatures matching a consumer's resolved V5 edge are reported as potential upgrade impact, not as current breakage.","Kotlin JVM binary edges from the compiler analyzer are reported when present; Kotlin source compatibility (inline, suspend, defaults, nullability, exact source mappings) remains UNKNOWN and never proves safety.","Published intra-repository caller chains are bounded advisory reachability evidence; arbitrary cross-repository method-chain propagation remains unsupported.","Repositories outside the authenticated team's access scope are not searched.","Proposed-change classification distinguishes potential binary incompatibility from behavioural unknowns; it never claims definite runtime breakage."));
         persistImpact(r,after,before,status,result);
         return result;
     }

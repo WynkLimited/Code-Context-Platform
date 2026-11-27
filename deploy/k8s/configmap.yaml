@@ -7,14 +7,16 @@ data:
   APP_PROFILE: production
   SERVER_PORT: "8080"
   DATABASE_URL: jdbc:postgresql://postgres:5432/code_context
-  DATABASE_USER: code_context
+  DATABASE_USER: code_context_app
   OLLAMA_BASE_URL: http://ollama:11434
   ZOEKT_WEB_SERVER: http://zoekt:6070
   ZOEKT_INDEXER: zoekt-git-index
+  ZOEKT_CLEANER: zoekt-local-sync
   REPOSITORY_ROOT: /var/lib/code-context/repos
   LOCAL_GIT_ROOT: /fixtures
   ZOEKT_INDEX_ROOT: /data/index
   EMBEDDING_MODEL: qwen3-embedding:0.6b
+  GRAPHIFY_OLLAMA_MODEL: qwen3:0.6b
   EMBEDDING_DIMENSIONS: "1024"
   MAX_FILE_BYTES: "1048576"
   MAX_CHUNK_CHARS: "6000"

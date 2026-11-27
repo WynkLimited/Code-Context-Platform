@@ -24,6 +24,7 @@ public class ConfigContractExtractor implements ContractExtractor {
     @Override public String id() { return ContractType.CONFIG.id(); }
     @Override public String version() { return VERSION; }
     @Override public ContractType type() { return ContractType.CONFIG; }
+    @Override public java.util.Set<String> incrementalInputSuffixes() { return java.util.Set.of(".java",".kt",".properties",".yaml",".yml"); }
     @Override public boolean available() { return true; }
     @Override public boolean mayDefineContract(String path) {
         if (path == null) return false;

@@ -5,6 +5,7 @@ Flyway `V1__initial_schema.sql` enables `vector` and `pgcrypto`, then creates:
 - `repositories`, `team_repository_access`: registry, ownership labels and team authorization.
 - `index_jobs`: unique delivery idempotency, state, attempt count, error and availability timestamp.
 - `index_generations`, `generation_files`: per-repository immutable commit generations and file blob hashes.
+- `repository_index_leases`: renewable per-repository indexing ownership shared across application replicas.
 - `code_nodes`, `code_edges`: Graphify/Java structural nodes and evidence-bearing relations.
 - `contracts`, `contract_links`: exports/imports with file, line, source text, confidence, dependency version, metadata, and generation-paired relations.
 - `contract_index_metadata`: per-generation schema, extractor, compatibility/generator versions, hash, and surface counts.

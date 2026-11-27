@@ -25,6 +25,7 @@ public class StringFormatContractExtractor implements ContractExtractor {
     @Override public String id() { return ContractType.STRING_FORMAT.id(); }
     @Override public String version() { return VERSION; }
     @Override public ContractType type() { return ContractType.STRING_FORMAT; }
+    @Override public java.util.Set<String> incrementalInputSuffixes() { return java.util.Set.of(".java",".kt",".swift",".xml",".plist"); }
     @Override public boolean available() { return true; }
     @Override public boolean mayDefineContract(String path) {
         if (path == null) return false;

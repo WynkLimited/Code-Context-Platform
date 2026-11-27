@@ -1,6 +1,6 @@
 package com.wynk.codecontext.search;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.config.CodeContextProperties;
 import com.wynk.codecontext.model.RepositoryRecord;
 import org.springframework.stereotype.Service;
@@ -14,20 +14,100 @@ import java.util.concurrent.TimeUnit;
 
 @Service
 public class ZoektIndexer {
-    private final CodeContextProperties config; private final ObjectMapper json;
-    public ZoektIndexer(CodeContextProperties c,ObjectMapper m){config=c;json=m;}
+    private final CodeContextProperties config; private final JsonMapper json;
+    public ZoektIndexer(CodeContextProperties c,JsonMapper m){config=c;json=m;}
     public void index(RepositoryRecord repository,Path checkout,java.util.UUID generation) throws Exception {
+        GitPackCompatibility.normalize(checkout);
+        String commit;
+        try(var git=org.eclipse.jgit.api.Git.open(checkout.toFile())) {
+            var head=git.getRepository().resolve("HEAD^{commit}");
+            if(head==null)throw new IOException("Zoekt source commit is unavailable");
+            commit=head.name();
+        }
         Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();Files.createDirectories(index);
         Path metadata=index.resolve("meta-"+repository.id()+".json");
         String generationName=repository.key()+"@"+generation;
         json.writeValue(metadata.toFile(),new RepoMetadata(generationName,"Code Context indexed generation"));
         Path log=index.resolve("index-"+repository.id()+".log");
-        Process process=new ProcessBuilder(List.of(config.zoekt().indexer(),"-index",index.toString(),"-branches","HEAD","-incremental","-meta",metadata.toString(),checkout.toString()))
+        Process process=new ProcessBuilder(List.of(config.zoekt().indexer(),"-index",index.toString(),"-branches",commit,"-incremental","-meta",metadata.toString(),checkout.toString()))
                 .redirectErrorStream(true).redirectOutput(log.toFile()).start();
         boolean done=process.waitFor(Duration.ofMinutes(20).toMillis(),TimeUnit.MILLISECONDS);
         if(!done){process.destroyForcibly();throw new IOException("Zoekt indexing exceeded 20 minute limit");}
         String output=Files.exists(log)?Files.readString(log):"";
-        if(process.exitValue()!=0)throw new IOException("Zoekt indexing failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1500,output.length())));
+        if(process.exitValue()!=0)throw new IOException("Zoekt indexing failed with exit "+process.exitValue()+": "+output.substring(0,Math.min(1500,output.length()))+"; "+gitDiagnostics(checkout,commit));
     }
+
+    private static String gitDiagnostics(Path checkout,String commit) {
+        String refs;
+        try(var git=org.eclipse.jgit.api.Git.open(checkout.toFile())) {
+            refs="jgitRefDatabase="+git.getRepository().getRefDatabase().getClass().getSimpleName()+
+                    "; refs="+git.getRepository().getRefDatabase().getRefsByPrefix("refs/heads/").stream().limit(10)
+                    .map(r->r.getName()+"="+r.getObjectId().name()).toList()+
+                    "; gitDir="+git.getRepository().getDirectory()+
+                    "; repositoryFormat="+git.getRepository().getConfig().getString("core",null,"repositoryformatversion");
+        }catch(Exception failure){refs="jgitDiagnostics="+failure.getClass().getSimpleName();}
+        try {
+            var process=new ProcessBuilder("git","-C",checkout.toString(),"cat-file","-t",commit).redirectErrorStream(true).start();
+            if(!process.waitFor(5,TimeUnit.SECONDS)){process.destroyForcibly();return refs+"; nativeGit=timeout";}
+            return refs+"; nativeGit="+new String(process.getInputStream().readNBytes(1024),java.nio.charset.StandardCharsets.UTF_8).strip()+" exit="+process.exitValue();
+        }catch(Exception failure){return refs+"; nativeGit="+failure.getClass().getSimpleName();}
+    }
+
+    /** Delete only explicit obsolete generation repositories after database publication succeeds. */
+    public void removeGeneration(RepositoryRecord repository, java.util.UUID generation) throws Exception {
+        Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();
+        if(!Files.isDirectory(index))return;
+        Path log=Files.createTempFile(index,"zoekt-remove-",".log");
+        Process process=null;
+        try {
+            process=new ProcessBuilder(List.of(config.zoekt().cleaner(),"remove","-index",index.toString(),"-f",repository.key()+"@"+generation))
+                    .redirectErrorStream(true).redirectOutput(log.toFile()).start();
+            if(!process.waitFor(Duration.ofSeconds(30).toMillis(),TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly();
+                throw new IOException("Zoekt obsolete-generation removal exceeded 30 second limit");
+            }
+            String output=Files.exists(log)?Files.readString(log):"";
+            if(process.exitValue()!=0) {
+                String detail=output.substring(0,Math.min(1000,output.length()));
+                // Already-absent shards are a successful cleanup outcome for durable retries.
+                if(detail.toLowerCase(java.util.Locale.ROOT).contains("not found"))return;
+                throw new IOException("Zoekt obsolete-generation removal failed with exit "+process.exitValue()+": "+detail);
+            }
+        } finally {
+            if(process!=null&&process.isAlive())process.destroyForcibly();
+            Files.deleteIfExists(log);
+        }
+    }
+
+    /** Best-effort inventory of generation identities recorded in Zoekt metadata files. */
+    public List<IndexedGeneration> listIndexedGenerations() throws IOException {
+        Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();
+        if(!Files.isDirectory(index))return List.of();
+        List<IndexedGeneration> found=new java.util.ArrayList<>();
+        try(var stream=Files.list(index)) {
+            for(Path path:stream.filter(p->p.getFileName().toString().startsWith("meta-")&&p.getFileName().toString().endsWith(".json")).toList()) {
+                try {
+                    var tree=json.readTree(path.toFile());
+                    String identity=tree.path("name").asText("");
+                    int at=identity.lastIndexOf('@');
+                    if(at<=0||at>=identity.length()-1)continue;
+                    String key=identity.substring(0,at);
+                    int slash=key.indexOf('/');
+                    if(slash<=0)continue;
+                    found.add(new IndexedGeneration(key.substring(0,slash),key.substring(slash+1),java.util.UUID.fromString(identity.substring(at+1))));
+                } catch(Exception ignored) { /* untrusted index files must not abort reconciliation */ }
+            }
+        }
+        return List.copyOf(found);
+    }
+
+    public void removeRepositoryMetadata(java.util.UUID repositoryId) throws IOException {
+        Path index=Path.of(config.zoektIndexRoot()).toAbsolutePath().normalize();
+        if(!Files.isDirectory(index))return;
+        Files.deleteIfExists(index.resolve("meta-"+repositoryId+".json"));
+        Files.deleteIfExists(index.resolve("index-"+repositoryId+".log"));
+    }
+
+    public record IndexedGeneration(String owner,String name,java.util.UUID generation) {}
     private record RepoMetadata(String name,String description) {}
 }

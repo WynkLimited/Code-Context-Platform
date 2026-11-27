@@ -3,9 +3,22 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.wynk.platform</groupId><artifactId>code-context-platform</artifactId><version>0.1.0-SNAPSHOT</version>
   <parent><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-parent</artifactId><version>4.0.10</version><relativePath/></parent>
-  <properties><java.version>21</java.version><spring-ai.version>2.0.2</spring-ai.version></properties>
-  <dependencyManagement><dependencies><dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-bom</artifactId><version>${spring-ai.version}</version><type>pom</type><scope>import</scope></dependency></dependencies></dependencyManagement>
+  <properties>
+    <java.version>21</java.version>
+    <spring-ai.version>2.0.2</spring-ai.version>
+    <maven-resolver.version>1.9.26</maven-resolver.version>
+  </properties>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-bom</artifactId><version>${spring-ai.version}</version><type>pom</type><scope>import</scope></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-api</artifactId><version>${maven-resolver.version}</version></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-spi</artifactId><version>${maven-resolver.version}</version></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-util</artifactId><version>${maven-resolver.version}</version></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-impl</artifactId><version>${maven-resolver.version}</version></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-named-locks</artifactId><version>${maven-resolver.version}</version></dependency>
+  </dependencies></dependencyManagement>
   <dependencies>
+    <dependency><groupId>org.commonmark</groupId><artifactId>commonmark</artifactId><version>0.32.0</version></dependency>
+    <dependency><groupId>org.jetbrains.kotlin</groupId><artifactId>kotlin-metadata-jvm</artifactId><version>${kotlin.version}</version></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-webmvc</artifactId></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
     <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId></dependency>
@@ -16,19 +29,36 @@
     <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-starter-model-ollama</artifactId></dependency>
     <dependency><groupId>org.springframework.ai</groupId><artifactId>spring-ai-starter-vector-store-pgvector</artifactId></dependency>
     <dependency><groupId>org.postgresql</groupId><artifactId>postgresql</artifactId><scope>runtime</scope></dependency>
-    <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency>
+    <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-flyway</artifactId></dependency>
     <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-database-postgresql</artifactId></dependency>
     <dependency><groupId>org.eclipse.jgit</groupId><artifactId>org.eclipse.jgit</artifactId><version>7.3.0.202506031305-r</version></dependency>
     <dependency><groupId>com.github.javaparser</groupId><artifactId>javaparser-core</artifactId><version>3.27.1</version></dependency>
     <dependency><groupId>com.github.javaparser</groupId><artifactId>javaparser-symbol-solver-core</artifactId><version>3.27.1</version></dependency>
     <dependency><groupId>org.apache.maven</groupId><artifactId>maven-model-builder</artifactId><version>3.9.9</version></dependency>
     <dependency><groupId>org.apache.maven</groupId><artifactId>maven-resolver-provider</artifactId><version>3.9.9</version></dependency>
-    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-connector-basic</artifactId><version>1.9.22</version></dependency>
-    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-transport-file</artifactId><version>1.9.22</version></dependency>
-    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-transport-http</artifactId><version>1.9.22</version></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-connector-basic</artifactId><version>${maven-resolver.version}</version></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-transport-file</artifactId><version>${maven-resolver.version}</version></dependency>
+    <dependency><groupId>org.apache.maven.resolver</groupId><artifactId>maven-resolver-transport-http</artifactId><version>${maven-resolver.version}</version></dependency>
     <dependency><groupId>org.jboss.logging</groupId><artifactId>jboss-logging</artifactId><version>3.6.1.Final</version></dependency>
     <dependency><groupId>com.google.protobuf</groupId><artifactId>protobuf-java</artifactId><version>4.33.1</version></dependency>
-    <dependency><groupId>ch.usi.si.seart</groupId><artifactId>java-tree-sitter</artifactId><version>1.12.0</version></dependency>
+    <!-- Platform-specific JNI binaries: glibc Linux and Intel/ARM macOS; parser versions pinned. -->
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter</artifactId><version>0.26.6</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-java</artifactId><version>0.23.5</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-kotlin</artifactId><version>0.3.8.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-python</artifactId><version>0.25.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-javascript</artifactId><version>0.25.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-typescript</artifactId><version>0.23.2</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-tsx</artifactId><version>0.23.2</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-go</artifactId><version>0.25.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-rust</artifactId><version>0.24.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-c</artifactId><version>0.24.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-cpp</artifactId><version>0.23.4</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-c-sharp</artifactId><version>0.23.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-ruby</artifactId><version>0.23.1</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-scala</artifactId><version>0.24.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-php</artifactId><version>0.24.2</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-swift</artifactId><version>0.5.0</version></dependency>
+    <dependency><groupId>io.github.bonede</groupId><artifactId>tree-sitter-bash</artifactId><version>0.25.1</version></dependency>
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
     <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-test</artifactId><scope>test</scope></dependency>
   </dependencies>

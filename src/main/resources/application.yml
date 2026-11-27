@@ -15,13 +15,15 @@ spring:
       name: code-context-platform
       version: 0.1.0
       protocol: STREAMABLE
-      annotation-scanner.enabled: true
+      annotation-scanner.enabled: false
       streamable-http.mcp-endpoint: /mcp
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       embedding:
         model: ${EMBEDDING_MODEL:qwen3-embedding:0.6b}
+        # Bound explicitly by OllamaEmbeddingConfiguration; provider properties omit numCtx in 2.0.2.
         num-ctx: 8192
+        truncate: false
     vectorstore.pgvector:
       initialize-schema: false
       dimensions: ${EMBEDDING_DIMENSIONS:1024}
@@ -38,8 +40,12 @@ code-context:
   repository-root: ${REPOSITORY_ROOT:/var/lib/code-context/repos}
   local-git-root: ${LOCAL_GIT_ROOT:/fixtures}
   zoekt-index-root: ${ZOEKT_INDEX_ROOT:/var/lib/code-context/zoekt}
+  # Dual-key rotation: team=current|previous accepts either key during overlap; drop previous to revoke.
   api-keys: ${TEAM_API_KEYS:local-dev=local-dev-token}
   admin-api-keys: ${ADMIN_API_KEYS:local-dev=local-dev-token}
+  # 0 disables limiting; positive budgets use PostgreSQL across replicas by default.
+  rate-limit-per-minute: ${RATE_LIMIT_PER_MINUTE:0}
+  rate-limit-store: ${RATE_LIMIT_STORE:postgres}
   webhook-secret: ${WEBHOOK_SECRET:local-webhook-secret-change-me}
   git-access-token: ${GIT_ACCESS_TOKEN:}
   git-allowed-hosts: ${GIT_ALLOWED_HOSTS:github.com}
@@ -51,10 +57,12 @@ code-context:
   git-timeout-seconds: ${GIT_TIMEOUT_SECONDS:300}
   zoekt:
     indexer: ${ZOEKT_INDEXER:zoekt-git-index}
+    cleaner: ${ZOEKT_CLEANER:zoekt-local-sync}
     webserver: ${ZOEKT_WEB_SERVER:http://zoekt:6070}
   graphify:
     command: ${GRAPHIFY_COMMAND:graphify}
     enabled: ${GRAPHIFY_ENABLED:false}
+logging.structured.format.console: ${LOG_FORMAT_CONSOLE:logstash}
 ---
 spring:
   config.activate.on-profile: test
@@ -68,4 +76,4 @@ code-context:
   api-keys: ${TEAM_API_KEYS}
   admin-api-keys: ${ADMIN_API_KEYS}
   webhook-secret: ${WEBHOOK_SECRET}
-  git-access-token: ${GIT_ACCESS_TOKEN}
+  git-access-token: ${GIT_ACCESS_TOKEN:}

@@ -25,6 +25,7 @@ public class DatabaseContractExtractor implements ContractExtractor {
     @Override public String id() { return ContractType.DATABASE.id(); }
     @Override public String version() { return VERSION; }
     @Override public ContractType type() { return ContractType.DATABASE; }
+    @Override public java.util.Set<String> incrementalInputSuffixes() { return java.util.Set.of(".java",".kt",".sql",".js",".json"); }
     @Override public boolean available() { return true; }
     @Override public boolean mayDefineContract(String path) {
         if (path == null) return false;

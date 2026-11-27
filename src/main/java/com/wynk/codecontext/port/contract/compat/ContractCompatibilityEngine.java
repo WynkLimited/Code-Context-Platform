@@ -159,6 +159,10 @@ public class ContractCompatibilityEngine {
         if (beforeSignature == null || afterSignature == null) {
             return List.of();
         }
+        if(before.type()==ContractModels.ContractType.MAVEN &&
+                (Boolean.FALSE.equals(before.metadata().get("kotlinMetadataComplete")) || Boolean.FALSE.equals(after.metadata().get("kotlinMetadataComplete"))))
+            return List.of(change(before,after,ContractChangeType.API_SIGNATURE_CHANGED,Compatibility.UNKNOWN,
+                    beforeSignature,afterSignature,"Kotlin compiler or metadata extraction incomplete; no ABI safety conclusion."));
         if (beforeSignature.equals(afterSignature)) {
             if (before.type() == ContractModels.ContractType.MAVEN
                     && !java.util.Objects.equals(before.metadata().get("javaApiAnnotations"), after.metadata().get("javaApiAnnotations"))) {
@@ -190,10 +194,24 @@ public class ContractCompatibilityEngine {
             return List.of(change(before, after, ContractChangeType.API_SIGNATURE_CHANGED,
                     removedApi ? Compatibility.BREAKING : Compatibility.BACKWARD_COMPATIBLE,
                     beforeSignature, afterSignature,
-                    removedApi ? "Published Maven public API removed or changed."
+                    removedApi ? "Published Maven public API removed or changed. JVM descriptor removals are binary incompatible; Kotlin source compatibility remains unknown."
                             : "Published Maven public API was extended compatibly."));
         }
         if (before.type() == ContractModels.ContractType.KAFKA) {
+            if (ProtoSignatureParser.isMessage(beforeSignature) && ProtoSignatureParser.isMessage(afterSignature)) {
+                return compareMessages(before, after, beforeSignature, afterSignature);
+            }
+            if (StructuredSchemaCompat.isFieldSchema(beforeSignature)
+                    && StructuredSchemaCompat.isFieldSchema(afterSignature)) {
+                // Kafka Avro/JSON Schema: removals, type changes and required additions break readers.
+                var diffs = StructuredSchemaCompat.compareKafkaFields(beforeSignature, afterSignature);
+                if (!diffs.isEmpty()) {
+                    return diffs.stream()
+                            .map(diff -> change(before, after, diff.changeType(), diff.compatibility(),
+                                    beforeSignature, afterSignature, diff.detail()))
+                            .toList();
+                }
+            }
             boolean declaredSchemas = hasMetadata(before, "schema") && hasMetadata(after, "schema");
             return List.of(change(before, after, ContractChangeType.SCHEMA_CHANGED,
                     Compatibility.UNKNOWN,
@@ -203,6 +221,17 @@ public class ContractCompatibilityEngine {
                             : "Kafka payload changed without a declared schema; impact is inferred."));
         }
         if (before.type() == ContractModels.ContractType.REST) {
+            if (StructuredSchemaCompat.isRestOperation(beforeSignature)
+                    && StructuredSchemaCompat.isRestOperation(afterSignature)) {
+                var diffs = StructuredSchemaCompat.compareRest(beforeSignature, afterSignature);
+                if (!diffs.isEmpty()) {
+                    return diffs.stream()
+                            .map(diff -> change(before, after, diff.changeType(), diff.compatibility(),
+                                    beforeSignature, afterSignature, diff.detail()))
+                            .toList();
+                }
+                return List.of();
+            }
             boolean openApi = "openapi".equals(before.metadata().get("framework"))
                     && "openapi".equals(after.metadata().get("framework"));
             return List.of(change(before, after, ContractChangeType.ENDPOINT_SIGNATURE_CHANGED,

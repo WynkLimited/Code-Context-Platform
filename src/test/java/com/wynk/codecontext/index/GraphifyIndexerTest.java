@@ -1,6 +1,6 @@
 package com.wynk.codecontext.index;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.config.CodeContextProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.io.RandomAccessFile;
 import java.util.UUID;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,10 +36,10 @@ class GraphifyIndexerTest {
         var properties = new CodeContextProperties(temp.resolve("repos").toString(), temp.toString(),
                 temp.resolve("zoekt").toString(), "team=team-secret", "admin=admin-secret", "webhook-secret", "",
                 "github.com", "http://localhost", 1024, 1024 * 1024, 6000, 2, 300,
-                new CodeContextProperties.Zoekt("zoekt-git-index", "http://localhost:6070"),
+                new CodeContextProperties.Zoekt("zoekt-git-index", "zoekt-local-sync", "http://localhost:6070"),
                 new CodeContextProperties.Graphify(command.toString(), true));
         CapturingJdbcTemplate jdbc = new CapturingJdbcTemplate();
-        var indexer = new GraphifyIndexer(properties, new ObjectMapper(), jdbc);
+        var indexer = new GraphifyIndexer(properties, JsonMapper.builder().build(), jdbc);
 
         assertTrue(indexer.buildAndPersist(temp, UUID.randomUUID()));
 
@@ -49,6 +50,24 @@ class GraphifyIndexerTest {
         assertEquals(72L, jdbc.edges.get(0)[2]);
         assertEquals("contains", jdbc.edges.get(0)[3]);
         assertEquals(0.8d, jdbc.edges.get(0)[5]);
+    }
+
+    @Test void rejectsOversizedGraphBeforeJsonParsing() throws Exception {
+        Path command=temp.resolve("graphify-oversized");
+        Files.writeString(command,"#!/bin/sh\nmkdir -p graphify-out\n");
+        assertTrue(command.toFile().setExecutable(true));
+        Path graph=temp.resolve("graphify-out/graph.json");
+        Files.createDirectories(graph.getParent());
+        try(RandomAccessFile file=new RandomAccessFile(graph.toFile(),"rw")){file.setLength(512L*1024*1024+1);}
+        var properties=new CodeContextProperties(temp.resolve("repos").toString(),temp.toString(),temp.resolve("zoekt").toString(),
+                "team=team-secret","admin=admin-secret","webhook-secret","","github.com","http://localhost",1024,1024*1024,6000,2,300,
+                new CodeContextProperties.Zoekt("zoekt-git-index","zoekt-local-sync","http://localhost:6070"),
+                new CodeContextProperties.Graphify(command.toString(),true));
+        var indexer=new GraphifyIndexer(properties,JsonMapper.builder().build(),new CapturingJdbcTemplate());
+
+        var failure=assertThrows(java.io.IOException.class,()->indexer.buildAndPersist(temp,UUID.randomUUID()));
+
+        assertTrue(failure.getMessage().contains("512 MiB"));
     }
 
     private static final class CapturingJdbcTemplate extends JdbcTemplate {

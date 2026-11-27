@@ -1,0 +1,48 @@
+# Prometheus alerting rules for Code Context Platform.
+# Apply via PrometheusRule / prometheus operator or include in the scrape stack.
+groups:
+  - name: code-context-platform
+    rules:
+      - alert: CodeContextIndexJobFailures
+        expr: increase(ccp_index_jobs_failed_total[15m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Indexing jobs are failing
+          description: One or more index jobs failed in the last 15 minutes.
+
+      - alert: CodeContextCleanupOutboxFailed
+        expr: ccp_cleanup_outbox_failed > 0
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: Generation cleanup outbox has terminal FAILED rows
+          description: Zoekt cleanup exhausted retries; investigate orphaned shards.
+
+      - alert: CodeContextLeaseExpiryChurn
+        expr: increase(ccp_lease_expired_total[10m]) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated index lease expiry
+          description: Workers may be crashing or starving leases.
+
+      - alert: CodeContextMcpErrors
+        expr: increase(ccp_mcp_tool_errors_total[10m]) > 20
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Elevated MCP tool errors
+          description: Authenticated MCP tool invocations are failing frequently.
+
+      - alert: CodeContextInstanceDown
+        expr: up{job="code-context-platform"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Code Context Platform scrape target is down

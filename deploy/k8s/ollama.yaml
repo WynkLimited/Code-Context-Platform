@@ -38,4 +38,4 @@ spec:
         - name: pull
           image: ollama/ollama:0.13.3
           env: [{name: OLLAMA_HOST, value: http://ollama:11434}]
-          command: ["/bin/sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull qwen3-embedding:0.6b"]
+          command: ["/bin/sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull qwen3-embedding:0.6b && ollama pull qwen3:0.6b"]

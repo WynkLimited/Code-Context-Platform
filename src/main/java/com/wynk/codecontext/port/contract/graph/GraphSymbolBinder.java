@@ -1,7 +1,7 @@
 package com.wynk.codecontext.port.contract.graph;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.port.contract.ContractEntryMetadata;
 import com.wynk.codecontext.port.contract.ContractModels;
 import com.wynk.codecontext.port.contract.ContractModels.ContractExport;
@@ -21,7 +21,7 @@ public final class GraphSymbolBinder {
     private static final TypeReference<Map<String,Object>> MAP = new TypeReference<>() {};
     private final NodeSource nodeSource;
 
-    public GraphSymbolBinder(JdbcTemplate jdbc, ObjectMapper mapper) {
+    public GraphSymbolBinder(JdbcTemplate jdbc, JsonMapper mapper) {
         this((generation,file)->jdbc.query("SELECT id,node_type,symbol,qualified_name,start_line,end_line,metadata::text FROM code_nodes WHERE generation_id=? AND file_path=? ORDER BY start_line,end_line,id",
                 (rs,n) -> { Map<String,Object> metadata; try { metadata=mapper.readValue(rs.getString(7),MAP); } catch(Exception ignored) { metadata=Map.of(); }
                     return new NodeCandidate(rs.getLong(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getInt(5),rs.getInt(6),metadata); },generation,file));

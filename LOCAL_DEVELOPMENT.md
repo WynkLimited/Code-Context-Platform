@@ -21,7 +21,7 @@ Useful commands:
 
 ```sh
 docker compose logs -f app
-docker compose exec postgres psql -U code_context -d code_context -c 'select owner,name from repositories;'
+docker compose exec postgres psql -U code_context_app -d code_context -c 'select owner,name from repositories;'
 docker compose down                 # keep named volumes
 docker compose down -v              # delete all local platform data
 ```

@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
 
 public class JavaKotlinStructureParser implements SourceStructureParser {
 
-    public static final String VERSION = "1.1.0";
+    public static final String VERSION = "1.2.0";
 
     private static final Pattern METHOD_HEAD = Pattern.compile(
             "(?m)^\\s*(?:public|protected)\\s+(?:static\\s+|final\\s+|synchronized\\s+)*"

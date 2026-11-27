@@ -403,4 +403,107 @@ class ContractCompatibilityEngineTest {
                 ContractIdentity.ofConfig("feature.campaign.enabled"), ContractType.CONFIG, "boolean");
         assertEquals(Compatibility.UNKNOWN, only(List.of(config), List.of()).compatibility());
     }
+
+    @Test
+    void structuredRestOptionalResponseFieldAdditionIsCompatible() {
+        ContractIdentity endpoint = ContractIdentity.ofRest("GET", "/campaign/{id}");
+        var before = new ContractExport(endpoint, ContractType.REST, "openapi.json", "GET", "one",
+                Map.of("signature", "restOp{params=path:id:required:string;request=;response=id:string:required}",
+                        "framework", "openapi"));
+        var after = new ContractExport(endpoint, ContractType.REST, "openapi.json", "GET", "two",
+                Map.of("signature", "restOp{params=path:id:required:string;request=;response=id:string:required,tag:string:optional}",
+                        "framework", "openapi"));
+
+        ContractChange change = only(List.of(before), List.of(after));
+        assertEquals(ContractChangeType.ENDPOINT_SIGNATURE_CHANGED, change.changeType());
+        assertEquals(Compatibility.BACKWARD_COMPATIBLE, change.compatibility());
+        assertTrue(change.detail().contains("response field"), change.detail());
+    }
+
+    @Test
+    void structuredRestRequiredRequestFieldAdditionIsBreaking() {
+        ContractIdentity endpoint = ContractIdentity.ofRest("POST", "/campaign");
+        var before = new ContractExport(endpoint, ContractType.REST, "openapi.json", "POST", "one",
+                Map.of("signature", "restOp{params=;request=name:string:required;response=id:string:required}",
+                        "framework", "openapi"));
+        var after = new ContractExport(endpoint, ContractType.REST, "openapi.json", "POST", "two",
+                Map.of("signature", "restOp{params=;request=name:string:required,owner:string:required;response=id:string:required}",
+                        "framework", "openapi"));
+
+        ContractChange change = only(List.of(before), List.of(after));
+        assertEquals(Compatibility.BREAKING, change.compatibility());
+        assertTrue(change.detail().contains("request field"), change.detail());
+    }
+
+    @Test
+    void structuredRestResponseFieldRemovalIsBreakingWhileRequestRemovalIsNot() {
+        ContractIdentity endpoint = ContractIdentity.ofRest("PUT", "/campaign/{id}");
+        var responseRemoval = only(
+                List.of(new ContractExport(endpoint, ContractType.REST, "openapi.json", "PUT", "one",
+                        Map.of("signature", "restOp{params=;request=;response=id:string:required,name:string:optional}",
+                                "framework", "openapi"))),
+                List.of(new ContractExport(endpoint, ContractType.REST, "openapi.json", "PUT", "two",
+                        Map.of("signature", "restOp{params=;request=;response=id:string:required}",
+                                "framework", "openapi"))));
+        assertEquals(Compatibility.BREAKING, responseRemoval.compatibility());
+
+        var requestRemoval = only(
+                List.of(new ContractExport(endpoint, ContractType.REST, "openapi.json", "PUT", "one",
+                        Map.of("signature", "restOp{params=;request=name:string:optional;response=id:string:required}",
+                                "framework", "openapi"))),
+                List.of(new ContractExport(endpoint, ContractType.REST, "openapi.json", "PUT", "two",
+                        Map.of("signature", "restOp{params=;request=;response=id:string:required}",
+                                "framework", "openapi"))));
+        assertEquals(Compatibility.BACKWARD_COMPATIBLE, requestRemoval.compatibility());
+    }
+
+    @Test
+    void kafkaAvroOptionalFieldAdditionIsCompatibleWhileRemovalBreaksConsumers() {
+        ContractIdentity topic = ContractIdentity.ofKafka("campaign-events");
+        var before = new ContractExport(topic, ContractType.KAFKA, "application.properties", "campaign-events",
+                "one", Map.of("signature", "fields{id:string:required}", "schema", "v1", "direction", "producer"));
+        var afterAdd = new ContractExport(topic, ContractType.KAFKA, "application.properties", "campaign-events",
+                "two", Map.of("signature", "fields{id:string:required,tag:string:optional}", "schema", "v2", "direction", "producer"));
+        assertEquals(Compatibility.BACKWARD_COMPATIBLE, only(List.of(before), List.of(afterAdd)).compatibility());
+
+        var afterRemove = new ContractExport(topic, ContractType.KAFKA, "application.properties", "campaign-events",
+                "three", Map.of("signature", "fields{}", "schema", "v3", "direction", "producer"));
+        assertEquals(Compatibility.BREAKING, only(List.of(before), List.of(afterRemove)).compatibility());
+    }
+
+    @Test
+    void kafkaAvroRequiredFieldAdditionAndTypeChangeBreakConsumers() {
+        ContractIdentity topic = ContractIdentity.ofKafka("campaign-events");
+        var before = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "one", Map.of("signature", "fields{id:string:required}", "schema", "v1", "direction", "producer"));
+        var requiredAdd = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "two", Map.of("signature", "fields{id:string:required,owner:string:required}", "schema", "v2", "direction", "producer"));
+        assertEquals(Compatibility.BREAKING, only(List.of(before), List.of(requiredAdd)).compatibility());
+
+        var typeChange = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "three", Map.of("signature", "fields{id:long:required}", "schema", "v3", "direction", "producer"));
+        assertEquals(Compatibility.BREAKING, only(List.of(before), List.of(typeChange)).compatibility());
+
+        var arrayTypeChange = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "four", Map.of("signature", "fields{id:string:required,tags:array<long>:optional}",
+                        "schema", "v4", "direction", "producer"));
+        var beforeArray = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.avsc", "campaign-events",
+                "zero", Map.of("signature", "fields{id:string:required,tags:array<string>:optional}",
+                        "schema", "v0", "direction", "producer"));
+        assertEquals(Compatibility.BREAKING, only(List.of(beforeArray), List.of(arrayTypeChange)).compatibility());
+    }
+
+    @Test
+    void kafkaProtobufFieldNumberChangeRemainsBreaking() {
+        ContractIdentity topic = ContractIdentity.ofKafka("campaign-events");
+        var before = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.proto", "campaign-events",
+                "one", Map.of("signature", "message in.wynk.Campaign{1:id:TYPE_STRING:LABEL_OPTIONAL}",
+                        "schema", "v1", "direction", "producer"));
+        var after = new ContractExport(topic, ContractType.KAFKA, "schemas/campaign.proto", "campaign-events",
+                "two", Map.of("signature", "message in.wynk.Campaign{2:id:TYPE_STRING:LABEL_OPTIONAL}",
+                        "schema", "v2", "direction", "producer"));
+        ContractChange change = only(List.of(before), List.of(after));
+        assertEquals(ContractChangeType.FIELD_NUMBER_CHANGED, change.changeType());
+        assertTrue(change.isBreaking());
+    }
 }

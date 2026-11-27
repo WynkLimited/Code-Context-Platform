@@ -5,6 +5,7 @@ import com.wynk.codecontext.port.contract.PostgresContractIndexStore;
 import com.wynk.codecontext.port.contract.PostgresContractIndexStore.StoredIndex;
 import com.wynk.codecontext.port.contract.compat.CompatibilityModels.ContractChange;
 import com.wynk.codecontext.port.contract.graph.ContractGraphModels.*;
+import com.wynk.codecontext.port.contract.source.KotlinAbiSurface;
 import com.wynk.codecontext.port.model.ProductModels.RepoRef;
 import com.wynk.codecontext.port.gnostic.GnosticModels.Confidence;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -138,7 +139,17 @@ WHERE a.team=? AND r.enabled=true AND r.id<>? ORDER BY r.owner,r.name LIMIT ?
         if(after==null||before==null)return List.of();
         UUID oldGeneration=generation(providerId,before.commit()),newGeneration=generation(providerId,after.commit());
         if(oldGeneration==null||newGeneration==null)return List.of();
-        List<String> removed=jdbc.query("SELECT old.symbol_key FROM semantic_symbols old WHERE old.generation_id=? AND old.symbol_kind IN ('METHOD','CONSTRUCTOR') AND old.resolution_status='RESOLVED' AND NOT EXISTS(SELECT 1 FROM semantic_symbols newer WHERE newer.generation_id=? AND newer.symbol_key=old.symbol_key AND newer.resolution_status='RESOLVED') ORDER BY old.symbol_key",(rs,n)->rs.getString(1),oldGeneration,newGeneration);
+        LinkedHashSet<String> removed=new LinkedHashSet<>(jdbc.query("""
+SELECT old.symbol_key FROM semantic_symbols old
+ WHERE old.generation_id=? AND old.symbol_kind IN ('METHOD','CONSTRUCTOR') AND old.resolution_status='RESOLVED'
+   AND NOT EXISTS(SELECT 1 FROM semantic_symbols newer WHERE newer.generation_id=? AND newer.symbol_key=old.symbol_key AND newer.resolution_status='RESOLVED')
+ ORDER BY old.symbol_key
+""",(rs,n)->rs.getString(1),oldGeneration,newGeneration));
+        // Kotlin ABI binary removals (including return-descriptor-only breaks) map onto the same V5 keys.
+        for(ContractChange change:changes) {
+            if(change.identity().type()!=ContractType.MAVEN)continue;
+            removed.addAll(KotlinAbiSurface.removedSemanticKeys(change.beforeSignature(),change.afterSignature()));
+        }
         if(removed.isEmpty())return List.of();
         var impacts=new ArrayList<SemanticMethodImpact>();
         for(Repo consumer:candidates) {
@@ -149,11 +160,14 @@ WHERE a.team=? AND r.enabled=true AND r.id<>? ORDER BY r.owner,r.name LIMIT ?
                 String artifact=change.identity().namespace()+":"+change.identity().name();
                 if(!isIndexedProviderArtifact(providerId,newGeneration,change.identity().namespace(),change.identity().name(),change.identity().version()))continue;
                 if(!consumerIndex.imports().stream().anyMatch(i->i.type()==ContractType.MAVEN&&i.canonicalKey().equals(change.contractKey())))continue;
+                boolean kotlinAbiPresent=hasKotlinAbi(change.beforeSignature())||hasKotlinAbi(change.afterSignature());
+                boolean kotlinMetadataIncomplete=Boolean.FALSE.equals(metadataFlag(before,change,"kotlinMetadataComplete"))
+                        ||Boolean.FALSE.equals(metadataFlag(after,change,"kotlinMetadataComplete"));
                 for(String key:removed) {
                     List<SemanticMethodImpact> matches=jdbc.query("""
 SELECT ?,?,r.owner||'/'||r.name,site.commit_sha,site.file_path,site.caller_class,site.caller_method,
        site.start_line,site.end_line,site.invocation,target.declaring_type,target.signature,
-       site.dependency_artifact,site.dependency_version,edge.confidence,edge.evidence
+       site.dependency_artifact,site.dependency_version,edge.confidence,edge.evidence,site.extractor_version
 FROM semantic_call_edges edge
 JOIN semantic_call_sites site ON site.id=edge.call_site_id
 JOIN semantic_symbols caller ON caller.id=edge.caller_symbol_id AND caller.repository_id=edge.repository_id AND caller.generation_id=edge.generation_id
@@ -163,7 +177,7 @@ JOIN team_repository_access access ON access.repository_id=r.id
 WHERE edge.repository_id=? AND edge.generation_id=? AND site.generation_id=? AND site.commit_sha=?
   AND edge.resolution_status='RESOLVED' AND caller.resolution_status='RESOLVED' AND target.resolution_status='RESOLVED'
   AND caller.symbol_key=site.caller_class||'#'||site.caller_method
-  AND target.symbol_kind IN ('METHOD','EXTERNAL_METHOD')
+  AND target.symbol_kind IN ('METHOD','CONSTRUCTOR','EXTERNAL_METHOD')
   AND target.symbol_key=? AND site.dependency_artifact LIKE ?
   AND access.team=?
   AND EXISTS(SELECT 1 FROM maven_module_dependencies dependency
@@ -172,17 +186,55 @@ WHERE edge.repository_id=? AND edge.generation_id=? AND site.generation_id=? AND
       AND dependency.group_id||':'||dependency.artifact_id||':'||dependency.version=site.dependency_artifact
       AND dependency.version=site.dependency_version AND dependency.artifact_path IS NOT NULL)
   AND EXISTS(SELECT 1 FROM index_generations published WHERE published.id=edge.generation_id AND published.published=true)
-""",(rs,n)->new SemanticMethodImpact(after.repoKey(),after.commit(),consumer.ref().key(),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getInt(8),rs.getInt(9),rs.getString(10),rs.getString(11),rs.getString(12),null,null,rs.getString(13),rs.getString(14),rs.getDouble(15),rs.getString(16),"POTENTIAL_UPGRADE_IMPACT","CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN","DIRECT","RESOLVED",freshness.get(consumer.id).name(),"PUBLISHED_V5_EDGE","JAVAPARSER_SYMBOL_SOLVER; MAVEN_RESOLVER; V5_SEMANTIC_CALL_EDGE",false),after.repoKey(),after.commit(),consumer.id,maybe.get().generationId(),maybe.get().generationId(),consumerIndex.commit(),key,artifact+":%",team);
+""",(rs,n)->{
+                        String extractor=rs.getString(17);
+                        boolean kotlinEdge=extractor!=null&&extractor.startsWith("kotlin-compiler");
+                        String completeness=kotlinMetadataIncomplete?"INCOMPLETE_KOTLIN_METADATA"
+                                :kotlinEdge||kotlinAbiPresent?"PUBLISHED_KOTLIN_JVM_EDGE":"PUBLISHED_V5_EDGE";
+                        String provenance=kotlinEdge
+                                ?"KOTLIN_COMPILER_JVM; MAVEN_RESOLVER; V5_SEMANTIC_CALL_EDGE; KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"
+                                :(kotlinAbiPresent
+                                ?"JAVAPARSER_SYMBOL_SOLVER; MAVEN_RESOLVER; V5_SEMANTIC_CALL_EDGE; KOTLIN_ABI_BINARY; KOTLIN_SOURCE_COMPATIBILITY_UNKNOWN"
+                                :"JAVAPARSER_SYMBOL_SOLVER; MAVEN_RESOLVER; V5_SEMANTIC_CALL_EDGE");
+                        return new SemanticMethodImpact(after.repoKey(),after.commit(),consumer.ref().key(),rs.getString(4),rs.getString(5),rs.getString(6),rs.getString(7),rs.getInt(8),rs.getInt(9),rs.getString(10),rs.getString(11),rs.getString(12),null,null,rs.getString(13),rs.getString(14),rs.getDouble(15),rs.getString(16),"POTENTIAL_UPGRADE_IMPACT","CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN","DIRECT","RESOLVED",freshness.get(consumer.id).name(),completeness,provenance,false);
+                    },after.repoKey(),after.commit(),consumer.id,maybe.get().generationId(),maybe.get().generationId(),consumerIndex.commit(),key,artifact+":%",team);
                     for(var match:matches) {
-                        String current=Objects.equals(match.dependencyVersion(),change.identity().version())
-                                ?"DEPENDENCY_VERSION_MATCHES_PROVIDER_HEAD"
-                                :match.dependencyVersion()==null?"DEPENDENCY_VERSION_UNKNOWN":"DEPENDENCY_REMAINS_PINNED_TO_OLDER_OR_DIFFERENT_RELEASE";
-                        impacts.add(new SemanticMethodImpact(match.providerRepository(),match.providerCommit(),match.consumerRepository(),match.consumerCommit(),match.filePath(),match.callerClass(),match.callerMethod(),match.startLine(),match.endLine(),match.invocation(),match.providerClass(),match.oldSignature(),change.beforeSignature(),change.afterSignature(),match.dependencyArtifact(),match.dependencyVersion(),match.confidence(),match.evidence(),match.classification(),current,match.relationship(),match.resolutionState(),match.freshness(),match.analysisCompleteness(),match.provenance(),match.blocking()));
+                        String baselineVersion=mavenVersion(before,change);
+                        String current=currentCompatibility(match.dependencyVersion(),baselineVersion,change.identity().version());
+                        impacts.add(new SemanticMethodImpact(match.providerRepository(),match.providerCommit(),match.consumerRepository(),match.consumerCommit(),match.filePath(),match.callerClass(),match.callerMethod(),match.startLine(),match.endLine(),match.invocation(),match.providerClass(),match.oldSignature(),change.beforeSignature(),change.afterSignature(),match.dependencyArtifact(),match.dependencyVersion(),match.confidence(),match.evidence(),match.classification(),current,match.relationship(),match.resolutionState(),match.freshness(),match.analysisCompleteness(),match.provenance(),false));
                     }
                 }
             }
         }
+        impacts.sort(Comparator
+                .comparing(SemanticMethodImpact::consumerRepository)
+                .thenComparing(SemanticMethodImpact::filePath,Comparator.nullsLast(String::compareTo))
+                .thenComparing(SemanticMethodImpact::callerClass,Comparator.nullsLast(String::compareTo))
+                .thenComparing(SemanticMethodImpact::startLine));
         return List.copyOf(impacts);
+    }
+
+    private static boolean hasKotlinAbi(String signature) {
+        return signature!=null&&signature.contains(KotlinAbiSurface.BINARY_SIGNATURE_PREFIX);
+    }
+
+    private static Object metadataFlag(ContractIndex index,ContractChange change,String key) {
+        if(index==null||change==null)return null;
+        return index.findExports(change.contractKey()).stream().map(export->export.metadata().get(key)).filter(Objects::nonNull).findFirst().orElse(null);
+    }
+
+    private static String mavenVersion(ContractIndex index,ContractChange change) {
+        List<String> versions=index.exportsOf(ContractType.MAVEN).stream()
+                .filter(export->export.canonicalKey().equals(change.contractKey()))
+                .map(export->export.contract().version()).filter(Objects::nonNull).distinct().toList();
+        return versions.size()==1?versions.get(0):null;
+    }
+
+    static String currentCompatibility(String dependencyVersion,String baselineVersion,String providerHeadVersion) {
+        if(dependencyVersion==null)return "DEPENDENCY_VERSION_UNKNOWN";
+        if(Objects.equals(dependencyVersion,providerHeadVersion))return "DEPENDENCY_VERSION_MATCHES_PROVIDER_HEAD";
+        if(baselineVersion!=null&&Objects.equals(dependencyVersion,baselineVersion))return "CURRENT_DEPENDENCY_NOT_PROVEN_BROKEN";
+        return "DEPENDENCY_REMAINS_PINNED_TO_OLDER_OR_DIFFERENT_RELEASE";
     }
 
     /** An artifact is attributed to a provider only when its published exact generation declares
@@ -199,7 +251,7 @@ SELECT EXISTS(SELECT 1 FROM maven_module_classpaths
         List<UUID> ids=jdbc.query("""
 SELECT g.id FROM index_generations g
 WHERE g.repository_id=? AND g.commit_sha=?
-  AND (g.published=true OR EXISTS(SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED'))
+  AND (g.published=true OR EXISTS(SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.generation_id=g.id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED'))
 ORDER BY g.generation DESC LIMIT 1
 """,(rs,n)->rs.getObject(1,UUID.class),repository,commit);
         return ids.isEmpty()?null:ids.get(0);

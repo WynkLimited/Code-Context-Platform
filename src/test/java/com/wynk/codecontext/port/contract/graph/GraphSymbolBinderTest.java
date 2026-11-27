@@ -29,6 +29,18 @@ class GraphSymbolBinderTest {
         assertEquals(7L,result.exports().get(0).metadata().get("boundCodeNodeId"));
     }
 
+    @Test void ambiguousBindingReevaluatesToResolvedWhenOverloadBecomesUnique() {
+        var ambiguous=new GraphSymbolBinder((generation,file)->List.of(
+                node(1,"METHOD","getCampaign",10,10), node(2,"METHOD","getCampaign",10,10)));
+        var first=ambiguous.bind(index(Map.of("sourceRange",Map.of("startLine",10))),UUID.randomUUID());
+        assertEquals("AMBIGUOUS",first.exports().get(0).metadata().get("graphBindingStatus"));
+
+        var resolved=new GraphSymbolBinder((generation,file)->List.of(node(1,"METHOD","getCampaign",10,12)));
+        var second=resolved.bind(index(Map.of("sourceRange",Map.of("startLine",10))),UUID.randomUUID());
+        assertEquals("RESOLVED",second.exports().get(0).metadata().get("graphBindingStatus"));
+        assertEquals(1L,second.exports().get(0).metadata().get("boundCodeNodeId"));
+    }
+
     private static GraphSymbolBinder.NodeCandidate node(long id,String type,String symbol,int start,int end) {
         return new GraphSymbolBinder.NodeCandidate(id,type,symbol,symbol,start,end,Map.of("id","g"+id));
     }

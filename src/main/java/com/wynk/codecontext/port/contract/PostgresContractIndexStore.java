@@ -1,7 +1,7 @@
 package com.wynk.codecontext.port.contract;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
 import com.wynk.codecontext.port.contract.ContractModels.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -14,10 +14,10 @@ public final class PostgresContractIndexStore {
     private static final TypeReference<Map<String,Object>> OBJECT_MAP = new TypeReference<>() {};
     private static final TypeReference<Map<String,String>> STRING_MAP = new TypeReference<>() {};
     private final JdbcTemplate jdbc;
-    private final ObjectMapper mapper;
+    private final JsonMapper mapper;
     private final Map<String,String> currentExtractorVersions;
 
-    public PostgresContractIndexStore(JdbcTemplate jdbc, ObjectMapper mapper, ContractIndexBuilder builder) {
+    public PostgresContractIndexStore(JdbcTemplate jdbc, JsonMapper mapper, ContractIndexBuilder builder) {
         this.jdbc = jdbc;
         this.mapper = mapper;
         var versions = new TreeMap<String,String>();
@@ -35,7 +35,7 @@ public final class PostgresContractIndexStore {
         List<Header> rows=jdbc.query("""
 SELECT g.id,g.repository_id,g.generation,g.commit_sha,r.owner,r.name,r.default_branch,m.index_schema_version,m.extractor_versions::text,m.compatibility_rules_version,m.generator_version,m.generated_at,m.index_hash
 FROM index_generations g JOIN repositories r ON r.id=g.repository_id JOIN contract_index_metadata m ON m.generation_id=g.id
-WHERE g.repository_id=? AND g.generation < ? AND EXISTS (SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED')
+WHERE g.repository_id=? AND g.repository_revision=r.configuration_revision AND g.generation < ? AND EXISTS (SELECT 1 FROM index_jobs j WHERE j.repository_id=g.repository_id AND j.generation_id=g.id AND j.commit_sha=g.commit_sha AND j.state='SUCCEEDED')
 ORDER BY g.generation DESC LIMIT 1
 """, this::header, repositoryId, beforeGeneration);
         return rows.stream().findFirst().map(this::readIndex);
@@ -51,12 +51,23 @@ ORDER BY g.generation DESC LIMIT 1
         if (!ContractModels.INDEX_SCHEMA_VERSION.equals(index.indexSchemaVersion())
                 || !ContractModels.GENERATOR_VERSION.equals(index.generatorVersion())
                 || !ContractModels.COMPATIBILITY_RULES_VERSION.equals(index.compatibilityRulesVersion())) return IndexFreshness.STALE;
-        if (!index.extractorVersions().keySet().equals(currentExtractorVersions.keySet())) return IndexFreshness.STALE;
+        // Repository-specific unsupported build coverage is not an installed extractor version.
+        // Keep it visible via hasCoverageGaps without making every subsequent reindex stale.
+        var installedKeys=new HashSet<>(index.extractorVersions().keySet());
+        index.extractorVersions().forEach((key,value)->{
+            if(isRepositoryCoverageGap(key,value))installedKeys.remove(key);
+        });
+        if (!installedKeys.equals(currentExtractorVersions.keySet())) return IndexFreshness.STALE;
         for (var recorded : index.extractorVersions().entrySet()) {
+            if(isRepositoryCoverageGap(recorded.getKey(),recorded.getValue()))continue;
             String current=currentExtractorVersions.get(recorded.getKey());
             if (current==null || !Objects.equals(current,recorded.getValue()) || recorded.getValue().startsWith("failed:")) return IndexFreshness.STALE;
         }
         return IndexFreshness.CURRENT;
+    }
+
+    private static boolean isRepositoryCoverageGap(String key,String version) {
+        return "gradle-dependencies".equals(key) && "unavailable:NOT_IMPLEMENTED".equals(version);
     }
 
     public boolean hasCoverageGaps(StoredIndex stored) {
