@@ -154,7 +154,7 @@ jobs:
           "$RUNNER_TEMP/graphify/bin/pip" install --no-cache-dir 'graphifyy[ollama]==0.9.118'
           echo "$RUNNER_TEMP/graphify/bin" >> "$GITHUB_PATH"
           echo "GRAPHIFY_COMMAND=$RUNNER_TEMP/graphify/bin/graphify" >> "$GITHUB_ENV"
-      - name: PostgreSQL V1-V18 shared-library impact integration
+      - name: PostgreSQL V1-V19 shared-library impact integration
         run: |
           set -o pipefail
           mvn --batch-mode --no-transfer-progress -Ppostgres-integration verify 2>&1 | tee target/postgres-integration-maven.log
@@ -162,9 +162,11 @@ jobs:
         run: |
           set -euo pipefail
           service="${{ job.services.postgres.id }}"
+          read -r acceptance_schema < target/postgres-acceptance-schema.txt
+          [[ "$acceptance_schema" =~ ^shared_impact_[0-9a-f]{32}$ ]]
           docker exec "$service" mkdir -p /tmp/ccp-drill
           docker cp scripts/. "$service:/tmp/ccp-drill"
-          docker exec -e CI=true -e DATABASE_USER -e DATABASE_PASSWORD "$service" \
+          docker exec -e CI=true -e DATABASE_USER -e DATABASE_PASSWORD -e "CCP_ACCEPTANCE_SCHEMA=$acceptance_schema" "$service" \
             bash /tmp/ccp-drill/ci-postgres-restore-drill.sh 2>&1 | tee target/restore-drill.log
       - name: Stop Zoekt service
         if: always()
@@ -374,6 +376,7 @@ jobs:
             target/restore-drill.log
             target/script-tests.log
             target/acceptance-run-metadata.txt
+            target/postgres-acceptance-schema.txt
             target/lease-process-logs/**
             target/replica-process-logs/**
           if-no-files-found: warn

@@ -21,14 +21,14 @@ Status vocabulary (this ledger):
 
 ## Resume checkpoint
 
-**Current master-directive phase:** Moving from Phase1 lifecycle/onboarding implementation into Phase2 genuine incremental context creation. Automatic onboarding, controlled-provider App authorization/revocation, durable missed-push recovery and stable-identity lifecycle transitions have accepted CI evidence through cb8de66. Published configuration discovery passed local acceptance; its exact-SHA CI is pending. Live GitHub provisioning/delivery certification remains externally blocked by approved credentials/callback availability. Preserve the accepted baseline while implementing Phase2; later phases remain actionable.
+**Current master-directive phase:** Moving from Phase1 lifecycle/onboarding implementation into Phase2 genuine incremental context creation. Automatic onboarding, controlled-provider App authorization/revocation, durable missed-push recovery and stable-identity lifecycle transitions have accepted CI evidence through cb8de66. Published configuration discovery passed local acceptance; exact-SHA CI45881198900 failed the subsequent restore drill because the isolated acceptance schema was dropped before backup. The current repair hands that populated schema to the drill and retains all population/fingerprint checks. Live GitHub provisioning/delivery certification remains externally blocked by approved credentials/callback availability. Preserve the accepted baseline while implementing Phase2; later phases remain actionable.
 
-**Overall:** **NOT READY FOR PRODUCTION** — live-provider certification, genuine incremental Graphify, complete reactor/Gradle intelligence, general cross-repository method chains, remaining language/contract coverage and required operational/deployment/benchmark/client acceptance remain open. Earlier chunk reuse/provenance and specific application recovery assertions have passed; do not reopen those without new evidence.
+**Overall:** **NOT READY FOR PRODUCTION** — live-provider certification, complete incremental context/contract maintenance, complete reactor/Gradle intelligence, general cross-repository method chains, remaining language/contract coverage and required operational/deployment/benchmark/client acceptance remain open. Earlier chunk reuse/provenance and specific application recovery assertions have passed; do not reopen those without new evidence.
 
 **Next executable actions (mandatory directive order):**
 
-1. Complete integrated automatic onboarding, initial indexing, separately authorized webhook provisioning and repository lifecycle.
-2. Genuine incremental Graphify processing, followed by OS isolation before enabling new repository-controlled execution.
+1. Finish exact-commit validation of the current incremental Graphify and populated-schema restore batch.
+2. Incremental contract/dependency maintenance and enforced OS isolation before enabling repository-controlled execution.
 3. Complete Maven reactors and safe Gradle resolution, guided by early read-only reference inspection.
 4. General bounded cross-repository method chains and independent parity acceptance.
 5. Remaining contracts/security, representative performance/accuracy, real distributed/storage/PITR drills and actual advertised clients.
@@ -44,7 +44,7 @@ Docker Desktop now runs locally with isolated owned fixtures; lack of a daemon i
 | ID | Category | Requirement | Status | Implementation | Evidence / next action |
 |---|---|---|---|---|---|
 | CTX-1 | Text index | Zoekt exact/regex search with evidence | VERIFIED_PRODUCTION_READY | `ZoektSearchService`, `ZoektIndexer` | CI b2346ee SharedLibrary IT |
-| CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | CI b2346ee |
+| CTX-2 | Code graph | Graphify → PostgreSQL nodes/edges | VERIFIED_PRODUCTION_READY | `GraphifyIndexer`, `GraphifyPostgresIT` | Prior full extraction accepted; new incremental AST/global relink path awaits current exact-commit CI |
 | CTX-3 | Contract/dependency index | REST/Kafka/Maven/proto contracts + links | PARTIALLY_IMPLEMENTED | extractors + shared IT links | Nested+cross-file OpenAPI `$ref` (1.3.0); Avro MCP evolution @ f905835 |
 | CTX-4 | Semantic retrieval | Ollama embeddings + pgvector MCP | VERIFIED_PRODUCTION_READY | indexing chunks + `semantic_search` | CI a176f6e/b2346ee real Ollama; all subsequent seven-case PG gates retained |
 | CTX-4A | Semantic chunk construction | Accurate source ranges, bounded structural/heading chunks | PARTIALLY_IMPLEMENTED | `JavaSourceText`, `BoundedTextChunks`, `IndexingService` | Original design PDF pp. 3–4; Java/source ranges, generator invalidation, 60-line fallback and Markdown/large YAML sections service-verified through dbffc97; tiny-piece merges and token-aware/blank-line splitting remain open |
@@ -129,7 +129,7 @@ Docker Desktop now runs locally with isolated owned fixtures; lack of a daemon i
 | Blocker | Required operator action | Affected IDs |
 |---|---|---|
 | Production service/volume environment | Supply staging services and persistence; local Docker absence is covered by mandatory CI for fixture acceptance | OPS-K8S / full application DR |
-| OS cgroup/seccomp sandbox | Platform/container policy | SEC-SANDBOX |
+| Production worker kernel/container policy certification | Supply the approved execution environment; launcher/enforcement implementation remains an actionable code gap, not an external-only blocker | SEC-SANDBOX |
 | Isolated PG for PITR | Provision restore environment | OPS-BACKUP |
 | K8s staging cluster | Deploy smoke | OPS-K8S |
 | Real Cursor/Claude/Windsurf clients | Client lab access | MCP client compatibility |
@@ -600,3 +600,17 @@ Accepted App-revocation baseline cb8de66556d1ee2b03deca903ac8999ac9435429 passed
 
 
 Final discovery validation:352 Java21 unit/regression cases and16 real-service integration cases passed, zero failures/errors/skips (`target/configuration-discovery-unit.log`, `target/configuration-discovery-full-acceptance.log`). The full run exercised all four unchanged named shared-impact methods plus new metadata assertions in the lifecycle scenario, including class shutdown/schema cleanup. YAML parsing, all inline Python compilation, actual XML report-gate execution (368 cases), complete diff review and `git diff --check` passed. Exact-SHA CI remains pending; expected368 cases. Local pinned-Graphify warm-state probe separately demonstrated1of2 actual files extracted versus2of2 cold, with exact normalized node/link equality across relocated roots; this is implementation research, not a claim that the production pipeline is already incremental. Continue Phase2 using generation-scoped isolated state and preserve all existing acceptance.
+
+
+## Core implementation batch: incremental Graphify and populated-schema restore
+
+**Status: IMPLEMENTED_UNVERIFIED** pending the consolidated integration run and exact-commit CI. Native Graphify whole-graph incremental state was experimentally unsafe for rename/deletion; old relationships survived. The implementation instead reuses attested AST caches and performs global relationship reconstruction. Small real-CLI edit, rename, deletion and move probes matched clean extraction with measured cache hits. This is extraction reuse, not merely unchanged SQL-row copying.
+
+Implemented generation-isolated immutable sources/output/HOME; published-baseline/revision/engine/digest eligibility; unique-blob rename tracking; conservative global input invalidation; bounded cache storage; source inode reuse; persisted native extraction provenance (forward V19); and durable generation-workspace retention cleanup. Changed source files never overwrite the published source inode. A failed/unpublished candidate is never selected as the published baseline. No old resolved graph is copied.
+
+Current evidence: ten focused Java tests passed; six shell regression tests passed; CI YAML parsed; actual PostgreSQL17 logical backup/restore preserved the isolated acceptance tables and all public tables, Flyway, pgvector and pre-mutation witness (`target/restore-schema-handoff-drill.log`). The existing Graphify real-service gate now checks native cache reuse and exact clean native-node/edge equivalence across edit/delete/move/configuration changes while retaining vector and HTTP MCP assertions. Consolidated results will be recorded after execution; no acceptance or production-readiness claim follows from compilation alone.
+
+Remaining core work remains explicit: incremental contract/dependency maintenance; enforced OS execution isolation before untrusted Gradle execution; full Maven reactor/Gradle dependency intelligence; general cross-repository method-chain propagation/proposed-change parity. Live-provider/staging/client/operator certification and representative capacity/DR evidence remain distinct external prerequisites.
+
+
+Consolidated local validation completed on Java21: **359 unit/regression tests +16 real PostgreSQL/Graphify/Ollama/Zoekt/HTTP MCP integration cases =375 passed**, zero failures/errors/skips. The Graphify gate includes configuration invalidation as well as edit/delete/move equivalence and actual native cache hits. Separate-JVM consistency/recovery, all four shared impact/lifecycle cases, least privilege, retention, remote Maven, lease/process, onboarding, refresh and App revocation passed. All13 existing CI Python report gates passed against the actual XML. Six shell tests, YAML parsing, shell syntax and `git diff --check` passed. The post-suite actual PostgreSQL17 restore drill preserved public and populated isolated acceptance tables, Flyway, pgvector and the pre-mutation witness. Logs: `target/incremental-context-{unit,full-acceptance,restore-drill}.log`. Exact-commit GitHub CI remains pending until push; this evidence does not certify the other remaining PRD blocks.

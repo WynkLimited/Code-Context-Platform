@@ -47,7 +47,7 @@ import static org.mockito.Mockito.doThrow;
 // Later separate-JVM fixtures use isolated PostgreSQL schemas with the same real Zoekt service.
 // Do not leave this catalog's background orphan cleanup running against their shards.
 @org.springframework.test.annotation.DirtiesContext(classMode=org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_CLASS)
-@org.springframework.test.context.TestExecutionListeners(listeners=SharedLibraryImpactPostgresIT.SchemaCleanup.class,
+@org.springframework.test.context.TestExecutionListeners(listeners=SharedLibraryImpactPostgresIT.SchemaHandoff.class,
         mergeMode=org.springframework.test.context.TestExecutionListeners.MergeMode.MERGE_WITH_DEFAULTS)
 class SharedLibraryImpactPostgresIT {
     private static final String FIXTURE=UUID.randomUUID().toString().replace("-","");
@@ -103,16 +103,12 @@ class SharedLibraryImpactPostgresIT {
         System.setProperty("MAVEN_ALLOWED_REPOSITORIES", "integration=" + artifacts.toUri());
         System.setProperty("MAVEN_ALLOWED_HOSTS", "");
     }
-    public static final class SchemaCleanup extends org.springframework.test.context.support.AbstractTestExecutionListener {
+    public static final class SchemaHandoff extends org.springframework.test.context.support.AbstractTestExecutionListener {
         // afterTestClass callbacks run in reverse order: let DirtiesContext and all normal
-        // Spring listeners finish before removing this run's isolated schema.
+        // Spring listeners finish before handing the populated catalog to the restore drill.
         @Override public int getOrder(){return Integer.MIN_VALUE;}
-        @Override public void afterTestClass(org.springframework.test.context.TestContext ignored) {
-            var admin=new JdbcTemplate(new org.springframework.jdbc.datasource.DriverManagerDataSource(
-                    System.getenv().getOrDefault("DATABASE_URL","jdbc:postgresql://localhost:5432/code_context_test"),
-                    System.getenv().getOrDefault("DATABASE_USER","code_context"),System.getenv().getOrDefault("DATABASE_PASSWORD","integration_test_password")));
-            if(!"code_context_test".equals(admin.queryForObject("SELECT current_database()",String.class)))throw new IllegalStateException("refusing fixture cleanup outside code_context_test");
-            admin.execute("DROP SCHEMA IF EXISTS "+SCHEMA+" CASCADE");
+        @Override public void afterTestClass(org.springframework.test.context.TestContext ignored)throws Exception {
+            Files.writeString(Path.of("target/postgres-acceptance-schema.txt"),SCHEMA+"\n");
         }
     }
 
@@ -152,7 +148,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("18", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("19", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");

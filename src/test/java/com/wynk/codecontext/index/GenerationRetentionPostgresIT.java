@@ -51,7 +51,8 @@ class GenerationRetentionPostgresIT {
             UUID baseline=generation(jdbc,repo,2,false);
             UUID active=generation(jdbc,repo,3,true);
             var adapter=new CleanupAdapter();
-            var gc=new GenerationRetentionService(jdbc,leases,adapter,tx,30,10);
+            var graphState=org.mockito.Mockito.mock(GraphifyWorkspaceStore.class);
+            var gc=new GenerationRetentionService(jdbc,leases,adapter,tx,30,10,graphState);
             assertFalse(gc.collect(active,repo));
             assertFalse(gc.collect(baseline,repo));
             UUID running=jdbc.queryForObject("INSERT INTO index_jobs(repository_id,commit_sha,idempotency_key,state) VALUES(?,'pending',?,'RUNNING') RETURNING id",UUID.class,repo,UUID.randomUUID().toString());
@@ -82,8 +83,9 @@ class GenerationRetentionPostgresIT {
             assertEquals(1,jdbc.queryForObject("SELECT attempt FROM generation_cleanup_outbox WHERE generation_id=?",Integer.class,obsolete));
             jdbc.update("UPDATE generation_cleanup_outbox SET available_at=now()");
             adapter.fail=false;
-            var restarted=new GenerationRetentionService(jdbc,leases,adapter,tx,30,10);
+            var restarted=new GenerationRetentionService(jdbc,leases,adapter,tx,30,10,graphState);
             assertTrue(restarted.cleanOne());
+            org.mockito.Mockito.verify(graphState).remove(repo,obsolete);
             assertEquals("DONE",jdbc.queryForObject("SELECT state FROM generation_cleanup_outbox WHERE generation_id=?",String.class,obsolete));
             assertFalse(restarted.cleanOne());
 

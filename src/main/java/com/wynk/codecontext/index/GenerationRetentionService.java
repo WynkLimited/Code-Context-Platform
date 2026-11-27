@@ -35,14 +35,16 @@ public class GenerationRetentionService {
     private final TransactionTemplate transactions;
     private final int days;
     private final int batch;
+    private final GraphifyWorkspaceStore graphifyWorkspaces;
 
     public GenerationRetentionService(JdbcTemplate jdbc, RepositoryIndexLeaseManager leases, ZoektIndexer zoekt,
                                       PlatformTransactionManager tx,
                                       @Value("${GENERATION_RETENTION_DAYS:30}") int days,
-                                      @Value("${GENERATION_GC_BATCH_SIZE:10}") int batch) {
+                                      @Value("${GENERATION_GC_BATCH_SIZE:10}") int batch,GraphifyWorkspaceStore graphifyWorkspaces) {
         if (days < 1 || batch < 1 || batch > 100) throw new IllegalArgumentException("invalid generation retention policy");
         this.jdbc=jdbc; this.leases=leases; this.zoekt=zoekt;
         this.transactions=new TransactionTemplate(tx); this.days=days; this.batch=batch;
+        this.graphifyWorkspaces=graphifyWorkspaces;
     }
 
     @Scheduled(fixedDelayString="${GENERATION_GC_POLL_MS:60000}", initialDelayString="${GENERATION_GC_POLL_MS:60000}")
@@ -91,6 +93,7 @@ public class GenerationRetentionService {
             var item=work.get(0);
             try {
                 zoekt.removeGeneration(item.repository,item.generation);
+                graphifyWorkspaces.remove(item.repository.id(),item.generation);
                 jdbc.update("UPDATE generation_cleanup_outbox SET state='DONE',error=NULL,updated_at=now() WHERE generation_id=?",item.generation);
             } catch(Exception failure) {
                 // A worker crash rolls back this transaction; removal is safe to repeat for the exact generation UUID.

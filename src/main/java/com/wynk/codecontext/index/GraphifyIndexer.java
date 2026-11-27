@@ -27,22 +27,61 @@ public class GraphifyIndexer {
     private static final int MAX_GRAPH_LINKS=5_000_000;
     private static final int MAX_ERROR_LOG_CHARS=8_192;
     private final CodeContextProperties config; private final JsonMapper json; private final ObjectReader graphNodeReader; private final JdbcTemplate jdbc;
-    public GraphifyIndexer(CodeContextProperties c,JsonMapper m,JdbcTemplate j){config=c;json=m;graphNodeReader=m.reader().without(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);jdbc=j;}
+    private final GraphifyWorkspaceStore workspaces;
+    public GraphifyIndexer(CodeContextProperties c,JsonMapper m,JdbcTemplate j){config=c;json=m;graphNodeReader=m.reader().without(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);jdbc=j;workspaces=new GraphifyWorkspaceStore(c,m);}
+    public boolean buildAndPersist(com.wynk.codecontext.model.RepositoryRecord repository,UUID generation,String commit,long revision,UUID previous,
+            List<com.wynk.codecontext.repo.GitRepositoryManager.SourceFile> files)throws Exception {
+        if(!config.graphify().enabled())return false;
+        GraphifyWorkspaceStore.Baseline baseline=null;
+        if(previous!=null) {
+            var rows=jdbc.query("SELECT id,commit_sha FROM index_generations WHERE id=? AND repository_id=? AND repository_revision=? AND published",
+                    (rs,n)->new GraphifyWorkspaceStore.Baseline(rs.getObject(1,UUID.class),rs.getString(2)),previous,repository.id(),revision);
+            if(!rows.isEmpty())baseline=rows.getFirst();
+        }
+        try {
+            var workspace=workspaces.prepare(repository.id(),generation,commit,revision,baseline,files);
+            run(workspace.sources(),workspace.output(),workspace.home());
+            importGraph(workspace.output().resolve("graph.json"),generation);workspaces.complete(workspace);
+            var provenance=new java.util.LinkedHashMap<String,Object>();
+            provenance.put("mode",workspace.mode());provenance.put("baselineGeneration",baseline==null?null:baseline.generation());
+            provenance.put("sourceFilesReused",workspace.reusedSources());provenance.put("sourceFilesWritten",workspace.writtenSources());
+            provenance.put("changes",workspace.delta());provenance.put("relationshipProcessing","GLOBAL_RELINK_FROM_CACHED_AST");
+            try(var lines=Files.lines(workspace.output().resolve("process.log"))) {
+                var matcher=java.util.regex.Pattern.compile("AST cache: (\\d+)/(\\d+) files served from cache.*; (\\d+) to extract");
+                for(var line:lines.limit(100000).toList()) {var match=matcher.matcher(line);if(match.find()) {
+                    provenance.put("reportedCachedFiles",Integer.parseInt(match.group(1)));provenance.put("reportedScannedFiles",Integer.parseInt(match.group(2)));
+                    provenance.put("reportedExtractedFiles",Integer.parseInt(match.group(3)));break;
+                }}
+            }
+            jdbc.update("UPDATE index_generations SET graphify_provenance=?::jsonb WHERE id=?",json.writeValueAsString(provenance),generation);
+            return true;
+        }catch(Exception failure){try{workspaces.remove(repository.id(),generation);}catch(IOException cleanup){failure.addSuppressed(cleanup);}throw failure;}
+    }
     public boolean buildAndPersist(Path repo,UUID generation) throws Exception {
         if(!config.graphify().enabled())return false;
-        Path graph=repo.resolve("graphify-out/graph.json");List<String> cmd=List.of(config.graphify().command(),"update",repo.toString(),"--no-cluster");
-        Path log=repo.resolve(".graphify-index.log");
+        Path home=Files.createTempDirectory("graphify-runtime-");
+        try {run(repo,repo.resolve("graphify-out"),home);importGraph(repo.resolve("graphify-out/graph.json"),generation);return true;}
+        finally {try(var paths=Files.walk(home)){for(Path path:paths.sorted(java.util.Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}}
+    }
+    private void run(Path repo,Path output,Path home)throws Exception {
+        Path graph=output.resolve("graph.json");List<String> cmd=List.of(config.graphify().command(),"update",repo.toString(),"--no-cluster");
+        Files.createDirectories(output);Path log=output.resolve("process.log");
         ProcessBuilder builder=new ProcessBuilder(cmd).directory(repo.toFile()).redirectErrorStream(true).redirectOutput(log.toFile());
         com.wynk.codecontext.security.SubprocessHardening.scrubEnvironment(builder.environment());
-        var child=builder.environment();child.clear();child.put("PATH","/opt/graphify/bin:/usr/local/bin:/usr/bin:/bin");child.put("HOME",repo.toString());
+        var child=builder.environment();child.clear();child.put("PATH","/opt/graphify/bin:/usr/local/bin:/usr/bin:/bin");child.put("HOME",home.toString());
+        child.put("GRAPHIFY_OUT",output.toAbsolutePath().toString());child.put("PYTHONNOUSERSITE","1");child.put("PYTHONSAFEPATH","1");child.put("PYTHONHASHSEED","0");
         child.put("OLLAMA_HOST",System.getenv().getOrDefault("OLLAMA_BASE_URL","http://ollama:11434"));child.put("OLLAMA_BASE_URL",System.getenv().getOrDefault("OLLAMA_BASE_URL","http://ollama:11434"));child.put("GRAPHIFY_BACKEND","ollama");
         child.put("OLLAMA_MODEL",System.getenv().getOrDefault("GRAPHIFY_OLLAMA_MODEL","qwen3:0.6b"));
-        Process process=builder.start();boolean done=process.waitFor(Duration.ofMinutes(30).toMillis(),TimeUnit.MILLISECONDS);
-        if(!done){process.destroyForcibly();throw new IOException("Graphify exceeded 30 minute limit");}
-        if(process.exitValue()!=0)throw new IOException("Graphify failed: "+(Files.exists(log)?readLogPrefix(log):"no output"));
+        Process process=builder.start();
+        try {
+            if(!process.waitFor(Duration.ofMinutes(30).toMillis(),TimeUnit.MILLISECONDS))throw new IOException("Graphify exceeded 30 minute limit");
+            if(process.exitValue()!=0)throw new IOException("Graphify failed: "+(Files.exists(log)?readLogPrefix(log):"no output"));
+        }finally {
+            if(process.isAlive()){process.descendants().forEach(ProcessHandle::destroyForcibly);process.destroyForcibly();}
+        }
         if(!Files.isRegularFile(graph))throw new IOException("Graphify completed without graphify-out/graph.json");
         if(Files.size(graph)>MAX_GRAPH_BYTES)throw new IOException("Graphify JSON exceeded the 512 MiB limit");
-        importGraph(graph,generation);return true;
+        // Import only after the child has completed; publication remains the caller's fenced transaction.
     }
     private static String readLogPrefix(Path log)throws IOException{
         try(var reader=Files.newBufferedReader(log)){

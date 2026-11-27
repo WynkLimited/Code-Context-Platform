@@ -33,7 +33,7 @@ class GenerationRetentionReconcileTest {
             }
             @Override public void removeGeneration(RepositoryRecord repo,UUID generation) {}
         };
-        var service=new GenerationRetentionService(jdbc,mock(RepositoryIndexLeaseManager.class),zoekt,mock(PlatformTransactionManager.class),30,10);
+        var service=new GenerationRetentionService(jdbc,mock(RepositoryIndexLeaseManager.class),zoekt,mock(PlatformTransactionManager.class),30,10,mock(GraphifyWorkspaceStore.class));
         assertEquals(1,service.reconcileOrphanedShards());
         verify(jdbc).update(startsWith("INSERT INTO generation_cleanup_outbox"),eq(orphan),any(),eq("acme"),eq("payments"));
         verify(jdbc,never()).update(startsWith("INSERT INTO generation_cleanup_outbox"),eq(live),any(),any(),any());

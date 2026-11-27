@@ -142,6 +142,7 @@ WITH candidate AS (SELECT j.id FROM index_jobs j JOIN repositories r ON r.id=j.r
             UUID gen=jdbc.queryForObject("INSERT INTO index_generations(repository_id,commit_sha,generation,published,embedding_fingerprint,embedding_metadata,repository_revision) VALUES(?,?,?,false,?,?::jsonb,?) RETURNING id",(rs,n)->rs.getObject(1,UUID.class),repo.id(),sha,generation,embeddingSpace.fingerprint(),objectMapper.writeValueAsString(embeddingSpace.metadata()),repositorySnapshot.revision());
             com.wynk.codecontext.ops.IndexingLogContext.generation(gen);
             UUID previous=jdbc.query("SELECT id FROM index_generations WHERE repository_id=? AND published",(rs,n)->rs.getObject(1,UUID.class),repo.id()).stream().findFirst().orElse(null);
+            UUID graphifyBaseline=previous;
             if(previous!=null) {
                 var cached=contractIndexes.published(repo.id());
                 if(cached.isEmpty()||!previous.equals(cached.get().generationId())
@@ -155,11 +156,7 @@ WITH candidate AS (SELECT j.id FROM index_jobs j JOIN repositories r ON r.id=j.r
             }
             if(previous!=null)copyUnchangedFiles(previous,gen);
             if(props.graphify().enabled()) {
-                Path snapshot=Files.createTempDirectory("code-context-struct-");
-                try {
-                    for(var f:files){Path out=snapshot.resolve(f.path()).normalize();if(!out.startsWith(snapshot)||f.path().startsWith("/"))throw new IllegalArgumentException("unsafe repository path");Files.createDirectories(out.getParent());Files.writeString(out,f.content());}
-                    graphify.buildAndPersist(snapshot,gen);
-                } finally {try(var paths=Files.walk(snapshot)){paths.sorted(Comparator.reverseOrder()).forEach(p->{try{Files.deleteIfExists(p);}catch(Exception ignored){}});}}
+                graphify.buildAndPersist(repo,gen,sha,repositorySnapshot.revision(),graphifyBaseline,files);
             }
             var kotlinAbi=buildAndPersistSemanticCallSites(repo,gen,files,sha);
             buildAndPersistContractIndex(repo,gen,files,sha,kotlinAbi);

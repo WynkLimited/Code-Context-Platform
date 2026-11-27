@@ -2,6 +2,8 @@
 # Disposable CI-service drill only: never accepts an operator database or host override.
 set -euo pipefail
 [[ "${CI:-}" == "true" ]] || { echo "this drill is restricted to the disposable CI service" >&2; exit 1; }
+[[ "${CCP_ACCEPTANCE_SCHEMA:-}" =~ ^shared_impact_[0-9a-f]{32}$ ]] || { echo "a populated isolated acceptance schema is required" >&2; exit 1; }
+export PGOPTIONS="-c search_path=${CCP_ACCEPTANCE_SCHEMA},public"
 export PGHOST=127.0.0.1 PGPORT=5432 PGUSER="${DATABASE_USER:?}" PGPASSWORD="${DATABASE_PASSWORD:?}"
 SOURCE=code_context_test
 TARGET=code_context_restore_test
@@ -30,10 +32,10 @@ CREATE TABLE restore_drill.witness(id integer PRIMARY KEY, payload jsonb, embedd
 INSERT INTO restore_drill.witness VALUES (1,'{"phase":"before-backup"}','[1,2,3]');
 SQL
 fingerprint() {
-  psql --no-password -d "$1" -qAt -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+  psql --no-password -d "$1" -qAt -F '|' -v ON_ERROR_STOP=1 -v acceptance_schema="$CCP_ACCEPTANCE_SCHEMA" <<'SQL'
 SELECT format('SELECT %L, count(*), md5(coalesce(string_agg(row_to_json(t)::text, E''\n'' ORDER BY row_to_json(t)::text), '''')) FROM %I.%I t;',
               schemaname || '.' || tablename, schemaname, tablename)
-FROM pg_tables WHERE schemaname IN ('public','restore_drill') ORDER BY schemaname,tablename
+FROM pg_tables WHERE schemaname IN ('public','restore_drill', :'acceptance_schema') ORDER BY schemaname,tablename
 \gexec
 SQL
 }
@@ -50,6 +52,6 @@ RESTORE_URL="postgresql://127.0.0.1:5432/$TARGET" DUMP_FILE="$DUMP_FILE" bash "$
 fingerprint "$TARGET" > "$WORK/actual"
 diff -u "$WORK/expected" "$WORK/actual"
 cat "$WORK/actual"
-echo "PASS: PostgreSQL 17 logical backup/restore preserved all public tables, Flyway, pgvector and the pre-mutation witness."
+echo "PASS: PostgreSQL 17 logical backup/restore preserved public and populated acceptance tables, Flyway, pgvector and the pre-mutation witness."
 echo "Scope: disposable CI fixture; not WAL/PITR, production RPO/RTO, volume recovery or post-restore HTTP MCP."
 echo "Fixture drill elapsed seconds: $(( $(date +%s) - DRILL_STARTED )) (not a production RTO)."

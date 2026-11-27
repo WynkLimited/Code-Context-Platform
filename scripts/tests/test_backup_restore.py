@@ -77,6 +77,13 @@ class BackupRestoreScriptsTest(unittest.TestCase):
         self.assertNotEqual(0, self.run_script("backup-postgres.sh").returncode)
         self.assertEqual([], list((self.root / "backups").glob("*/code_context.dump")))
 
+    def test_ci_drill_rejects_missing_or_unsafe_schema_before_database_access(self):
+        for schema in ("", "public", "shared_impact_x;DROP SCHEMA public"):
+            result = self.run_script("ci-postgres-restore-drill.sh", CI="true", CCP_ACCEPTANCE_SCHEMA=schema)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("acceptance schema is required", result.stderr)
+            self.assertFalse(self.calls.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

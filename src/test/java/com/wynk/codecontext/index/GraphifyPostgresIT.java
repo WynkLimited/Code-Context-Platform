@@ -107,6 +107,7 @@ class GraphifyPostgresIT {
         var record=automaticallyOnboard(name,before);
         generation=repositories.currentGeneration(repository).orElseThrow();
         UUID initial=generation;
+        assertGraphifyProvenance("FULL_NO_VALID_BASELINE",null);
         var chunks=jdbc.queryForList("SELECT file_path,symbol,start_line,end_line,content_hash,content,embedding::text AS vector FROM code_chunks WHERE generation_id=?",generation);
         assertTrue(chunks.size()>10,"long Unicode method must really be subdivided before embedding");
         for(var chunk:chunks) {
@@ -136,14 +137,71 @@ class GraphifyPostgresIT {
         String after;try(var git=org.eclipse.jgit.api.Git.open(fixture.toFile())){after=commitFixture(git,"edit one tiny member");}
         org.mockito.Mockito.clearInvocations(embeddings);
         generation=indexFixture(name,after);
+        assertGraphifyProvenance("INCREMENTAL_AST_GLOBAL_RELINK",initial);
+        assertCleanGraphEquivalent();
         org.mockito.Mockito.verify(embeddings,org.mockito.Mockito.times(1)).embed(org.mockito.ArgumentMatchers.anyString());
         org.junit.jupiter.api.Assertions.assertEquals(chunks.size()-1,jdbc.queryForObject("SELECT count(*) FROM code_chunks a JOIN code_chunks b ON a.file_path=b.file_path AND a.content_hash=b.content_hash AND a.content=b.content AND a.embedding=b.embedding WHERE a.generation_id=? AND b.generation_id=?",Integer.class,initial,generation),"only the changed merged input may receive a new vector");
+        UUID edited=generation;
         Files.delete(fixture.resolve(pythonPath));
         String deleted;try(var git=org.eclipse.jgit.api.Git.open(fixture.toFile())){deleted=commitFixture(git,"remove Python implementation");}
         generation=indexFixture(name,deleted);
+        assertGraphifyProvenance("INCREMENTAL_AST_GLOBAL_RELINK",edited);
+        assertCleanGraphEquivalent();
         org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND file_path=?",Integer.class,generation,pythonPath));
         org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path=?",Integer.class,generation,pythonPath));
         org.junit.jupiter.api.Assertions.assertFalse(mcp.search(record.key()).toString().contains(pythonPath),"deleted vectors must not remain searchable through the same real MCP session");
+        UUID beforeMove=generation;
+        String movedPath="samples/refunds/policy.ts";
+        Files.createDirectories(fixture.resolve(movedPath).getParent());
+        Files.move(fixture.resolve("samples/Shipping.ts"),fixture.resolve(movedPath));
+        String moved;try(var git=org.eclipse.jgit.api.Git.open(fixture.toFile())){moved=commitFixture(git,"move TypeScript implementation");}
+        generation=indexFixture(name,moved);
+        assertGraphifyProvenance("INCREMENTAL_AST_GLOBAL_RELINK",beforeMove);
+        assertCleanGraphEquivalent();
+        org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path='samples/Shipping.ts'",Integer.class,generation));
+        assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path=?",Integer.class,generation,movedPath)>0);
+        writeFixture(".gitignore","ignored-fixture-output/\n");
+        String configured;try(var git=org.eclipse.jgit.api.Git.open(fixture.toFile())){configured=commitFixture(git,"change extraction inputs");}
+        generation=indexFixture(name,configured);
+        assertGraphifyProvenance("FULL_GLOBAL_INPUT_CHANGE",null);
+        assertCleanGraphEquivalent();
+    }
+    private void assertGraphifyProvenance(String mode,UUID baseline)throws Exception {
+        var provenance=json.readTree(jdbc.queryForObject("SELECT graphify_provenance::text FROM index_generations WHERE id=?",String.class,generation));
+        org.junit.jupiter.api.Assertions.assertEquals(mode,provenance.path("mode").asText(),provenance.toString());
+        if(baseline!=null) {
+            org.junit.jupiter.api.Assertions.assertEquals(baseline.toString(),provenance.path("baselineGeneration").asText());
+            assertTrue(provenance.path("reportedCachedFiles").asInt()>0,"native CLI must actually reuse AST extraction: "+provenance);
+            assertTrue(provenance.path("sourceFilesReused").asInt()>0,"unchanged inputs must be reused: "+provenance);
+        }
+    }
+    private void assertCleanGraphEquivalent()throws Exception {
+        Path clean=Files.createTempDirectory("ccp-graphify-full-equivalence-");
+        UUID cold=jdbc.queryForObject("""
+                INSERT INTO index_generations(repository_id,commit_sha,generation,published,repository_revision)
+                SELECT repository_id,commit_sha,(SELECT max(generation)+1 FROM index_generations WHERE repository_id=?),false,repository_revision
+                FROM index_generations WHERE id=? RETURNING id
+                """,UUID.class,repository,generation);
+        try {
+            try(var paths=Files.walk(fixture)) {
+                for(Path source:paths.filter(Files::isRegularFile).filter(path->!fixture.relativize(path).startsWith(".git")).toList()) {
+                    Path target=clean.resolve(fixture.relativize(source));Files.createDirectories(target.getParent());Files.copy(source,target);
+                }
+            }
+            assertTrue(graphify.buildAndPersist(clean,cold));
+            for(String table:java.util.List.of("code_nodes","code_edges")) {
+                // The pipeline also persists its native structural extractor alongside Graphify.
+                // Compare exactly the Graphify-owned records, which carry native graph IDs.
+                String sql=table.equals("code_nodes")
+                        ?"SELECT metadata::text FROM code_nodes WHERE generation_id=? AND jsonb_exists(metadata,'id') ORDER BY metadata::text"
+                        :"SELECT e.evidence FROM code_edges e JOIN code_nodes s ON s.id=e.source_node JOIN code_nodes t ON t.id=e.target_node WHERE e.generation_id=? AND jsonb_exists(s.metadata,'id') AND jsonb_exists(t.metadata,'id') ORDER BY e.evidence";
+                org.junit.jupiter.api.Assertions.assertEquals(jdbc.queryForList(sql,String.class,cold),jdbc.queryForList(sql,String.class,generation),
+                        "incremental "+table+" must exactly match a clean native extraction");
+            }
+        }finally {
+            jdbc.update("DELETE FROM index_generations WHERE id=?",cold);
+            try(var paths=Files.walk(clean)){for(Path path:paths.sorted(Comparator.reverseOrder()).toList())Files.deleteIfExists(path);}
+        }
     }
     private com.wynk.codecontext.model.RepositoryRecord automaticallyOnboard(String name,String commit)throws Exception {
         var client=java.net.http.HttpClient.newHttpClient();

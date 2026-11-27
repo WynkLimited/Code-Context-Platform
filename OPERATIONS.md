@@ -20,7 +20,7 @@
 - Ollama outage/model mismatch: restore the configured model and dimensions, then reindex only after verifying dimensions match the Flyway vector column.
 - Zoekt outage: repair the index volume and requeue repositories. The database generation may remain published while Zoekt indexing failed; current code marks that job failed and retains DB generation as unpublished if the new index had not committed.
 - Git checkout failure: verify the URL allowlist, installation token, repository permission, and configured default branch.
-- Graphify failure: inspect the per-job `.graphify-index.log` in the temporary snapshot before cleanup; use `GRAPHIFY_ENABLED=false` only for development diagnosis, not acceptance signoff.
+- Graphify failure: inspect the per-generation `engine-<generation>/process.log` under `<repository-root>/.graphify-state/<repository-id>/<generation>/`; use `GRAPHIFY_ENABLED=false` only for development diagnosis, not acceptance signoff.
 
 ## Rollback
 
@@ -220,4 +220,13 @@ An authorized team key can read `GET /api/repositories/{owner}/{name}/configurat
 
 Discovery reads the published Git tree, including tracked descriptors in directories such as `build/`. Working-tree edits, untracked files, symlinks and submodule links do not supply discovered configuration. File contents are omitted. Repository metadata is observed; authorized lifecycle APIs govern owner/team, URL, branch and classification changes. Repository-supplied context YAML cannot change permissions, credentials or commands. Disabled repositories, ownership transfers and App revocation retain the normal ACL boundaries.
 
-A request scans at most25000 tree entries and returns at most512 descriptors, with explicit `treeTruncated`/`manifestsTruncated` flags. Treat flagged discovery as partial evidence. An unpublished or unavailable tree returns409; inaccessible repositories return404 to authenticated callers. The HTTP acceptance class now uses a unique PostgreSQL schema and mirror directory per run; Spring shuts its workers down before a final listener removes the schema. Mirror artifacts remain under that run's `target/postgres-shared-library-it/<fixture>/` for diagnosis.
+A request scans at most25000 tree entries and returns at most512 descriptors, with explicit `treeTruncated`/`manifestsTruncated` flags. Treat flagged discovery as partial evidence. An unpublished or unavailable tree returns409; inaccessible repositories return404 to authenticated callers. The HTTP acceptance class now uses a unique PostgreSQL schema and mirror directory per run; Spring shuts its workers down before a final listener records the populated schema in `target/postgres-acceptance-schema.txt`. The disposable CI backup/restore drill validates that exact schema and fingerprints its real acceptance data alongside public tables; the CI service owns its eventual disposal. Mirror artifacts remain under that run's `target/postgres-shared-library-it/<fixture>/` for diagnosis.
+
+
+## Incremental Graphify extraction
+
+Generation-owned state lives under `<repository-root>/.graphify-state/<repository-uuid>/<generation-uuid>/`. Only an attested cache from the selected published generation with matching repository configuration revision and engine identity is eligible. Unchanged source files use read-only hardlinks where supported, with a copy fallback; changed files receive new inodes. Each worker has separate sources, output and HOME. Source repository graph/cache files cannot seed the engine output.
+
+The engine reuses AST extraction but rebuilds all relationships from cached/current AST. Previous graph JSON is deliberately excluded: native whole-graph incremental updates retained stale relationships in rename/deletion experiments. `index_generations.graphify_provenance` records the baseline, source reuse, changed paths, native reported cache/extraction counts and global relinking. Build/language/ignore configuration changes invalidate extraction reuse. Missing/corrupt state falls back to cold extraction. A cache is limited to 1 GiB and 100,000 entries. Generation retention removes the corresponding workspace through the durable cleanup outbox. Include this derived-state volume in disk capacity monitoring; losing it costs extraction time and does not replace the published database state.
+
+This covers AST reuse and global relationship correctness, not incremental contract/dependency analysis or a production throughput certification.
