@@ -43,6 +43,10 @@ public interface ContractExtractor {
         return true;
     }
 
+    /** Complete raw-extraction input suffixes. Empty disables reuse. Opt in only when
+     * outputs are commit-independent and no other files/toolchain inputs are consulted. */
+    default java.util.Set<String> incrementalInputSuffixes() { return java.util.Set.of(); }
+
     List<ContractExport> extractExports(RepositoryContext repository);
 
     List<ContractImport> extractImports(RepositoryContext repository);

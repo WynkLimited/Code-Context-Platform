@@ -48,11 +48,21 @@ public class ContractIndexBuilder {
         return extractors;
     }
 
+    public record Extraction(List<ContractExport> exports,List<ContractImport> imports) {
+        public Extraction { exports=List.copyOf(exports);imports=List.copyOf(imports); }
+    }
+    public interface ExtractionCache {
+        java.util.Optional<Extraction> find(ContractExtractor extractor);
+        void save(ContractExtractor extractor,Extraction extraction);
+    }
     /**
      * @param enabledExtractorIds extractor ids permitted by the product policy; {@code null} or
      *                            empty runs every registered extractor
      */
     public ContractIndex build(RepositoryContext repository, Set<String> enabledExtractorIds) {
+        return build(repository,enabledExtractorIds,null);
+    }
+    public ContractIndex build(RepositoryContext repository, Set<String> enabledExtractorIds,ExtractionCache cache) {
         var exports = new ArrayList<ContractExport>();
         var imports = new ArrayList<ContractImport>();
         var extractorVersions = new TreeMap<String, String>();
@@ -67,9 +77,13 @@ public class ContractIndexBuilder {
                         repository.fullName(), extractor.id());
                 continue;
             }
+            boolean reusable=cache!=null&&!extractor.incrementalInputSuffixes().isEmpty();
+            var prior=reusable?cache.find(extractor):java.util.Optional.<Extraction>empty();
+            Extraction extraction;
             try {
-                List<ContractExport> extractedExports = extractor.extractExports(repository);
-                List<ContractImport> extractedImports = extractor.extractImports(repository);
+                extraction=prior.orElseGet(()->new Extraction(extractor.extractExports(repository),extractor.extractImports(repository)));
+                List<ContractExport> extractedExports = extraction.exports();
+                List<ContractImport> extractedImports = extraction.imports();
                 exports.addAll(extractedExports);
                 imports.addAll(extractedImports);
                 extractorVersions.put(extractor.id(), extractor.version());
@@ -80,7 +94,10 @@ public class ContractIndexBuilder {
                 extractorVersions.put(extractor.id(), "failed:" + extractor.version());
                 LOG.warnf(e, "contract.index.extractor_failed repo=%s extractor=%s — skipping",
                         repository.fullName(), extractor.id());
+                continue;
             }
+            // Cache/database failures are infrastructure failures, never partial extractor success.
+            if(reusable&&prior.isEmpty())cache.save(extractor,extraction);
         }
 
         exports.sort(Comparator

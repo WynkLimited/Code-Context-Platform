@@ -108,6 +108,7 @@ class GraphifyPostgresIT {
         generation=repositories.currentGeneration(repository).orElseThrow();
         UUID initial=generation;
         assertGraphifyProvenance("FULL_NO_VALID_BASELINE",null);
+        assertContractExtractionReuse(null);
         var chunks=jdbc.queryForList("SELECT file_path,symbol,start_line,end_line,content_hash,content,embedding::text AS vector FROM code_chunks WHERE generation_id=?",generation);
         assertTrue(chunks.size()>10,"long Unicode method must really be subdivided before embedding");
         for(var chunk:chunks) {
@@ -138,6 +139,7 @@ class GraphifyPostgresIT {
         org.mockito.Mockito.clearInvocations(embeddings);
         generation=indexFixture(name,after);
         assertGraphifyProvenance("INCREMENTAL_AST_GLOBAL_RELINK",initial);
+        assertContractExtractionReuse(null);
         assertCleanGraphEquivalent();
         org.mockito.Mockito.verify(embeddings,org.mockito.Mockito.times(1)).embed(org.mockito.ArgumentMatchers.anyString());
         org.junit.jupiter.api.Assertions.assertEquals(chunks.size()-1,jdbc.queryForObject("SELECT count(*) FROM code_chunks a JOIN code_chunks b ON a.file_path=b.file_path AND a.content_hash=b.content_hash AND a.content=b.content AND a.embedding=b.embedding WHERE a.generation_id=? AND b.generation_id=?",Integer.class,initial,generation),"only the changed merged input may receive a new vector");
@@ -146,6 +148,7 @@ class GraphifyPostgresIT {
         String deleted;try(var git=org.eclipse.jgit.api.Git.open(fixture.toFile())){deleted=commitFixture(git,"remove Python implementation");}
         generation=indexFixture(name,deleted);
         assertGraphifyProvenance("INCREMENTAL_AST_GLOBAL_RELINK",edited);
+        assertContractExtractionReuse(edited);
         assertCleanGraphEquivalent();
         org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_chunks WHERE generation_id=? AND file_path=?",Integer.class,generation,pythonPath));
         org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path=?",Integer.class,generation,pythonPath));
@@ -157,6 +160,7 @@ class GraphifyPostgresIT {
         String moved;try(var git=org.eclipse.jgit.api.Git.open(fixture.toFile())){moved=commitFixture(git,"move TypeScript implementation");}
         generation=indexFixture(name,moved);
         assertGraphifyProvenance("INCREMENTAL_AST_GLOBAL_RELINK",beforeMove);
+        assertContractExtractionReuse(beforeMove);
         assertCleanGraphEquivalent();
         org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path='samples/Shipping.ts'",Integer.class,generation));
         assertTrue(jdbc.queryForObject("SELECT count(*) FROM code_nodes WHERE generation_id=? AND file_path=?",Integer.class,generation,movedPath)>0);
@@ -164,7 +168,13 @@ class GraphifyPostgresIT {
         String configured;try(var git=org.eclipse.jgit.api.Git.open(fixture.toFile())){configured=commitFixture(git,"change extraction inputs");}
         generation=indexFixture(name,configured);
         assertGraphifyProvenance("FULL_GLOBAL_INPUT_CHANGE",null);
+        assertContractExtractionReuse(null);
         assertCleanGraphEquivalent();
+    }
+    private void assertContractExtractionReuse(UUID baseline) {
+        org.junit.jupiter.api.Assertions.assertEquals(5,jdbc.queryForObject("SELECT count(*) FROM contract_extractions WHERE generation_id=?",Integer.class,generation));
+        if(baseline==null)org.junit.jupiter.api.Assertions.assertEquals(0,jdbc.queryForObject("SELECT count(*) FROM contract_extractions WHERE generation_id=? AND reused_from_generation IS NOT NULL",Integer.class,generation));
+        else org.junit.jupiter.api.Assertions.assertEquals(5,jdbc.queryForObject("SELECT count(*) FROM contract_extractions WHERE generation_id=? AND reused_from_generation=?",Integer.class,generation,baseline));
     }
     private void assertGraphifyProvenance(String mode,UUID baseline)throws Exception {
         var provenance=json.readTree(jdbc.queryForObject("SELECT graphify_provenance::text FROM index_generations WHERE id=?",String.class,generation));

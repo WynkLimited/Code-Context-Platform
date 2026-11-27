@@ -24,6 +24,7 @@ public class EnumContractExtractor implements ContractExtractor {
     @Override public String id() { return ContractType.ENUM.id(); }
     @Override public String version() { return VERSION; }
     @Override public ContractType type() { return ContractType.ENUM; }
+    @Override public java.util.Set<String> incrementalInputSuffixes() { return java.util.Set.of(".java",".kt"); }
     @Override public boolean available() { return true; }
     @Override public boolean mayDefineContract(String path) {
         return path != null && (path.endsWith(".java") || path.endsWith(".kt"));

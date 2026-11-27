@@ -230,3 +230,10 @@ Generation-owned state lives under `<repository-root>/.graphify-state/<repositor
 The engine reuses AST extraction but rebuilds all relationships from cached/current AST. Previous graph JSON is deliberately excluded: native whole-graph incremental updates retained stale relationships in rename/deletion experiments. `index_generations.graphify_provenance` records the baseline, source reuse, changed paths, native reported cache/extraction counts and global relinking. Build/language/ignore configuration changes invalidate extraction reuse. Missing/corrupt state falls back to cold extraction. A cache is limited to 1 GiB and 100,000 entries. Generation retention removes the corresponding workspace through the durable cleanup outbox. Include this derived-state volume in disk capacity monitoring; losing it costs extraction time and does not replace the published database state.
 
 This covers AST reuse and global relationship correctness, not incremental contract/dependency analysis or a production throughput certification.
+
+
+## Raw contract extraction reuse
+
+`contract_extractions` records the selected generation, extractor/version, input fingerprint and optional `reused_from_generation`. The five opted-in static families reuse only matching published repository/revision inputs. Their source suffixes include all files read by those extractors; repository build/ignore/language configuration changes force fresh extraction. Renames/deletions change the path/blob fingerprint. Raw rows contain no commit-specific symbol binding; enrichment and graph binding always run for the current commit and generation.
+
+Missing/corrupt raw cache entries trigger a cold extraction. Failed/unavailable extractors cannot inherit successful coverage from an earlier generation. Cache database failures fail the indexing attempt and preserve the published generation. Rows cascade with generation retention. Maven, REST, Kafka and protobuf/gRPC remain on the full extraction path; do not interpret raw cache hits as complete incremental dependency analysis. The mandatory `ContractExtractionCachePostgresIT` gate requires its exact one successful, unskipped case.

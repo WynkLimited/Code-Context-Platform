@@ -433,7 +433,7 @@ VALUES(?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?) RETURNING id
                 Files.writeString(out, file.content());
             }
             var context = new RepositoryContext(repo.owner(), repo.name(), commit, repo.defaultBranch(), snapshot);
-            index = graphSymbolBinder.bind(com.wynk.codecontext.port.contract.source.KotlinAbiContracts.enrich(contractIndexBuilder.build(context),kotlinAbi), generation);
+            index = graphSymbolBinder.bind(com.wynk.codecontext.port.contract.source.KotlinAbiContracts.enrich(contractIndexBuilder.build(context,java.util.Set.of(),new GenerationContractExtractionCache(jdbc,objectMapper,generation,files)),kotlinAbi), generation);
         } finally {
             try (var paths = Files.walk(snapshot)) {
                 paths.sorted(Comparator.reverseOrder()).forEach(p -> { try { Files.deleteIfExists(p); } catch (Exception ignored) { } });

@@ -148,7 +148,7 @@ class SharedLibraryImpactPostgresIT {
     @Test
     void indexesGitRepositoriesPersistsV4V5V6V7V8V9AndReturnsExactImpactThroughMcp() throws Exception {
         assertEquals(0, flyway.migrate().migrationsExecuted, "restarting against an existing migrated database must be a no-op");
-        assertEquals("19", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
+        assertEquals("20", jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank DESC LIMIT 1", String.class));
         assertTrue(Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname='vector')", Boolean.class)));
 
         Path artifactRepository = ROOT.resolve("maven-repository");

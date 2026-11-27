@@ -26,6 +26,7 @@ public class CacheContractExtractor implements ContractExtractor {
     @Override public String id() { return ContractType.CACHE.id(); }
     @Override public String version() { return VERSION; }
     @Override public ContractType type() { return ContractType.CACHE; }
+    @Override public java.util.Set<String> incrementalInputSuffixes() { return java.util.Set.of(".java",".kt",".properties",".yaml",".yml"); }
     @Override public boolean available() { return true; }
     @Override public boolean mayDefineContract(String path) {
         return path != null && (path.endsWith(".java") || path.endsWith(".kt")

@@ -7,8 +7,8 @@ Updated continuously. Do not mark `VERIFIED_PRODUCTION_READY` without executable
 |---|---|
 | Branch | `fix/jackson3-postgres-acceptance` |
 | Local/remote HEAD (start of this closure) | `9bd5059007e302a409cc8f413026b6844df7efd8` |
-| Last green mandatory CI SHA | `cb8de66556d1ee2b03deca903ac8999ac9435429` |
-| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45878147548 |
+| Last green mandatory CI SHA | `9117d3b047b15b80f793968267cd4f1db6a4eb1b` |
+| Green CI URL | https://github.com/WynkLimited/Code-Context-Platform/actions/runs/45940651979 |
 | Prior failed CI | a374923/08c449c run 45636811199 — dual-ctor wiring; fixed in ab3dcbb |
 | Overall decision | **NOT READY FOR PRODUCTION** |
 | Working progress companion | `docs/IMPLEMENTATION_PROGRESS.md` |
@@ -21,13 +21,13 @@ Status vocabulary (this ledger):
 
 ## Resume checkpoint
 
-**Current master-directive phase:** Moving from Phase1 lifecycle/onboarding implementation into Phase2 genuine incremental context creation. Automatic onboarding, controlled-provider App authorization/revocation, durable missed-push recovery and stable-identity lifecycle transitions have accepted CI evidence through cb8de66. Published configuration discovery passed local acceptance; exact-SHA CI45881198900 failed the subsequent restore drill because the isolated acceptance schema was dropped before backup. The current repair hands that populated schema to the drill and retains all population/fingerprint checks. Live GitHub provisioning/delivery certification remains externally blocked by approved credentials/callback availability. Preserve the accepted baseline while implementing Phase2; later phases remain actionable.
+**Current master-directive phase:** Phase2 incremental context creation. Generation-isolated Graphify AST reuse/global relinking and populated-schema restore passed CI45940651979 on9117d3b (375 actual passed cases). Raw incremental contract extraction is now under consolidated validation. Lifecycle/onboarding, controlled-provider App revocation and missed-push recovery retain their earlier accepted evidence. Live-provider certification remains dependent on approved credentials/callback availability; later code phases remain actionable.
 
 **Overall:** **NOT READY FOR PRODUCTION** — live-provider certification, complete incremental context/contract maintenance, complete reactor/Gradle intelligence, general cross-repository method chains, remaining language/contract coverage and required operational/deployment/benchmark/client acceptance remain open. Earlier chunk reuse/provenance and specific application recovery assertions have passed; do not reopen those without new evidence.
 
 **Next executable actions (mandatory directive order):**
 
-1. Finish exact-commit validation of the current incremental Graphify and populated-schema restore batch.
+1. Finish integrated raw contract reuse validation and remaining incremental semantic/dependency maintenance.
 2. Incremental contract/dependency maintenance and enforced OS isolation before enabling repository-controlled execution.
 3. Complete Maven reactors and safe Gradle resolution, guided by early read-only reference inspection.
 4. General bounded cross-repository method chains and independent parity acceptance.
@@ -614,3 +614,19 @@ Remaining core work remains explicit: incremental contract/dependency maintenanc
 
 
 Consolidated local validation completed on Java21: **359 unit/regression tests +16 real PostgreSQL/Graphify/Ollama/Zoekt/HTTP MCP integration cases =375 passed**, zero failures/errors/skips. The Graphify gate includes configuration invalidation as well as edit/delete/move equivalence and actual native cache hits. Separate-JVM consistency/recovery, all four shared impact/lifecycle cases, least privilege, retention, remote Maven, lease/process, onboarding, refresh and App revocation passed. All13 existing CI Python report gates passed against the actual XML. Six shell tests, YAML parsing, shell syntax and `git diff --check` passed. The post-suite actual PostgreSQL17 restore drill preserved public and populated isolated acceptance tables, Flyway, pgvector and the pre-mutation witness. Logs: `target/incremental-context-{unit,full-acceptance,restore-drill}.log`. Exact-commit GitHub CI remains pending until push; this evidence does not certify the other remaining PRD blocks.
+
+
+## Accepted incremental Graphify baseline and raw contract maintenance
+
+CI45940651979 **SUCCESS** on exactly `9117d3b047b15b80f793968267cd4f1db6a4eb1b`. Downloaded actual XML confirms359 unit+16 integration=375 passed, zero failures/errors/skips. All workflow steps, including populated-schema restore and named report gates, succeeded. The earlier f78 restore failure is closed by retaining and validating the actual acceptance schema; population checks were preserved.
+
+The next incremental contract block is **IMPLEMENTED_UNVERIFIED** pending consolidated validation and exact-commit CI. Five commit-independent static extractor families (`cache`, `config`, `database`, `enum`, `string_format`) explicitly declare their complete source suffixes. Their raw exports/imports may be reused only from the published generation of the same repository and configuration revision, with matching extractor/generator versions and framed, sorted path/blob fingerprints. Build/ignore/language configuration changes invalidate reuse conservatively. Unknown extractors default to no reuse. Raw results are stored before enrichment; current-commit metadata, Kotlin ABI enrichment and current-generation graph binding always execute again.
+
+Forward V20 stores generation-owned raw extraction and reuse provenance with cascade deletion. Invalid serialized state causes a cold rebuild; unavailable/failed extractors retain reduced-coverage semantics; cache/database infrastructure failures propagate rather than becoming partial success. Oversized raw results remain fully extracted but do not receive the optional16MiB cache entry.
+
+Focused evidence: four unit tests and one actual PostgreSQL test passed, including cold/warm equivalence, current-commit enrichment, input add/delete/rename/configuration invalidation, repository/revision isolation, corrupt-state rejection, unpublished-baseline rejection and retention cascade. The full pipeline gate now asserts actual five-extractor reuse for unrelated Python/TypeScript changes and invalidation for Java/configuration changes. Full-suite evidence follows after execution.
+
+This is incremental reuse at extractor-input scope, not per-file parsing or complete incremental semantic/dependency resolution. Maven/REST raw records contain commit-specific metadata, Kafka can read arbitrary referenced schema files, and protobuf has toolchain inputs; those families continue to rebuild until their complete input/rebasing contracts are implemented. No production-readiness claim is made for those remaining gaps.
+
+
+Consolidated local validation for raw extraction completed on Java21: **363 unit/regression+17 real-service integration cases =380 passed**, zero failures/errors/skips. Both actual Graphify pipeline cases and the dedicated PostgreSQL raw-extraction case passed, along with all original impact/MCP/security/rollback/recovery/lifecycle cases. All14 CI Python report gates passed against actual XML. Six shell tests, CI YAML parsing and `git diff --check` passed. Actual PostgreSQL17 post-suite backup/restore fingerprinted and preserved public plus populated acceptance tables (including `contract_extractions`), Flyway, pgvector and the pre-mutation witness. Logs: `target/contract-incremental-{unit,full-acceptance,restore-drill}.log`. Exact-commit CI remains pending until this batch is pushed.
